@@ -1,0 +1,8 @@
+tests/fs
+tests/diod.conf
+*.a
+*.o
+t9p
+tests/mnt
+tests/bvec_test
+*.pcap*
