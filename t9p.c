@@ -1,4 +1,3 @@
-
 /** Feature flags */
 #define HAVE_TCP    1
 #define HAVE_UDP    1
@@ -66,7 +65,7 @@
 
 static int _version_handshake(struct t9p_context* context);
 static int _attach_root(struct t9p_context* c);
-static int _send(struct t9p_context* c, void* data, size_t sz, int flags, int retries);
+static int _send(struct t9p_context* c, const void* data, size_t sz, int flags, int retries);
 static ssize_t _recv(struct t9p_context* c, void* data, size_t sz, int flags);
 static void _perror(struct t9p_context* c, struct TRcommon* err);
 static int _iserror(struct TRcommon* err);
@@ -268,12 +267,14 @@ void t9p_shutdown(t9p_context_t* c) {
     _free_node_list(c->fhl_free);
     //_free_node_list(c->fhl_list);
 
+    free(c->fhl);
+
     pthread_mutex_destroy(&c->fhl_mutex);
     pthread_mutexattr_destroy(&c->fhl_mutexattr);
     free(c);
 }
 
-static int _send(struct t9p_context* c, void* data, size_t sz, int flags, int retries) {
+static int _send(struct t9p_context* c, const void* data, size_t sz, int flags, int retries) {
     int tries = 10;
     while (tries-- > 0) {
         int ret;
@@ -326,7 +327,7 @@ static ssize_t _recv_type(struct t9p_context* c, void* data, size_t sz, int flag
 static ssize_t _recv_type_handle_error(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t type, uint16_t tag) {
     ssize_t ret;
     if ((ret=_recv_type(c, data, sz, flags, type, tag)) < 0) {
-        ERROR(c, "%s: recv timed out\n", t9p_type_string(type));
+        ERROR(c, "%s: recv failed: %s\n", t9p_type_string(type), strerror(ret));
         return -1;
     }
 
@@ -450,7 +451,7 @@ static int _attach_root(struct t9p_context* c) {
     }
 
     h->h.qid = ra.qid;
-    h->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
+    h->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID | T9P_HANDLE_ACTIVE;
 
     c->root = h;
     return 0;
@@ -540,6 +541,8 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     }
 
     fh->h.qid = qids[rw.nwqid-1];
+    fh->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
+    free(qids);
 
     return &fh->h;
 error:
@@ -592,13 +595,78 @@ int t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode) {
 }
 
 void t9p_close(t9p_handle_t handle) {
-
+    handle->iounit = 0;
 }
 
 ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer) {
     char packet[PACKET_BUF_SIZE];
     uint16_t tag = _mktag(c);
-    
+
+    int l;
+    if ((l = encode_Tread(packet, sizeof(packet), tag, h->fid, offset, num)) < 0) {
+        ERROR(c, "%s: could not encode Tread\n", __FUNCTION__);
+        return -1;
+    }
+
+    if (_send(c, packet, l, 0, 1) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        return -1;
+    }
+
+    /** TODO: This needs a refactor */
+    size_t recvSize = sizeof(struct Rread) + num;
+    void* recvData = malloc(recvSize);
+
+    ssize_t len;
+    if ((len=_recv_type_handle_error(c, recvData, recvSize, 0, T9P_TYPE_Rread, tag)) < 0) {
+        return -1;
+    }
+
+    struct Rread rr;
+    if (decode_Rread(&rr, recvData, len) < 0) {
+        ERROR(c, "%s: unable to decode Rread\n", __FUNCTION__);
+        return -1;
+    }
+
+    memcpy(outbuffer, ((uint8_t*)recvData)+sizeof(struct Rread), MIN(num, rr.count));
+    free(recvData);
+    return MIN(num, rr.count);
+}
+
+ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer) {
+    char packet[PACKET_BUF_SIZE];
+    uint16_t tag = _mktag(c);
+
+    int l;
+    if ((l = encode_Twrite(packet, sizeof(packet), tag, h->fid, offset, num)) < 0) {
+        ERROR(c, "%s: unable to encode Twrite\n", __FUNCTION__);
+        return -1;
+    }
+
+    if (_send(c, packet, l, 0, 1) < 0) {
+        ERROR(c, "%s: failed to send Twrite header\n", __FUNCTION__);
+        return -1;
+    }
+
+    if (_send(c, inbuffer, num, 0, 1) < 0) {
+        /** TODO: Tflush */
+        ERROR(c, "%s: failed to send buffer\n", __FUNCTION__);
+        return -1;
+    }
+
+    ssize_t len;
+    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rwrite, tag)) < 0) {
+        ERROR(c, "%s: no Rwrite received\n", __FUNCTION__);
+        return -1;
+    }
+
+    struct Rwrite rw;
+    if (decode_Rwrite(&rw, packet, len) < 0) {
+        ERROR(c, "%s: failed to decode Rwrite\n", __FUNCTION__);
+        return -1;
+    }
+
+    return rw.count;
 }
 
 /********************** t9p_context methods **********************/
@@ -740,8 +808,18 @@ ssize_t t9p_tcp_send(void* context, const void* data, size_t len, int flags) {
 }
 
 ssize_t t9p_tcp_recv(void* context, void* data, size_t len, int flags) {
+    int rflags = 0;
+    if (flags & T9P_RECV_PEEK)
+        rflags |= MSG_PEEK;
+    if (flags & T9P_RECV_NOWAIT)
+        rflags |= MSG_DONTWAIT;
+
     struct tcp_context* pc = context;
-    return recv(pc->sock, data, len, flags);
+    /** Read behavior instead of peek */
+    if (flags & T9P_RECV_READ)
+        return read(pc->sock, data, len);
+    else
+        return recv(pc->sock, data, len, flags);
 }
 
 #endif

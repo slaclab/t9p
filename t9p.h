@@ -25,6 +25,17 @@ extern "C" {
 
 #define T9P_OEXCL 0x1000
 
+/**
+ * Transport flags
+ */
+#define T9P_RECV_PEEK 0x1           /**< Read a message, but leave it in the queue. See MSG_PEEK. Incompatible with T9P_RECV_READ */
+#define T9P_RECV_READ 0x2           /**< Read part of a message and leave it in the queue. Similar to peek, except that this advances the read position.
+                                         Incompatible with T9P_RECV_PEEK */
+#define T9P_RECV_NOWAIT 0x4         /**< Don't block */
+
+/**
+ * Transport methods.
+ */
 typedef void*(*t9p_init_t)();
 typedef void(*t9p_shutdown_t)(void* /*context*/);
 typedef int(*t9p_connect_t)(void* /*context*/, const char* /*addr_or_file*/);

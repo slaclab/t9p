@@ -37,6 +37,60 @@ void exit_cmd(int argc, const char* const* argv) {
     run = 0;
 }
 
+void cat_cmd(int argc, const char* const* argv) {
+    if (argc < 2) {
+        printf("usage: cat <path>\n");
+        return;
+    }
+
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("unable to open handle for %s\n", argv[1]);
+        return;
+    }
+
+    if (t9p_open(ctx, h, T9P_OREAD) < 0) {
+        printf("unable to open %s\n", argv[1]);
+    }
+    else {
+        char buf[128];
+        if (t9p_read(ctx, h, 0, 128, buf) < 0) {
+            printf("unable to read %s\n", argv[1]);
+        }
+        else {
+            buf[sizeof(buf)-1] = 0;
+            puts(buf);
+        }
+    }
+
+    t9p_close_handle(ctx, h);
+}
+
+void put_cmd(int argc, const char* const* argv) {
+    if (argc < 3) {
+        printf("usage: put <path> <data_str>\n");
+        return;
+    }
+
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("unable to open handle for %s\n", argv[1]);
+        return;
+    }
+
+    if (t9p_open(ctx, h, T9P_OWRITE | T9P_OTRUNC) < 0) {
+        printf("unable to open %s for write\n", argv[1]);
+    }
+    else {
+        ssize_t c;
+        if ((c=t9p_write(ctx, h, 0, strlen(argv[2]), argv[2])) < 0) {
+            printf("unable to write %s\n", argv[1]);
+        }
+        printf("wrote %ld bytes\n", c);
+    }
+
+    t9p_close_handle(ctx, h);
+}
 struct command {
     const char* name;
     void (*func)(int argc, const char* const* argv);
@@ -45,6 +99,8 @@ struct command {
 struct command COMMANDS[] = {
     {"hopen", hopen_cmd},
     {"exit", exit_cmd},
+    {"cat", cat_cmd},
+    {"put", put_cmd},
     {0,0}
 };
 

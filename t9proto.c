@@ -244,3 +244,56 @@ int encode_Twalk(void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint32_t
 
     return totalSize;
 }
+
+int encode_Tread(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count) {
+    if (bufsize < sizeof(struct Tread))
+        return -1;
+
+    struct Tread* tr = buf;
+    tr->tag = BSWAP16(tag);
+    tr->count = BSWAP32(count);
+    tr->offset = BSWAP64(offset);
+    tr->fid = BSWAP32(fid);
+    tr->size = BSWAP32(sizeof(struct Tread));
+    tr->type = T9P_TYPE_Tread;
+    return sizeof(*tr);
+}
+
+int decode_Rread(struct Rread* out, const void* buf, size_t buflen) {
+    if (buflen < sizeof(struct Rread))
+        return -1;
+
+    const struct Rread* rr = buf;
+    out->count = BSWAP32(rr->count);
+    out->size = BSWAP32(rr->size);
+    out->tag = BSWAP16(rr->tag);
+    out->type = rr->type;
+    return sizeof(*rr);
+}
+
+int encode_Twrite(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count) {
+    if (bufsize < sizeof(struct Twrite)) {
+        return -1;
+    }
+
+    struct Twrite* tw = buf;
+    tw->type = T9P_TYPE_Twrite;
+    tw->tag = BSWAP16(tag);
+    tw->count = BSWAP32(count);
+    tw->offset = BSWAP64(offset);
+    tw->fid = BSWAP32(fid);
+    tw->size = sizeof(*tw) + count;
+    return sizeof(*tw); /** Intentionally excluding count here */
+}
+
+int decode_Rwrite(struct Rwrite* out, const void* buf, size_t len) {
+    if (len < sizeof(*out))
+        return -1;
+
+    const struct Rwrite* in = buf;
+    out->count = BSWAP32(in->count);
+    out->size = BSWAP32(in->size);
+    out->type = in->type;
+    out->tag = BSWAP16(in->tag);
+    return sizeof(*in);
+}

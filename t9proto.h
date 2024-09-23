@@ -193,11 +193,15 @@ struct T9P_PACKED Tread {
     uint32_t count;
 };
 
+int encode_Tread(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count);
+
 struct T9P_PACKED Rread {
     T9P_COMMON_FIELDS
     uint32_t count;
     uint8_t data[];
 };
+
+int decode_Rread(struct Rread* out, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tclunk {
     T9P_COMMON_FIELDS
@@ -288,3 +292,21 @@ struct T9P_PACKED Rgetattr {
     uint64_t gen;
     uint64_t data_version;
 };
+
+struct T9P_PACKED Twrite {
+    T9P_COMMON_FIELDS
+    uint32_t fid;
+    uint64_t offset;
+    uint32_t count;
+    char data[];
+};
+
+/** Encodes the start of a Twrite message. Does not encode the data part */
+int encode_Twrite(void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count);
+
+struct T9P_PACKED Rwrite {
+    T9P_COMMON_FIELDS
+    uint32_t count;
+};
+
+int decode_Rwrite(struct Rwrite* out, const void* buf, size_t len);
