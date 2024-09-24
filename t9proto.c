@@ -84,6 +84,8 @@ const char* t9p_type_string(int type) {
     case T9P_TYPE_Rstat:    return "Rstat";
     case T9P_TYPE_Twstat:   return "Twstat";
     case T9P_TYPE_Rwstat:   return "Rwstat";
+	case T9P_TYPE_Tstatfs:  return "Tstatfs";
+	case T9P_TYPE_Rstatfs:  return "Rstatfs";
     default: return "Tunknown";
     }
 }
@@ -296,4 +298,130 @@ int decode_Rwrite(struct Rwrite* out, const void* buf, size_t len) {
     out->type = in->type;
     out->tag = BSWAP16(in->tag);
     return sizeof(*in);
+}
+
+int encode_Tstatfs(void* buf, size_t buflen, uint16_t tag, uint32_t fid) {
+    if (buflen < sizeof(struct Tstatfs))
+        return -1;
+
+    struct Tstatfs* st = buf;
+    st->fid = BSWAP32(fid);
+    st->tag = BSWAP16(tag);
+    st->size = BSWAP32(sizeof(*st));
+    st->type = T9P_TYPE_Tstatfs;
+    return sizeof(*st);
+}
+
+int decode_Rstatfs(struct Rstatfs* st, const void* buf, size_t buflen) {
+    if (buflen < sizeof(*st))
+        return -1;
+
+    const struct Rstatfs* in = buf;
+    st->type = in->type;
+    st->tag = BSWAP16(in->tag);
+    st->size = BSWAP32(in->size);
+    st->ftype = BSWAP32(in->ftype);
+    st->bsize = BSWAP32(in->bsize);
+    st->blocks = BSWAP64(in->blocks);
+    st->bfree = BSWAP64(in->bfree);
+    st->bavail = BSWAP64(in->bavail);
+    st->files = BSWAP64(in->files);
+    st->ffree = BSWAP64(in->ffree);
+    st->fsid = BSWAP64(in->fsid);
+    st->namelen = BSWAP32(in->namelen);
+
+    return sizeof(*st);
+}
+
+int encode_Tstat(void* buf, size_t bufsize, uint16_t tag, uint32_t fid) {
+    if (bufsize < sizeof(struct Tstat))
+        return -1;
+
+    struct Tstat* ts = buf;
+    ts->fid = BSWAP32(fid);
+    ts->tag = BSWAP16(tag);
+    ts->type = T9P_TYPE_Tstat;
+    ts->size = BSWAP32(sizeof(*ts));
+    return sizeof(*ts);
+}
+
+int encode_Tgetattr(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t request_mask) {
+    if (bufsize < sizeof(struct Tgetattr))
+        return -1;
+
+    struct Tgetattr* tg = buf;
+    tg->fid = BSWAP32(fid);
+    tg->tag = BSWAP16(tag);
+    tg->type = T9P_TYPE_Tgetattr;
+    tg->size = BSWAP32(sizeof(*tg));
+    tg->request_mask = BSWAP64(request_mask);
+    return sizeof(*tg);
+}
+
+int decode_Rgetattr(struct Rgetattr* attr, const void* buf, size_t bufsize) {
+    if (bufsize < sizeof(*attr))
+        return -1;
+
+    const struct Rgetattr* in = buf;
+
+    attr->type = in->type;
+    attr->tag = BSWAP16(in->tag);
+    attr->size = BSWAP32(in->size);
+    attr->valid = BSWAP64(in->valid);
+    attr->qid = swapqid(in->qid);
+    attr->mode = BSWAP32(in->mode);
+    attr->uid = BSWAP32(in->uid);
+    attr->gid = BSWAP32(in->gid);
+    attr->nlink = BSWAP64(in->nlink);
+    attr->rdev = BSWAP64(in->rdev);
+    attr->fsize = BSWAP64(in->fsize);
+    attr->blksize = BSWAP64(in->blksize);
+    attr->blocks = BSWAP64(in->blocks);
+    attr->atime_sec = BSWAP64(in->atime_sec);
+    attr->atime_nsec = BSWAP64(in->atime_nsec);
+    attr->mtime_sec = BSWAP64(in->mtime_sec);
+    attr->mtime_nsec = BSWAP64(in->mtime_nsec);
+    attr->ctime_sec = BSWAP64(in->ctime_sec);
+    attr->ctime_nsec = BSWAP64(in->ctime_nsec);
+    attr->btime_sec = BSWAP64(in->btime_sec);
+    attr->btime_nsec = BSWAP64(in->btime_nsec);
+    attr->gen = BSWAP64(in->gen);
+    attr->data_version = BSWAP64(in->data_version);
+
+    return sizeof(*attr);
+}
+
+int encode_Tlcreate(void* buf, size_t buflen, uint16_t tag, uint32_t fid, const char* name, uint32_t flags, uint32_t mode, uint32_t gid) {
+    const size_t nl = strlen(name);
+    const size_t totalSize = sizeof(struct Tlcreate) + nl + sizeof(uint32_t) /*flags*/ + sizeof(uint32_t) /*mode*/ + sizeof(uint32_t) /*gid*/;
+    if (buflen < totalSize)
+        return -1;
+
+    struct Tlcreate* tl = buf;
+    tl->tag = BSWAP16(tag);
+    tl->namelen = BSWAP16(nl);
+    tl->fid = BSWAP32(fid);
+    tl->type = T9P_TYPE_Tlcreate;
+    tl->size = totalSize;
+
+    uint8_t* p = ((uint8_t*)buf) + offsetof(struct Tlcreate, name);
+    wrbuf(&p, (uint8_t*)name, nl);
+    wr32(&p, flags);
+    wr32(&p, mode);
+    wr32(&p, gid);
+
+    return totalSize;
+}
+
+int decode_Rlcreate(struct Rlcreate* rl, const void* buf, size_t buflen) {
+    if (buflen < sizeof(*rl))
+        return -1;
+
+    const struct Rlcreate* in = buf;
+    rl->iounit = BSWAP32(in->iounit);
+    rl->tag = BSWAP16(in->tag);
+    rl->type = in->type;
+    rl->qid = swapqid(in->qid);
+    rl->size = BSWAP32(in->size);
+    return sizeof(*rl);
 }

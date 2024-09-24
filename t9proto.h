@@ -10,12 +10,16 @@
 #error Unsupported compiler
 #endif
 
+struct t9p_stat;
+
 #define T9P_NOTAG (~(uint16_t)0)
 #define T9P_NOFID (~(uint32_t)0)
 #define T9P_NOUID (~(uint32_t)0)
 
 enum {
     T9P_TYPE_Rlerror     = 7,
+	T9P_TYPE_Tstatfs     = 8,
+	T9P_TYPE_Rstatfs,
     T9P_TYPE_Tlopen      = 12,
     T9P_TYPE_Rlopen,
     T9P_TYPE_Tlcreate    = 14,
@@ -228,6 +232,8 @@ struct T9P_PACKED Tstat {
     uint32_t fid;
 };
 
+int encode_Tstat(void* buf, size_t bufsize, uint16_t tag, uint32_t fid);
+
 struct T9P_PACKED Rstat {
     T9P_COMMON_FIELDS
     uint16_t stat_len;
@@ -269,6 +275,8 @@ struct T9P_PACKED Tgetattr {
     uint64_t request_mask;
 };
 
+int encode_Tgetattr(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t request_mask);
+
 struct T9P_PACKED Rgetattr {
     T9P_COMMON_FIELDS
     uint64_t valid;
@@ -293,6 +301,8 @@ struct T9P_PACKED Rgetattr {
     uint64_t data_version;
 };
 
+int decode_Rgetattr(struct Rgetattr* attr, const void* buf, size_t bufsize);
+
 struct T9P_PACKED Twrite {
     T9P_COMMON_FIELDS
     uint32_t fid;
@@ -310,3 +320,45 @@ struct T9P_PACKED Rwrite {
 };
 
 int decode_Rwrite(struct Rwrite* out, const void* buf, size_t len);
+
+struct T9P_PACKED Tstatfs {
+    T9P_COMMON_FIELDS
+    uint32_t fid;
+};
+
+int encode_Tstatfs(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
+
+struct T9P_PACKED Rstatfs {
+    T9P_COMMON_FIELDS
+    uint32_t ftype;
+    uint32_t bsize;
+    uint64_t blocks;
+    uint64_t bfree;
+    uint64_t bavail;
+    uint64_t files;
+    uint64_t ffree;
+    uint64_t fsid;
+    uint32_t namelen;
+};
+
+int decode_Rstatfs(struct Rstatfs* st, const void* buf, size_t buflen);
+
+struct T9P_PACKED Tlcreate {
+    T9P_COMMON_FIELDS
+    uint32_t fid;
+    uint16_t namelen;
+    char name[];
+    /*flags[4]*/
+    /*mode[4]*/
+    /*gid[4]*/
+};
+
+int encode_Tlcreate(void* buf, size_t buflen, uint16_t tag, uint32_t fid, const char* name, uint32_t flags, uint32_t mode, uint32_t gid);
+
+struct T9P_PACKED Rlcreate {
+    T9P_COMMON_FIELDS
+    qid_t qid;
+    uint32_t iounit;
+};
+
+int decode_Rlcreate(struct Rlcreate* rl, const void* buf, size_t buflen);

@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "t9proto.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -15,15 +17,17 @@ extern "C" {
 
 #define T9P_PATH_MAX PATH_MAX
 
-/** Flags for Topen */
-#define T9P_OREAD 0
-#define T9P_OWRITE 1
-#define T9P_ORDWR 2
-#define T9P_OEXEC 3
-#define T9P_OTRUNC 0x10
+/** Flags for Tlopen (these match Linux O_XXX bits)*/
+#define T9P_OREAD   00
+#define T9P_OWRITE  01
+#define T9P_ORDWR   02
+#define T9P_OEXEC   3
+#define T9P_OTRUNC  0x10
 #define T9P_ORCLOSE 0x40
 
 #define T9P_OEXCL 0x1000
+
+/** Flags for lcreate */
 
 /**
  * Transport flags
@@ -83,6 +87,47 @@ typedef struct t9p_opts {
     int recv_timeo;                     /**< Recv timeout, in ms */
 } t9p_opts_t;
 
+/** Flags for t9p_getattr */
+#define T9P_GETATTR_MODE         0x00000001ULL
+#define T9P_GETATTR_NLINK        0x00000002ULL
+#define T9P_GETATTR_UID          0x00000004ULL
+#define T9P_GETATTR_GID          0x00000008ULL
+#define T9P_GETATTR_RDEV         0x00000010ULL
+#define T9P_GETATTR_ATIME        0x00000020ULL
+#define T9P_GETATTR_MTIME        0x00000040ULL
+#define T9P_GETATTR_CTIME        0x00000080ULL
+#define T9P_GETATTR_INO          0x00000100ULL
+#define T9P_GETATTR_SIZE         0x00000200ULL
+#define T9P_GETATTR_BLOCKS       0x00000400ULL
+#define T9P_GETATTR_BTIME        0x00000800ULL
+#define T9P_GETATTR_GEN          0x00001000ULL
+#define T9P_GETATTR_DATA_VERSION 0x00002000ULL
+#define T9P_GETATTR_BASIC        0x000007ffULL
+#define T9P_GETATTR_ALL          0x00003fffULL
+
+typedef struct t9p_attr {
+    uint64_t valid;
+    qid_t qid;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t nlink;
+    uint64_t rdev;
+    uint64_t fsize;
+    uint64_t blksize;
+    uint64_t blocks;
+    uint64_t atime_sec;
+    uint64_t atime_nsec;
+    uint64_t mtime_sec;
+    uint64_t mtime_nsec;
+    uint64_t ctime_sec;
+    uint64_t ctime_nsec;
+    uint64_t btime_sec;
+    uint64_t btime_nsec;
+    uint64_t gen;
+    uint64_t data_version;
+} t9p_attr_t;
+
 /**
  * \brief Init the options table with sensible defaults
  */
@@ -100,7 +145,18 @@ void t9p_close(t9p_handle_t handle);
 ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer);
 ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer);
 
+int t9p_create(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags);
+
+int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask);
+
 t9p_handle_t t9p_get_root(t9p_context_t* c);
+
+uint32_t t9p_get_iounit(t9p_handle_t h);
+
+/** Returns 1 if open for I/O, 0 otherwise */
+int t9p_is_open(t9p_handle_t h);
+
+int t9p_is_valid(t9p_handle_t h);
 
 /**
  * TCP transport layer. Returns -1 if unsupported, otherwise fills out `tp`

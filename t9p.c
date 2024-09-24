@@ -669,6 +669,75 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
     return rw.count;
 }
 
+
+int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask) {
+    char packet[PACKET_BUF_SIZE];
+    uint16_t tag = _mktag(c);
+
+    int l;
+    if ((l = encode_Tgetattr(packet, sizeof(packet), tag, h->fid, mask)) < 0) {
+        ERROR(c, "%s: failed to encode Tgetattr\n", __FUNCTION__);
+        return -1;
+    }
+
+    if (_send(c, packet, l, 0, 1) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        return -1;
+    }
+
+    ssize_t len;
+    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rgetattr, tag)) < 0) {
+        ERROR(c, "%s: no Rgetattr recv'ed\n", __FUNCTION__);
+        return -1;
+    }
+
+    struct Rgetattr rg;
+    if (decode_Rgetattr(&rg, packet, len) < 0) {
+        ERROR(c, "%s: failed to decode Rgetattr\n", __FUNCTION__);
+        return -1;
+    }
+
+    O_RDONLY;
+
+    attr->valid = rg.valid;
+    attr->qid = rg.qid;
+    attr->mode = rg.mode;
+    attr->uid = rg.uid;
+    attr->gid = rg.gid;
+    attr->nlink = rg.nlink;
+    attr->rdev = rg.rdev;
+    attr->fsize = rg.fsize;
+    attr->blksize = rg.blksize;
+    attr->blocks = rg.blocks;
+    attr->atime_sec = rg.atime_sec;
+    attr->atime_nsec = rg.atime_nsec;
+    attr->mtime_sec = rg.mtime_sec;
+    attr->mtime_nsec = rg.mtime_nsec;
+    attr->ctime_sec = rg.ctime_sec;
+    attr->ctime_nsec = rg.ctime_nsec;
+    attr->btime_sec = rg.btime_sec;
+    attr->btime_nsec = rg.btime_nsec;
+    attr->gen = rg.gen;
+    attr->data_version = rg.data_version;
+    return 0;
+}
+
+int t9p_create(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags) {
+    char packet[PACKET_BUF_SIZE];
+}
+
+uint32_t t9p_get_iounit(t9p_handle_t h) {
+    return h->iounit;
+}
+
+int t9p_is_open(t9p_handle_t h) {
+    return h->iounit != 0;
+}
+
+int t9p_is_valid(t9p_handle_t h) {
+    return !!(h->valid_mask & T9P_HANDLE_ACTIVE);
+}
+
 /********************** t9p_context methods **********************/
 
 /** Alloc a new handle, locks fid table */

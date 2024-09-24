@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <readline/readline.h>
+#include <readline/history.h>
 #include <getopt.h>
 #include <linux/limits.h>
 #include <stdlib.h>
@@ -66,6 +67,47 @@ void cat_cmd(int argc, const char* const* argv) {
     t9p_close_handle(ctx, h);
 }
 
+void getattr_cmd(int argc, const char* const* argv) {
+    if (argc < 2) {
+        printf("usage: getattr <path>\n");
+        return;
+    }
+
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("open %s failed\n", argv[1]);
+        return;
+    }
+
+    struct t9p_attr a;
+    if (t9p_getattr(ctx, h, &a, T9P_GETATTR_ALL) < 0) {
+        printf("getattr failed\n");
+    }
+    else {
+        char mode[4];
+        printf(" mode:          %d\n", a.mode);
+        printf(" uid:           %d\n", a.uid);
+        printf(" gid:           %d\n", a.gid);
+        printf(" nlink:         %ld\n", a.nlink);
+        printf(" rdev:          %ld\n", a.rdev);
+        printf(" fsize:         %ld\n", a.fsize);
+        printf(" blksize:       %ld\n", a.blksize);
+        printf(" blocks:        %ld\n", a.blocks);
+        printf(" atime_sec:     %ld\n", a.atime_sec);
+        printf(" atime_nsec:    %ld\n", a.atime_nsec);
+        printf(" mtime_sec:     %ld\n", a.mtime_sec);
+        printf(" mtime_nsec:    %ld\n", a.mtime_nsec);
+        printf(" ctime_sec:     %ld\n", a.ctime_sec);
+        printf(" ctime_nsec:    %ld\n", a.ctime_nsec);
+        printf(" btime_sec:     %ld\n", a.btime_sec);
+        printf(" btime_nsec:    %ld\n", a.btime_nsec);
+        printf(" gen:           %ld\n", a.gen);
+        printf(" data_version:  %ld\n", a.data_version);
+    }
+
+    t9p_close_handle(ctx, h);
+}
+
 void put_cmd(int argc, const char* const* argv) {
     if (argc < 3) {
         printf("usage: put <path> <data_str>\n");
@@ -101,6 +143,7 @@ struct command COMMANDS[] = {
     {"exit", exit_cmd},
     {"cat", cat_cmd},
     {"put", put_cmd},
+    {"getattr", getattr_cmd},
     {0,0}
 };
 
@@ -158,11 +201,15 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    rl_initialize();
+
+    char prompt[512];
+    snprintf(prompt, sizeof(prompt), "%s> ", ip);
+
     char* ptr = NULL;
-    size_t len;
-    ssize_t nread;
-    while(run && (nread = getline(&ptr, &len, stdin)) != -1) {
+    while(run && (ptr = readline(prompt)) != NULL) {
         if (!ptr) continue;
+        add_history(ptr);
         const char* comps[256] = {0};
         int n = 0;
         for (char* c = ptr; *c; c++) {
