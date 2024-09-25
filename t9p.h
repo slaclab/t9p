@@ -145,12 +145,23 @@ void t9p_close(t9p_handle_t handle);
 ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer);
 ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer);
 
-int t9p_create(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags);
+int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags);
+
+/**
+ * Duplicates a file handle
+ */
+t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup);
 
 int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask);
 
+/**
+ * Returns the file handle associated with the root
+ */
 t9p_handle_t t9p_get_root(t9p_context_t* c);
 
+/**
+ * Returns the IO size for an opened handle. If it's not opened, then this will return 0
+ */
 uint32_t t9p_get_iounit(t9p_handle_t h);
 
 /** Returns 1 if open for I/O, 0 otherwise */

@@ -327,7 +327,7 @@ static ssize_t _recv_type(struct t9p_context* c, void* data, size_t sz, int flag
 static ssize_t _recv_type_handle_error(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t type, uint16_t tag) {
     ssize_t ret;
     if ((ret=_recv_type(c, data, sz, flags, type, tag)) < 0) {
-        ERROR(c, "%s: recv failed: %s\n", t9p_type_string(type), strerror(ret));
+        ERROR(c, "%s: recv failed: %s\n", t9p_type_string(type), strerror(-ret));
         return -1;
     }
 
@@ -551,6 +551,9 @@ error:
 }
 
 void t9p_close_handle(t9p_context_t* c, t9p_handle_t h) {
+    if (!h)
+        return;
+
     if (!(h->valid_mask & T9P_HANDLE_ACTIVE))
         return;
     /** Clunk it if the FID is valid */
@@ -722,8 +725,92 @@ int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_
     return 0;
 }
 
-int t9p_create(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags) {
+int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags) {
     char packet[PACKET_BUF_SIZE];
+
+    uint16_t tag = _mktag(c);
+
+    /** Duplicate fid of parent */
+    t9p_handle_t h = t9p_dup(c, parent);
+    if (!h)
+        return -1;
+
+    int l;
+    if ((l = encode_Tlcreate(packet, sizeof(packet), tag, h->fid, name, flags, mode, gid)) < 0) {
+        ERROR(c, "%s: failed to encode Tlcreate\n", __FUNCTION__);
+        t9p_close_handle(c, h);
+        return -1;
+    }
+
+    if (_send(c, packet, l, 0, 1) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        return -1;
+    }
+
+    ssize_t len;
+    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rlcreate, tag)) < 0) {
+        t9p_close_handle(c, h);
+        return -1;
+    }
+
+    struct Rlcreate rl;
+    if (decode_Rlcreate(&rl, packet, len) < 0) {
+        ERROR(c, "%s: Rlcreate decode failed\n", __FUNCTION__);
+        t9p_close_handle(c, h);
+        return -1;
+    }
+
+    if (newhandle) {
+        h->iounit = rl.iounit;
+        *newhandle = h;
+    }
+    /** Immediately clunk if the handle is not needed */
+    else {
+        t9p_close_handle(c, h);
+    }
+
+    return 0;
+}
+
+t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup) {
+    char packet[PACKET_BUF_SIZE];
+
+    struct t9p_handle_node* h = _alloc_handle(c);
+    if (!h) {
+        ERROR(c, "%s: unable to alloc new handle\n", __FUNCTION__);
+        return NULL;
+    }
+
+    uint16_t tag = _mktag(c);
+    int l;
+    if ((l=encode_Twalk(packet, sizeof(packet), tag, todup->fid, h->h.fid, 0, NULL)) < 0) {
+        ERROR(c, "%s: failed to encode Twalk\n", __FUNCTION__);
+        _release_handle(c, h);
+        return NULL;
+    }
+
+    if (_send(c, packet, l, 0, 1) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        _release_handle(c, h);
+        return NULL;
+    }
+
+    ssize_t len;
+    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rwalk, tag)) < 0) {
+        _release_handle(c, h);
+        return NULL;
+    }
+
+    struct Rwalk rw;
+    qid_t* qid = NULL;
+    if (decode_Rwalk(&rw, packet, len, &qid) < 0) {
+        _release_handle(c, h);
+        return NULL;
+    }
+
+    h->h.qid = qid[rw.nwqid-1];
+    h->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
+    return &h->h;
 }
 
 uint32_t t9p_get_iounit(t9p_handle_t h) {
@@ -767,8 +854,9 @@ static struct t9p_handle_node* _alloc_handle(struct t9p_context* c) {
 static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h) {
     pthread_mutex_lock(&c->fhl_mutex);
 
-    /** Clear data */
+    /** Clear data, but preserve fid */
     memset(&h->h.qid, 0, sizeof(h->h.qid));
+    h->h.iounit = 0;
     h->h.valid_mask = 0;
 
     /** Unlink from active list */
@@ -823,9 +911,6 @@ void* t9p_tcp_init() {
 int t9p_tcp_disconnect(void* context) {
     struct tcp_context* ctx = context;
     
-    struct sockaddr s = {0};
-    s.sa_family = AF_UNSPEC;
-
 #if 1
     if (shutdown(ctx->sock, SHUT_RDWR) < 0) {
 #else

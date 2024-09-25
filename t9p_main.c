@@ -67,6 +67,39 @@ void cat_cmd(int argc, const char* const* argv) {
     t9p_close_handle(ctx, h);
 }
 
+void create_cmd(int argc, const char* const* argv) {
+    if (argc < 2) {
+        printf("usage: create <path>\n");
+        return;
+    }
+
+    char dir[PATH_MAX];
+    const char* name;
+    strcpy(dir, argv[1]);
+    char* d = strrchr(dir, '/');
+    if (d) {
+        name = d+1;
+        *d = 0;
+    }
+    else {
+        dir[0] = 0;
+        name = argv[1];
+    }
+
+    t9p_handle_t parent = t9p_open_handle(ctx, NULL, dir);
+    if (!parent) {
+        printf("Unable to open dir %s\n", dir);
+        return;
+    }
+
+    t9p_handle_t h;
+    if (t9p_create(ctx, &h, parent, name, 0777, 1000, 0) < 0) {
+        printf("Create failed\n");
+    }
+    t9p_close_handle(ctx, h);
+    t9p_close_handle(ctx, parent);
+}
+
 void getattr_cmd(int argc, const char* const* argv) {
     if (argc < 2) {
         printf("usage: getattr <path>\n");
@@ -144,6 +177,7 @@ struct command COMMANDS[] = {
     {"cat", cat_cmd},
     {"put", put_cmd},
     {"getattr", getattr_cmd},
+    {"create", create_cmd},
     {0,0}
 };
 
