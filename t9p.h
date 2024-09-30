@@ -27,7 +27,16 @@ extern "C" {
 
 #define T9P_OEXCL 0x1000
 
-/** Flags for lcreate */
+/** QID types */
+#define T9P_QID_DIR     0x80    /**< Directory */
+#define T9P_QID_APPEND  0x40    /**< File is append only */
+#define T9P_QID_EXCL    0x20    /**< Exclusive; only one handle at a time */
+#define T9P_QID_MOUNT   0x10    /**< Mount point */
+#define T9P_QID_AUTH    0x8     /**< Auth file */
+#define T9P_QID_MP      0x4     /**< Non-backed up file */
+#define T9P_QID_SYMLINK 0x2     /**< Symbolic link */
+#define T9P_QID_LINK    0x1     /**< Hard link */
+#define T9P_QID_FILE    0x0     /**< Normal file */
 
 /**
  * Transport flags
@@ -152,6 +161,9 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
  */
 t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup);
 
+/**
+ * Performs a getattr on the specified file handle
+ */
 int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask);
 
 /**
@@ -164,9 +176,15 @@ t9p_handle_t t9p_get_root(t9p_context_t* c);
  */
 uint32_t t9p_get_iounit(t9p_handle_t h);
 
-/** Returns 1 if open for I/O, 0 otherwise */
+/**
+ * Remove the object referred to by fid
+ */
+int t9p_remove(t9p_context_t* c, t9p_handle_t h);
+
+/** Returns TRUE if open for I/O, FALSE otherwise */
 int t9p_is_open(t9p_handle_t h);
 
+/** Returns TRUE if the handle is valid, FALSE otherwise */
 int t9p_is_valid(t9p_handle_t h);
 
 /**

@@ -425,3 +425,15 @@ int decode_Rlcreate(struct Rlcreate* rl, const void* buf, size_t buflen) {
     rl->size = BSWAP32(in->size);
     return sizeof(*rl);
 }
+
+int encode_Tremove(void* buf, size_t buflen, uint16_t tag, uint32_t fid) {
+    if (buflen < sizeof(struct Tremove))
+        return -1;
+
+    struct Tremove* rm = buf;
+    rm->type = T9P_TYPE_Tremove;
+    rm->fid = BSWAP32(fid);
+    rm->size = BSWAP32(sizeof(*rm));
+    rm->tag = BSWAP16(tag);
+    return sizeof(*rm);
+}

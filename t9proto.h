@@ -223,6 +223,8 @@ struct T9P_PACKED Tremove {
     uint32_t fid;
 };
 
+int encode_Tremove(void* buf, size_t outsize, uint16_t tag, uint32_t fid);
+
 struct T9P_PACKED Rremove {
     T9P_COMMON_FIELDS
 };

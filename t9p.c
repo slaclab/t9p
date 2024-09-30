@@ -70,6 +70,7 @@ static ssize_t _recv(struct t9p_context* c, void* data, size_t sz, int flags);
 static void _perror(struct t9p_context* c, struct TRcommon* err);
 static int _iserror(struct TRcommon* err);
 static int _clunk_sync(struct t9p_context* c, int fid);
+static int _can_rw_fid(t9p_handle_t h, int write);
 
 struct t9p_context {
     void* conn;
@@ -85,17 +86,15 @@ struct t9p_context {
     pthread_mutexattr_t fhl_mutexattr;
     int fhl_max;
     int fhl_count;
-    //struct t9p_handle* fhl;
 
-    struct t9p_handle_node* fhl;
-    //struct t9p_handle_node* fhl_list;
-    struct t9p_handle_node* fhl_free;
-    //qid_t* qid;
+    struct t9p_handle_node* fhl;            /**< Flat array of file handles, allocated in a contiguous block */
+    struct t9p_handle_node* fhl_free;       /**< LL of free file handles */
 };
 
 /** t9p_context 'methods' */
 static struct t9p_handle_node* _alloc_handle(struct t9p_context* c);
 static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h);
+static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 
 static int _mktag(struct t9p_context* c);
 static void _release_tag(struct t9p_context* c, int tag);
@@ -603,6 +602,10 @@ void t9p_close(t9p_handle_t handle) {
 
 ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer) {
     char packet[PACKET_BUF_SIZE];
+
+    if (!_can_rw_fid(h, 0))
+        return -1;
+
     uint16_t tag = _mktag(c);
 
     int l;
@@ -638,6 +641,10 @@ ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num
 
 ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer) {
     char packet[PACKET_BUF_SIZE];
+
+    if (!_can_rw_fid(h, 1))
+        return -1;
+
     uint16_t tag = _mktag(c);
 
     int l;
@@ -675,6 +682,10 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
 
 int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask) {
     char packet[PACKET_BUF_SIZE];
+
+    if (!t9p_is_valid(h))
+        return -1;
+
     uint16_t tag = _mktag(c);
 
     int l;
@@ -730,6 +741,10 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
 
     uint16_t tag = _mktag(c);
 
+    /** If parent is NULL, parent is root */
+    if (!t9p_is_valid(parent))
+        parent = t9p_get_root(c);
+
     /** Duplicate fid of parent */
     t9p_handle_t h = t9p_dup(c, parent);
     if (!h)
@@ -775,6 +790,9 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
 t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup) {
     char packet[PACKET_BUF_SIZE];
 
+    if (!t9p_is_valid(todup))
+        return NULL;
+
     struct t9p_handle_node* h = _alloc_handle(c);
     if (!h) {
         ERROR(c, "%s: unable to alloc new handle\n", __FUNCTION__);
@@ -811,6 +829,34 @@ t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup) {
     h->h.qid = qid[rw.nwqid-1];
     h->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
     return &h->h;
+}
+
+int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
+    char packet[PACKET_BUF_SIZE];
+    if (!t9p_is_valid(h))
+        return -1;
+
+    uint16_t tag = _mktag(c);
+    int l;
+    if ((l = encode_Tremove(packet, sizeof(packet), tag, h->fid)) < 0) {
+        ERROR(c, "%s: unable to encode Tremove\n", __FUNCTION__);
+        return -1;
+    }
+
+    if (_send(c, packet, l, 0, 1) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        return -1;
+    }
+
+    /** Tremove is basically just a clunk with the side effect of removing a file. This will clunk even if the remove fails */
+    _release_handle_by_fid(c, h);
+
+    ssize_t len;
+    if ((len = _recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rremove, tag)) < 0) {
+        return 0; /** TODO: Returning -1 here and releasing the file handle would be inconsistent with the other error cases */
+    }
+
+    return 0;
 }
 
 uint32_t t9p_get_iounit(t9p_handle_t h) {
@@ -873,6 +919,10 @@ static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h) {
     pthread_mutex_unlock(&c->fhl_mutex);
 }
 
+static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h) {
+    _release_handle(c, &c->fhl[h->fid]);
+}
+
 static int _mktag(struct t9p_context* c) {
     return 0; // TODO:!!!!!
 }
@@ -888,6 +938,14 @@ static void _free_node_list(struct t9p_handle_node* head) {
     //    free(n);
     //    n = nn;
     //}
+}
+
+/** Can we read/write to a fid? */
+static int _can_rw_fid(t9p_handle_t h, int write) {
+    if (!t9p_is_open(h))
+        return 0;
+    return (h->qid.type != T9P_QID_MOUNT && h->qid.type != T9P_QID_DIR && h->qid.type != T9P_QID_AUTH
+        && (write ? 1 : h->qid.type != T9P_QID_APPEND));
 }
 
 /********************** TCP transport layer **********************/

@@ -166,6 +166,23 @@ void put_cmd(int argc, const char* const* argv) {
 
     t9p_close_handle(ctx, h);
 }
+
+void rm_cmd(int argc, const char* const* argv) {
+    if (argc < 2) {
+        printf("usage: rm <path>\n");
+        return;
+    }
+
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("unable to hopen for %s\n", argv[1]);
+        return;
+    }
+
+    if (t9p_remove(ctx, h) == 0)
+        printf("Removed %s\n", argv[1]);
+}
+
 struct command {
     const char* name;
     void (*func)(int argc, const char* const* argv);
@@ -178,6 +195,7 @@ struct command COMMANDS[] = {
     {"put", put_cmd},
     {"getattr", getattr_cmd},
     {"create", create_cmd},
+    {"rm", rm_cmd},
     {0,0}
 };
 
