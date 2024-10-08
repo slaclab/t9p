@@ -437,3 +437,60 @@ int encode_Tremove(void* buf, size_t buflen, uint16_t tag, uint32_t fid) {
     rm->tag = BSWAP16(tag);
     return sizeof(*rm);
 }
+
+int encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid) {
+    if (buflen < sizeof(struct Tfsync))
+        return -1;
+
+    struct Tfsync* tf = buf;
+    tf->fid = BSWAP32(fid);
+    tf->size = BSWAP32(sizeof(struct Tfsync));
+    tf->tag = BSWAP16(tag);
+    tf->type = T9P_TYPE_Tfsync;
+
+    return sizeof(struct Tfsync);
+}
+
+int decode_Rfsync(struct Rfsync* rf, const void* buf, size_t buflen) {
+    if (buflen < sizeof(*rf))
+        return -1;
+
+    const struct Rfsync* in = buf;
+    rf->size = BSWAP32(in->size);
+    rf->type = in->type;
+    rf->tag = BSWAP16(in->tag);
+    return sizeof(*rf);
+}
+
+int encode_Tmkdir(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name, uint32_t mode, uint32_t gid) {
+    const size_t nameLen = strlen(name);
+    const size_t totalSize = sizeof(struct Tmkdir) + sizeof(uint16_t)/*len*/ + nameLen + sizeof(mode) + sizeof(gid);
+    if (buflen < totalSize) {
+        return -1;
+    }
+
+    struct Tmkdir* tm = buf;
+    tm->tag = BSWAP16(tag);
+    tm->type = T9P_TYPE_Tmkdir;
+    tm->dfid = BSWAP32(dfid);
+    tm->size = BSWAP32(totalSize);
+    uint8_t* b = ((uint8_t*)buf) + offsetof(struct Tmkdir, dfid) + sizeof(uint32_t);
+    wr16(&b, nameLen);
+    wrbuf(&b, (const uint8_t*)name, nameLen);
+    wr32(&b, mode);
+    wr32(&b, gid);
+
+    return totalSize;
+}
+
+int decode_Rmkdir(struct Rmkdir* rm, const void* buf, size_t buflen) {
+    if (buflen < sizeof(*rm))
+        return -1;
+
+    const struct Rmkdir* in = buf;
+    *rm = *in;
+    rm->qid = swapqid(in->qid);
+    rm->size = BSWAP32(in->size);
+    rm->tag = BSWAP16(in->tag);
+    return sizeof(*in);
+}

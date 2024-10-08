@@ -26,6 +26,20 @@ enum {
     T9P_TYPE_Rlcreate,
     T9P_TYPE_Tgetattr    = 24,
     T9P_TYPE_Rgetattr,
+	T9P_TYPE_Tfsync      = 50,
+	T9P_TYPE_Rfsync,
+	T9P_TYPE_Tlock       = 52,
+	T9P_TYPE_Rlock,
+	T9P_TYPE_Tgetlock    = 54,
+	T9P_TYPE_Rgetlock,
+	T9P_TYPE_Tlink       = 70,
+	T9P_TYPE_Rlink,
+	T9P_TYPE_Tmkdir      = 72,
+	T9P_TYPE_Rmkdir,
+	T9P_TYPE_Trenameat   = 74,
+	T9P_TYPE_Rrenameat,
+	T9P_TYPE_Tunlinkat   = 76,
+	T9P_TYPE_Runlinkat,
     T9P_TYPE_Tversion    = 100,
     T9P_TYPE_Rversion,
     T9P_TYPE_Tauth       = 102,
@@ -364,3 +378,33 @@ struct T9P_PACKED Rlcreate {
 };
 
 int decode_Rlcreate(struct Rlcreate* rl, const void* buf, size_t buflen);
+
+struct T9P_PACKED Tfsync {
+    T9P_COMMON_FIELDS
+    uint32_t fid;
+};
+
+int encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
+
+struct T9P_PACKED Rfsync {
+    T9P_COMMON_FIELDS
+};
+
+int decode_Rfsync(struct Rfsync* rf, const void* buf, size_t buflen);
+
+struct T9P_PACKED Tmkdir {
+    T9P_COMMON_FIELDS
+    uint32_t dfid;
+    /*char name[s]*/
+    /*uint32_t mode*/
+    /*uint32_t gid*/
+};
+
+int encode_Tmkdir(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name, uint32_t mode, uint32_t gid);
+
+struct T9P_PACKED Rmkdir {
+    T9P_COMMON_FIELDS
+    qid_t qid;
+};
+
+int decode_Rmkdir(struct Rmkdir* rm, const void* buf, size_t buflen);

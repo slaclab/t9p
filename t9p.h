@@ -17,6 +17,8 @@ extern "C" {
 
 #define T9P_PATH_MAX PATH_MAX
 
+#define T9P_NOGID (~0U)
+
 /** Flags for Tlopen (these match Linux O_XXX bits)*/
 #define T9P_OREAD   00
 #define T9P_OWRITE  01
@@ -94,6 +96,7 @@ typedef struct t9p_opts {
     int max_fids;                       /**< Max number of open file IDs (1 will be consumed for root) */
     int send_timeo;                     /**< Send timeout, in ms */
     int recv_timeo;                     /**< Recv timeout, in ms */
+    uint32_t gid;                       /**< Default gid, used when NOGID is passed to functions */
 } t9p_opts_t;
 
 /** Flags for t9p_getattr */
@@ -154,7 +157,37 @@ void t9p_close(t9p_handle_t handle);
 ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer);
 ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer);
 
+/**
+ * Creates a new file under a directory
+ * \param c Context
+ * \param newhandle Output parameter to hold the new file handle. If NULL, the new fid will be clunked immediately
+ * \param parent Parent directory fid. NULL for root
+ * \param name Name of the new file 
+ * \param mode Mode of the file (i.e. 0777)
+ * \param gid GID of the owner (or T9P_NOGID)
+ * \param flags Additional flags
+ */
 int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags);
+
+/**
+ * Creates a new directory under parent
+ * \param c context
+ * \param parent Handle to the parent directory
+ * \param name Name of the new directory
+ * \param mode Mode (i.e. 0777 for o+rwx/g+rwx/u+rwx)
+ * \param gid GID of the owner (or T9P_NOGID)
+ * \param outqid Optional parameter to hold the qid of the new dir
+ * \return < 0 on error
+ */
+int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, qid_t* outqid);
+
+/**
+ * Perform an fsync operation on the file. The file must be open already, if not, it will error
+ * \param c context
+ * \param file File to fsync
+ * \return < 0 on error
+ */
+int t9p_fsync(t9p_context_t* c, t9p_handle_t file);
 
 /**
  * Duplicates a file handle

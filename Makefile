@@ -1,6 +1,6 @@
 
 AR?=ar
-CFLAGS+=-g
+CFLAGS+=-g -Wall
 
 all: t9p tests/bvec_test
 
@@ -18,8 +18,8 @@ clean:
 libt9p.a: t9p.o t9proto.o
 	$(AR) cvr $@ $?
 
-t9p: t9p_main.c libt9p.a
-	$(CC) -o $@ $(CFLAGS) $< $(LDFLAGS) -L. -lt9p -lreadline
+t9p: t9p_main.c libt9p.a t9p_posix.o
+	$(CC) -o $@ $(CFLAGS) $< $(LDFLAGS) t9p_posix.o -L. -lt9p -lreadline
 
 tests/bvec_test: tests/bvec_test.c bvec.h
 	$(CC) -o $@ $(CFLAGS) $< $(LDFLAGS)
