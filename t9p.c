@@ -34,12 +34,14 @@
 #include "t9p.h"
 #include "t9proto.h"
 
-#define MAX_FILES_DEFAULT 256
-
 #define PACKET_BUF_SIZE 8192
 
 #define MAX_PATH_COMPONENTS 256
 
+#define MAX_TAGS 1024
+#define MAX_TRANSACTIONS 512
+
+#define DEFAULT_MAX_FILES 256
 #define DEFAULT_SEND_TIMEO 3000
 #define DEFAULT_RECV_TIMEO 3000
 
@@ -65,6 +67,13 @@
 #define BSWAP64(x) (x)
 #endif
 
+struct trans_pool {
+    struct trans_node* freehead;
+    mutex_t* guard;
+    uint32_t total;
+    msg_queue_t* queue;
+};
+
 struct t9p_context {
     void* conn;
     t9p_transport_t* trans;
@@ -82,10 +91,9 @@ struct t9p_context {
     /** I/O thread */
     thread_t* io_thread;
     event_t* recv_event;                    /**< Signaled when a new packet has been received */
-    msg_queue_t* io_queue;
     int thr_run;
 
-    struct trans_queue* send_queue;
+    struct trans_pool trans_pool;
 
     struct t9p_handle_node* fhl;            /**< Flat array of file handles, allocated in a contiguous block */
     struct t9p_handle_node* fhl_free;       /**< LL of free file handles */
@@ -142,81 +150,107 @@ static void _free_node_list(struct t9p_handle_node* head);
 
 /********************************************************************/
 /*                                                                  */
-/*            T R A N S M I S S I O N        Q U E U E              */
+/*            T R A N S A C T I O N        P O O L                  */
 /*                                                                  */
 /********************************************************************/
+
+struct trans;
+struct trans_pool;
+struct trans_node;
+
+struct trans_node* trans_enqueue(struct trans_pool* q, struct trans* tr);
+void trans_release(struct trans_pool* q, struct trans_node* tn);
 
 #define TRANS_FLAGS_NONE  0x0
 #define TRANS_FLAGS_OWNED 0x1       /**< data is owned by the transaction and should be freed once sent */
 
 struct trans {
-    uint32_t flags;                 /**< Flags */
-    void* data;                     /**< Data */
-    size_t size;                    /**< Data size */
-    uint16_t tag;                   /**< Transaction tag */
+    uint32_t flags;         /**< Flags */
+    
+    const void* data;       /**< Outgoing data */
+    size_t size;            /**< Outgoing data size */
+
+    void* rdata;            /**< Buffer to hold incoming data */
+    size_t rsize;           /**< Incoming data buffer size */
+
+    const void* hdata;      /**< Optional; header data pointer. If not NULL, this is ent before
+                                 this->data is. This is used to avoid unnecessary copies */
+    size_t hsize;           /**< Optional; header data size */
+
+    int32_t* status;        /**< Pointer to status variable. Can be used instead of rdata/rsize
+                                 to get the message result */
+
+    /** 9p meta info */
+    uint32_t rtype;         /**< Result message type. Set to 0 to accept any. */
+    uint16_t tag;           /**< Transaction tag */
 };
 
-struct trans_queue_node {
+struct trans_node {
     struct trans tr;
 
     uint8_t sent;                   /**< Set once we've been sent */
     event_t* event;                 /**< Signaled when the response to this is receieved */
     
-    struct trans_queue_node* next;
-    struct trans_queue_node* prev;
+    struct trans_node* next;
 };
 
-struct trans_queue {
-    struct trans_queue_node* head;
-    struct trans_queue_node* tail;
-    struct trans_queue_node* freehead;
-    mutex_t* guard;
-    uint32_t total;
-};
-
-void trans_queue_init(struct trans_queue* q, uint32_t num) {
+/**
+ * Init the transaction queue
+ */
+int trans_pool_init(struct trans_pool* q, uint32_t num) {
     memset(q, 0, sizeof(*q));
 
-    q->guard = create_mutex();
+    q->queue = msg_queue_create("/tmp/TPOOL", sizeof(struct trans_node*), MAX_TRANSACTIONS);
+    if (!q->queue)
+        return -1;
+
+    if (!(q->guard = create_mutex())) {
+        msg_queue_destroy(q->queue);
+        return -1;
+    }
 
     lock_mutex(q->guard);
 
     /** Allocate nodes */
     for (int i = 0; i < num; ++i) {
-        struct trans_queue_node* on = q->freehead;
+        struct trans_node* on = q->freehead;
         q->freehead = calloc(1, sizeof(*on));
+        q->freehead->event = event_create();
         q->freehead->next = on;
     }
     q->total = num;
 
     unlock_mutex(q->guard);
+    return 0;
 }
 
-void trans_queue_destroy(struct trans_queue* q) {
+/**
+ * Destroy the transaction queue
+ */
+void trans_pool_destroy(struct trans_pool* q) {
     lock_mutex(q->guard);
 
     /** Free both lists */
-    for (struct trans_queue_node* n = q->freehead; n;) {
-        struct trans_queue_node* b = n->next;
+    for (struct trans_node* n = q->freehead; n;) {
+        struct trans_node* b = n->next;
+        event_destroy(b->event);
         free(n);
         n = b;
     }
 
-    for (struct trans_queue_node* n = q->head; n;) {
-        struct trans_queue_node* b = n->next;
-        free(n);
-        n = b;
-    }
+    msg_queue_destroy(q->queue);
 
     unlock_mutex(q->guard);
-    free(q->guard);
+    destroy_mutex(q->guard);
 }
 
 /**
  * Enqueue transaction. Returns the node in the queue for this transaction. On failure, this will
- * return NULL.
+ * return NULL. Failure will occur in two situations:
+ *  1. No remaining free transactions in the pool
+ *  2. No remaining space in the message queue
  */
-struct trans_queue_node* trans_enqueue(struct trans_queue* q, struct trans* tr) {
+struct trans_node* trans_enqueue(struct trans_pool* q, struct trans* tr) {
     lock_mutex(q->guard);
 
     if (!q->freehead) {
@@ -224,61 +258,37 @@ struct trans_queue_node* trans_enqueue(struct trans_queue* q, struct trans* tr) 
         unlock_mutex(q->guard);
         return NULL;
     }
-    struct trans_queue_node* tn = q->tail;
 
     /** Extract node from the free list */
-    struct trans_queue_node* us = q->freehead;
+    struct trans_node* us = q->freehead;
     q->freehead = us->next;
 
+    /** Copy in data */
     us->next = NULL;
-    us->prev = tn;
     us->tr = *tr;
 
-    /** If the 'used' list is empty, we're both the head and tail */
-    if (!tn) {
-        q->head = us;
-        q->tail = us;
-    }
-    else {
-        /** Otherwise, splice 'er in */
-        tn->next = us;
-        q->tail = us;
+    unlock_mutex(q->guard);
+
+    /** Send it to the I/O thread */
+    if (msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
+        perror("AAAA");
+        trans_release(q, us);
+        return NULL;
     }
 
-    unlock_mutex(q->guard);
     return us;
 }
 
 /**
- * Pop a transaction from the tail of the queue. Returns 0 for success
+ * Release a node back into the transaction pool.
  */
-int trans_pop_tail(struct trans_queue* q, struct trans* out) {
+void trans_release(struct trans_pool* q, struct trans_node* tn) {
     lock_mutex(q->guard);
 
-    if (!q->tail) {
-        unlock_mutex(q->guard);
-        return -1;
-    }
-
-    struct trans_queue_node* us = q->tail;
-    *out = us->tr;
-    
-    struct trans_queue_node* fh = q->freehead;
-    if (fh)
-        fh->prev = us;
-    q->freehead = us;
-
-    q->tail = us->prev;
-    if (q->tail)
-        q->tail->next = NULL;
-    else
-        q->head = NULL;
-    
-    us->prev = NULL;
-    us->next = fh;
+    tn->next = q->freehead;
+    q->freehead = tn;
 
     unlock_mutex(q->guard);
-    return 0;
 }
 
 /** Safe strcpy that ensures dest is NULL terminated */
@@ -296,7 +306,7 @@ void t9p_opts_init(struct t9p_opts* opts) {
     opts->max_read_data_size = (2<<20); /** 1M */
     opts->max_write_data_size = (2<<20); /** 1M */
     opts->queue_size = T9P_PACKET_QUEUE_SIZE;
-    opts->max_fids = MAX_FILES_DEFAULT;
+    opts->max_fids = DEFAULT_MAX_FILES;
     opts->send_timeo = DEFAULT_SEND_TIMEO;
     opts->recv_timeo = DEFAULT_RECV_TIMEO;
 }
@@ -356,12 +366,17 @@ t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, cons
         goto error_post_fhl;
     }
 
+    if (trans_pool_init(&c->trans_pool, MAX_TRANSACTIONS) < 0) {
+        ERRLOG("Unable to create transaction pool\n");
+        goto error_post_fhl;
+    }
+
     /** Perform the version handshake */
     if (_version_handshake(c) < 0) {
         ERRLOG("Connection to %s failed\n", addr);
         transport->disconnect(c->conn);
         transport->shutdown(c->conn);
-        goto error_post_fhl;
+        goto error_post_pool;
     }
 
     /** Attach to the root fs */
@@ -369,7 +384,7 @@ t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, cons
         ERRLOG("Connected to %s failed\n", addr);
         transport->disconnect(c->conn);
         transport->shutdown(c->conn);
-        goto error_post_fhl;
+        goto error_post_pool;
     }
 
     c->thr_run = 1;
@@ -382,6 +397,8 @@ t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, cons
 
     return c;
 
+error_post_pool:
+    trans_pool_destroy(&c->trans_pool);
 error_post_fhl:
     destroy_mutex(c->fhl_mutex);
     event_destroy(c->recv_event);
@@ -416,6 +433,18 @@ void t9p_shutdown(t9p_context_t* c) {
     destroy_mutex(c->fhl_mutex);
     event_destroy(c->recv_event);
     free(c);
+}
+
+static int tr_send_recv(struct t9p_context* c, struct trans* tr) {
+    struct trans_node* n = trans_enqueue(&c->trans_pool, tr);
+    if (n == NULL)
+        return -1;
+    int r;
+    if ((r = event_wait(n->event, c->opts.recv_timeo)) != 0) {
+        return r;
+    }
+    trans_release(&c->trans_pool, n); /** Release the transaction back into the pool */
+    return 0;
 }
 
 static int _send(struct t9p_context* c, const void* data, size_t sz, int flags, int retries) {
@@ -667,7 +696,7 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
         ERROR(c, "%s: unable to encode Twalk\n", __FUNCTION__);
         goto error;
     }
-
+#if 0
     if (_send(c, packet, len, 0, 1) < 0) {
         ERROR(c, "%s: Twalk send failed\n", __FUNCTION__);
         goto error;
@@ -677,7 +706,22 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     if (l < 0) {
         goto error;
     }
+#else
+    struct trans tr = {
+        .data = packet,
+        .size = sizeof(packet),
+        .tag = tag,
+        .rtype = T9P_TYPE_Rwalk,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+    };
 
+    if (tr_send_recv(c, &tr) != 0) {
+        ERROR(c, "%s: Twalk send/recv failed\n", __FUNCTION__);
+        goto error;
+    }
+
+#endif
     struct Rwalk rw;
     qid_t* qids = NULL;
     if (decode_Rwalk(&rw, packet, sizeof(packet), &qids) < 0) {
@@ -1158,12 +1202,103 @@ static int _can_rw_fid(t9p_handle_t h, int write) {
 static void* _t9p_thread_proc(void* param) {
     t9p_context_t* c = param;
 
-    while (c->thr_run) {
+    //struct trans_node* active = NULL;
+    static struct trans_node* requests[MAX_TAGS] = {0};
 
-        struct trans t;
-        while (trans_pop_tail(c->send_queue, &t) == 0) {
-            //send(c->)
+    while (c->thr_run) {
+        struct trans_node* node = NULL;
+        size_t size;
+        ssize_t l;
+
+        /** Send pending transactions */
+        while (msg_queue_recv(c->trans_pool.queue, &node, &size) == 0) {
+            printf("send: Got %p\n", node);
+            assert(size == sizeof(node));
+            if (!node) {
+                ERROR(c, "Got NULL node\n");
+                continue;
+            }
+
+            /** Send any header data first */
+            if (node->tr.hdata && (l = c->trans->send(c, node->tr.hdata, node->tr.hsize, 0)) < 0) {
+                ERROR(c, "send: Failed to send header data: %s\n", strerror(l));
+                continue;
+            }
+
+            /** Send "body" data */
+            printf("SEnd %p %ld\n", node->tr.data, node->tr.size);
+            if ((l = c->trans->send(c, node->tr.data, node->tr.size, 0)) < 0) {
+                ERROR(c, "send: Failed to send data: %s\n", strerror(l));
+                continue;
+            }
+
+            /** Add to the list of active transactions */
+            //if (!active)
+            //    active = node;
+            //else {
+            //    node->next = active;
+            //    active = node;
+            //}
+
+            requests[node->tr.tag] = node;
         }
+
+        union {
+            char buf[128];
+            struct TRcommon com;
+            struct Rlerror err;
+        } data;
+
+        /** Recv pending transactions */
+        while ((l = c->trans->recv(c, data.buf, sizeof(data.buf), MSG_PEEK)) > 0) {
+            printf("recv: type=%d, tag=%d, size=%d\n", data.com.type, data.com.tag, data.com.size);
+            if (data.com.tag >= MAX_TAGS) {
+                ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", data.com.tag);
+                c->trans->recv(c, data.buf, sizeof(data.buf), 0); /** Discard */
+                continue;
+            }
+
+            struct trans_node* n = requests[data.com.tag];
+            if (!n) {
+                ERROR(c, "recv: Tag '%d' not found in request list; discarding!\n", data.com.tag);
+                continue;
+            }
+
+            /** Handle error responses */
+            if (data.com.type == T9P_TYPE_Rlerror) {
+                if (n->tr.status)
+                    *n->tr.status = data.err.ecode;
+                if (n->tr.rdata)
+                    memcpy(n->tr.rdata, &data.err, MIN(sizeof(data.err), n->tr.rsize));
+                c->trans->recv(c, data.buf, sizeof(data.buf), 0); /** Discard */
+                event_signal(n->event);
+                requests[n->tr.tag] = NULL;
+                continue;
+            }
+
+            /** Check for type mismatch and discard if there is one */
+            if (n->tr.rtype != 0 && data.com.type != n->tr.rtype) {
+                ERROR(c, "recv: Expected msg type '%d' but got '%d'; discarding!\n", n->tr.rtype, data.com.type);
+                c->trans->recv(c, data.buf, sizeof(data.buf), 0); /** Discard */
+                if (n->tr.status)
+                    *n->tr.status = -1;
+                event_signal(n->event);
+                requests[n->tr.tag] = NULL;
+                continue;
+            }
+
+            /** Finally, service the request */
+            l = c->trans->recv(c, n->tr.rdata ? n->tr.rdata : data.buf, n->tr.rdata ? n->tr.rsize : sizeof(data.buf), 0);
+            if (n->tr.status)
+                *n->tr.status = l > 0 ? 0 : (l < 0 ? errno : -1);
+            event_signal(n->event);
+            requests[n->tr.tag] = NULL;
+            
+        }
+
+        //if (l < 0) {
+        //    ERROR(c, "recv failed: %s\n", strerror(l));
+        //}
     }
 
     return NULL;

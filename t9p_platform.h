@@ -34,14 +34,14 @@ extern void destroy_mutex(mutex_t* mut);
 
 typedef struct _event_s event_t;
 extern event_t* event_create();
-extern void event_wait(event_t* ev, uint64_t timeout_ms);
+extern int event_wait(event_t* ev, uint64_t timeout_ms);
 extern void event_signal(event_t* ev);
 extern void event_destroy(event_t* ev);
 
 /** Generic message queue API */
 
 typedef struct _msg_queue_s msg_queue_t;
-extern msg_queue_t* msg_queue_create(const char* id);
+extern msg_queue_t* msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs);
 extern void msg_queue_destroy(msg_queue_t* q);
 extern int msg_queue_send(msg_queue_t* q, const void* data, size_t size);
 extern int msg_queue_recv(msg_queue_t* q, void* data, size_t* size);
