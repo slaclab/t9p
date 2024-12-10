@@ -29,6 +29,8 @@
 #include <netinet/ip.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 #endif
 
 #include "t9p.h"
@@ -92,6 +94,7 @@ struct t9p_context {
     thread_t* io_thread;
     event_t* recv_event;                    /**< Signaled when a new packet has been received */
     int thr_run;
+    mutex_t* socket_lock;
 
     struct trans_pool trans_pool;
 
@@ -129,8 +132,7 @@ struct t9p_requestor {
 
 static int _version_handshake(struct t9p_context* context);
 static int _attach_root(struct t9p_context* c);
-static int _send(struct t9p_context* c, const void* data, size_t sz, int flags, int retries);
-static ssize_t _recv(struct t9p_context* c, void* data, size_t sz, int flags);
+static int _send(struct t9p_context* c, const void* data, size_t sz, int flags);
 static void _perror(struct t9p_context* c, const char* msg, struct TRcommon* err);
 static int _iserror(struct TRcommon* err);
 static int _clunk_sync(struct t9p_context* c, int fid);
@@ -161,9 +163,6 @@ struct trans_node;
 struct trans_node* trans_enqueue(struct trans_pool* q, struct trans* tr);
 void trans_release(struct trans_pool* q, struct trans_node* tn);
 
-#define TRANS_FLAGS_NONE  0x0
-#define TRANS_FLAGS_OWNED 0x1       /**< data is owned by the transaction and should be freed once sent */
-
 struct trans {
     uint32_t flags;         /**< Flags */
     
@@ -177,8 +176,8 @@ struct trans {
                                  this->data is. This is used to avoid unnecessary copies */
     size_t hsize;           /**< Optional; header data size */
 
-    int32_t* status;        /**< Pointer to status variable. Can be used instead of rdata/rsize
-                                 to get the message result */
+    int32_t* status;        /**< Pointer to combined status/length variable. If < 0, this represents an
+                                 error condition. If >= 0, it's the number of bytes written to rdata. */
 
     /** 9p meta info */
     uint32_t rtype;         /**< Result message type. Set to 0 to accept any. */
@@ -271,7 +270,6 @@ struct trans_node* trans_enqueue(struct trans_pool* q, struct trans* tr) {
 
     /** Send it to the I/O thread */
     if (msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
-        perror("AAAA");
         trans_release(q, us);
         return NULL;
     }
@@ -361,6 +359,11 @@ t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, cons
         goto error_pre_fhl;
     }
 
+    if (!(c->socket_lock = create_mutex())) {
+        ERRLOG("Unable to create socket_lock\n");
+        goto error_pre_fhl;
+    }
+
     if (!(c->recv_event = event_create())) {
         ERRLOG("Unable to create event\n");
         goto error_post_fhl;
@@ -400,6 +403,7 @@ t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, cons
 error_post_pool:
     trans_pool_destroy(&c->trans_pool);
 error_post_fhl:
+    destroy_mutex(c->socket_lock);
     destroy_mutex(c->fhl_mutex);
     event_destroy(c->recv_event);
     _free_node_list(c->fhl_free);
@@ -436,41 +440,38 @@ void t9p_shutdown(t9p_context_t* c) {
 }
 
 static int tr_send_recv(struct t9p_context* c, struct trans* tr) {
+    int r = 0, status = 0;
+    tr->status = &status; /** We always want to capture this */
+
     struct trans_node* n = trans_enqueue(&c->trans_pool, tr);
-    if (n == NULL)
+    if (n == NULL) {
+        tr->status = NULL;
         return -1;
-    int r;
-    if ((r = event_wait(n->event, c->opts.recv_timeo)) != 0) {
-        return r;
     }
+
+    /** Wait until serviced (or timeout) */
+    if ((r = event_wait(n->event, c->opts.recv_timeo)) != 0) {
+        tr->status = NULL;
+        return -1;
+    }
+    tr->status = NULL;
     trans_release(&c->trans_pool, n); /** Release the transaction back into the pool */
+    return status;
+}
+
+static int tr_send(struct t9p_context* c, struct trans* tr) {
+    int r = 0;
+
+    struct trans_node* n = trans_enqueue(&c->trans_pool, tr);
+    if (n == NULL) {
+        return -1;
+    }
+
     return 0;
 }
 
-static int _send(struct t9p_context* c, const void* data, size_t sz, int flags, int retries) {
-    int tries = 10;
-    while (tries-- > 0) {
-        int ret;
-        if ((ret = c->trans->send(c->conn, data, sz, flags)) < 0) {
-            if (ret != -EAGAIN) {
-                return -1;
-            }
-        }
-        else {
-            return ret;
-        }
-    }
-    return -1;
-}
-
-static ssize_t _recv(struct t9p_context* c, void* data, size_t sz, int flags) {
-    ssize_t n;
-    int timeoutMs = c->opts.recv_timeo;
-    while ((n = c->trans->recv(c->conn, data, sz, MSG_DONTWAIT)) < 0 && timeoutMs >= 0) {
-        usleep(1000);
-        timeoutMs--;
-    }
-    return n;
+static int _send(struct t9p_context* c, const void* data, size_t sz, int flags) {
+    return c->trans->send(c->conn, data, sz, flags);
 }
 
 /** Synchronously recv a type of packet, or Rerror. Includes timeout */
@@ -480,7 +481,7 @@ static ssize_t _recv_type(struct t9p_context* c, void* data, size_t sz, int flag
     clock_gettime(CLOCK_MONOTONIC, &start);
     int timeoutMs = c->opts.recv_timeo;
     while (1) {
-        n = c->trans->recv(c->conn, data, sz, MSG_DONTWAIT);
+        n = c->trans->recv(c->conn, data, sz, 0);
         if (n >= sizeof(struct TRcommon)) {
             struct TRcommon* com = data;
             if (com->type == type || ((com->type == T9P_TYPE_Rlerror || com->type == T9P_TYPE_Rerror) && com->tag == tag))
@@ -494,27 +495,6 @@ static ssize_t _recv_type(struct t9p_context* c, void* data, size_t sz, int flag
             break;
     }
     return -ETIMEDOUT;
-}
-
-/** Recv + handle error */
-static ssize_t _recv_type_handle_error(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t type, uint16_t tag) {
-    ssize_t ret;
-    if ((ret=_recv_type(c, data, sz, flags, type, tag)) < 0) {
-        ERROR(c, "%s: recv failed: %s\n", t9p_type_string(type), strerror(-ret));
-        return -1;
-    }
-
-    if (ret < sizeof(struct TRcommon)) {
-        ERROR(c, "%s: short packet\n", t9p_type_string(type));
-        return -1;
-    }
-
-    if (_iserror(data)) {
-        _perror(c, t9p_type_string(type), data);
-        return -1;
-    }
-
-    return ret;
 }
 
 static void _perror(struct t9p_context* c, const char* msg, struct TRcommon* err) {
@@ -544,13 +524,13 @@ static int _version_handshake(struct t9p_context* c) {
         return -1;
     }
 
-    if (_send(c, buf, sendSize, 0, 10) < 0) {
+    if (_send(c, buf, sendSize, 0) < 0) {
         ERROR(c, "Tversion handshake failed: I/O error\n");
         return -1;
     }
 
     /** Listen for the return message */
-    ssize_t read = _recv(c, buf, sizeof(buf)-1, 0);
+    ssize_t read = _recv_type(c, buf, sizeof(buf)-1, 0, T9P_TYPE_Rversion, 0);
     if (read < 0) {
         ERROR(c, "Rversion handshake failed: read timeout\n");
         return -1;
@@ -598,7 +578,7 @@ static int _attach_root(struct t9p_context* c) {
         goto error;
     }
 
-    if (_send(c, packetBuf, len, 0, 10) < 0) {
+    if (_send(c, packetBuf, len, 0) < 0) {
         ERROR(c, "Tattach root failed: unable to send\n");
         goto error;
     }
@@ -634,21 +614,29 @@ error:
 
 static int _clunk_sync(struct t9p_context* c, int fid) {
     char buf[1024];
-    uint16_t tag = 0;
+    uint16_t tag = _mktag(c);
     int l;
     if ((l = encode_Tclunk(buf, sizeof(buf), tag, fid)) < 0) {
         ERROR(c, "Failed to encode Tclunk\n");
         return -1;
     }
 
-    if (_send(c, buf, l, 0, 1) < 0) {
-        ERROR(c, "Tclunk failed: unable to send\n");
+    struct trans tr = {
+        .data = buf,
+        .size = l,
+        .rtype = T9P_TYPE_Rclunk,
+        .rsize = sizeof(buf),
+        .rdata = buf,
+        .tag = tag
+    };
+
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: Tclunk failed\n", __FUNCTION__);
         return -1;
     }
 
-    ssize_t read = _recv_type(c, buf, sizeof(buf), 0, T9P_TYPE_Rclunk, tag);
-    if (read < 0) {
-        ERROR(c, "Rclunk failed: timeout\n");
+    if (l < sizeof(struct TRcommon)) {
+        ERROR(c, "%s: Tclunk failed: short packet\n", __FUNCTION__);
         return -1;
     }
 
@@ -691,40 +679,30 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     }
 
     char packet[PACKET_BUF_SIZE];
-    int len = 0;
-    if ((len = encode_Twalk(packet, sizeof(packet), tag, parent->fid, fh->h.fid, nwcount, (const char* const*)comps)) < 0) {
+    int l = 0;
+    if ((l = encode_Twalk(packet, sizeof(packet), tag, parent->fid, fh->h.fid, nwcount, (const char* const*)comps)) < 0) {
         ERROR(c, "%s: unable to encode Twalk\n", __FUNCTION__);
         goto error;
     }
-#if 0
-    if (_send(c, packet, len, 0, 1) < 0) {
-        ERROR(c, "%s: Twalk send failed\n", __FUNCTION__);
-        goto error;
-    }
 
-    ssize_t l = _recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rwalk, tag);
-    if (l < 0) {
-        goto error;
-    }
-#else
+    /** Build transaction to send */
     struct trans tr = {
         .data = packet,
-        .size = sizeof(packet),
+        .size = l,
         .tag = tag,
         .rtype = T9P_TYPE_Rwalk,
         .rdata = packet,
         .rsize = sizeof(packet),
     };
 
-    if (tr_send_recv(c, &tr) != 0) {
-        ERROR(c, "%s: Twalk send/recv failed\n", __FUNCTION__);
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: Twalk send/recv failed: %s\n", __FUNCTION__, strerror(l));
         goto error;
     }
 
-#endif
     struct Rwalk rw;
     qid_t* qids = NULL;
-    if (decode_Rwalk(&rw, packet, sizeof(packet), &qids) < 0) {
+    if (decode_Rwalk(&rw, packet, l, &qids) < 0) {
         ERROR(c, "%s: Rwalk decode failed\n", __FUNCTION__);
         goto error;
     }
@@ -758,23 +736,28 @@ t9p_handle_t t9p_get_root(t9p_context_t* c) {
 int t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode) {
     char packet[PACKET_BUF_SIZE];
     uint16_t tag = _mktag(c);
-    int len = 0;
-    if ((len = encode_Tlopen(packet, sizeof(packet), tag, h->fid, mode)) < 0) {
+    int l = 0;
+    if ((l = encode_Tlopen(packet, sizeof(packet), tag, h->fid, mode)) < 0) {
         ERROR(c, "%s: unable to encode Tlopen", __FUNCTION__);
         return -1;
     }
 
-    if (_send(c, packet, len, 0, 1) < 0) {
-        ERROR(c, "%s: Tlopen send failed\n", __FUNCTION__);
-        return -1;
-    }
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .tag = tag,
+        .rtype = T9P_TYPE_Rlopen,
+    };
 
-    if ((len = _recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rlopen, tag)) < 0) {
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: Tlopen failed\n", __FUNCTION__);
         return -1;
     }
 
     struct Rlopen rl;
-    if (decode_Rlopen(&rl, packet, len) < 0) {
+    if (decode_Rlopen(&rl, packet, l) < 0) {
         ERROR(c, "%s: Malformed Rlopen\n", __FUNCTION__);
         return -1;
     }
@@ -807,29 +790,37 @@ ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num
         return -1;
     }
 
-    if (_send(c, packet, l, 0, 1) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
-        return -1;
-    }
-
     /** TODO: This needs a refactor */
     size_t recvSize = sizeof(struct Rread) + num;
     void* recvData = malloc(recvSize);
 
-    ssize_t len;
-    if ((len=_recv_type_handle_error(c, recvData, recvSize, 0, T9P_TYPE_Rread, tag)) < 0) {
-        return -1;
+    struct trans tr = {
+        .tag = tag,
+        .data = packet,
+        .size = l,
+        .rdata = recvData,
+        .rsize = recvSize,
+        .rtype = T9P_TYPE_Rread,
+    };
+
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        goto error;
     }
 
     struct Rread rr;
-    if (decode_Rread(&rr, recvData, len) < 0) {
+    if (decode_Rread(&rr, recvData, l) < 0) {
         ERROR(c, "%s: unable to decode Rread\n", __FUNCTION__);
-        return -1;
+        goto error;
     }
 
     memcpy(outbuffer, ((uint8_t*)recvData)+sizeof(struct Rread), MIN(num, rr.count));
     free(recvData);
     return MIN(num, rr.count);
+
+error:
+    free(recvData);
+    return -1;
 }
 
 ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer) {
@@ -846,25 +837,24 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
         return -1;
     }
 
-    if (_send(c, packet, l, 0, 1) < 0) {
-        ERROR(c, "%s: failed to send Twrite header\n", __FUNCTION__);
-        return -1;
-    }
+    struct trans tr = {
+        .hdata = packet,
+        .hsize = l,
+        .data = inbuffer,
+        .size = num,
+        .tag = tag,
+        .rtype = T9P_TYPE_Rwrite,
+        .rdata = packet,
+        .rsize = sizeof(packet)
+    };
 
-    if (_send(c, inbuffer, num, 0, 1) < 0) {
-        /** TODO: Tflush */
-        ERROR(c, "%s: failed to send buffer\n", __FUNCTION__);
-        return -1;
-    }
-
-    ssize_t len;
-    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rwrite, tag)) < 0) {
-        ERROR(c, "%s: no Rwrite received\n", __FUNCTION__);
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: Twrite failed\n", __FUNCTION__);
         return -1;
     }
 
     struct Rwrite rw;
-    if (decode_Rwrite(&rw, packet, len) < 0) {
+    if (decode_Rwrite(&rw, packet, l) < 0) {
         ERROR(c, "%s: failed to decode Rwrite\n", __FUNCTION__);
         return -1;
     }
@@ -887,19 +877,22 @@ int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_
         return -1;
     }
 
-    if (_send(c, packet, l, 0, 1) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
-        return -1;
-    }
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rtype = T9P_TYPE_Rgetattr,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .tag = tag
+    };
 
-    ssize_t len;
-    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rgetattr, tag)) < 0) {
-        ERROR(c, "%s: no Rgetattr recv'ed\n", __FUNCTION__);
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: Tgetattr failed\n", __FUNCTION__);
         return -1;
     }
 
     struct Rgetattr rg;
-    if (decode_Rgetattr(&rg, packet, len) < 0) {
+    if (decode_Rgetattr(&rg, packet, l) < 0) {
         ERROR(c, "%s: failed to decode Rgetattr\n", __FUNCTION__);
         return -1;
     }
@@ -947,20 +940,24 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
         t9p_close_handle(c, h);
         return -1;
     }
+    
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .tag = tag,
+        .rtype = T9P_TYPE_Rlcreate
+    };
 
-    if (_send(c, packet, l, 0, 1) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
-        return -1;
-    }
-
-    ssize_t len;
-    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rlcreate, tag)) < 0) {
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: Tlcreate failed\n", __FUNCTION__);
         t9p_close_handle(c, h);
         return -1;
     }
 
     struct Rlcreate rl;
-    if (decode_Rlcreate(&rl, packet, len) < 0) {
+    if (decode_Rlcreate(&rl, packet, l) < 0) {
         ERROR(c, "%s: Rlcreate decode failed\n", __FUNCTION__);
         t9p_close_handle(c, h);
         return -1;
@@ -1001,21 +998,24 @@ t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup) {
         return NULL;
     }
 
-    if (_send(c, packet, l, 0, 1) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
-        _release_handle(c, h);
-        return NULL;
-    }
+    struct trans tr = {
+        .tag = tag,
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .rtype = T9P_TYPE_Rwalk,
+    };
 
-    ssize_t len;
-    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rwalk, tag)) < 0) {
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
         _release_handle(c, h);
         return NULL;
     }
 
     struct Rwalk rw;
     qid_t* qid = NULL;
-    if (decode_Rwalk(&rw, packet, len, &qid) < 0) {
+    if (decode_Rwalk(&rw, packet, l, &qid) < 0) {
         _release_handle(c, h);
         return NULL;
     }
@@ -1037,18 +1037,32 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
         return -1;
     }
 
-    if (_send(c, packet, l, 0, 1) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
+    int status;
+    struct trans tr = {
+        .tag = tag,
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .rtype = T9P_TYPE_Rremove,
+        .status = &status
+    };
+
+    struct trans_node* n = trans_enqueue(&c->trans_pool, &tr);
+    if (!n) {
+        ERROR(c, "%s: unable to queue\n", __FUNCTION__);
         return -1;
     }
 
     /** Tremove is basically just a clunk with the side effect of removing a file. This will clunk even if the remove fails */
     _release_handle_by_fid(c, h);
 
-    ssize_t len;
-    if ((len = _recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rremove, tag)) < 0) {
+    if (event_wait(n->event, c->opts.recv_timeo) != 0) {
+        ERROR(c, "%s: timed out\n", __FUNCTION__);
         return 0; /** TODO: Returning -1 here and releasing the file handle would be inconsistent with the other error cases */
     }
+
+    trans_release(&c->trans_pool, n);
 
     return 0;
 }
@@ -1065,13 +1079,17 @@ int t9p_fsync(t9p_context_t* c, t9p_handle_t file) {
         return -1;
     }
 
-    if (_send(c, packet, l, 0, 1) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
-        return -1;
-    }
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rtype = T9P_TYPE_Rfsync,
+        .tag = tag,
+        .rdata = packet,
+        .rsize = sizeof(packet)
+    };
 
-    ssize_t len;
-    if ((len=_recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rfsync, tag)) < 0) {
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
         return -1;
     }
 
@@ -1095,18 +1113,23 @@ int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t 
         return -1;
     }
 
-    if (_send(c, packet, l, 0, 1) < 0) {
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rtype = T9P_TYPE_Rmkdir,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .tag = tag
+    };
+
+    if ((l = tr_send_recv(c, &tr)) < 0) {
         ERROR(c, "%s: send failed\n", __FUNCTION__);
         return -1;
     }
 
-    ssize_t len;
-    if ((len = _recv_type_handle_error(c, packet, sizeof(packet), 0, T9P_TYPE_Rmkdir, tag)) < 0)
-        return -1;
-
     if (outqid) {
         struct Rmkdir rm;
-        if (decode_Rmkdir(&rm, packet, len) < 0) {
+        if (decode_Rmkdir(&rm, packet, l) < 0) {
             ERROR(c, "%s: failed to decode Rmkdir\n", __FUNCTION__);
             return -1;
         }
@@ -1202,7 +1225,6 @@ static int _can_rw_fid(t9p_handle_t h, int write) {
 static void* _t9p_thread_proc(void* param) {
     t9p_context_t* c = param;
 
-    //struct trans_node* active = NULL;
     static struct trans_node* requests[MAX_TAGS] = {0};
 
     while (c->thr_run) {
@@ -1212,7 +1234,6 @@ static void* _t9p_thread_proc(void* param) {
 
         /** Send pending transactions */
         while (msg_queue_recv(c->trans_pool.queue, &node, &size) == 0) {
-            printf("send: Got %p\n", node);
             assert(size == sizeof(node));
             if (!node) {
                 ERROR(c, "Got NULL node\n");
@@ -1220,26 +1241,19 @@ static void* _t9p_thread_proc(void* param) {
             }
 
             /** Send any header data first */
-            if (node->tr.hdata && (l = c->trans->send(c, node->tr.hdata, node->tr.hsize, 0)) < 0) {
+            if (node->tr.hdata && (l = c->trans->send(c->conn, node->tr.hdata, node->tr.hsize, 0)) < 0) {
                 ERROR(c, "send: Failed to send header data: %s\n", strerror(l));
                 continue;
             }
 
             /** Send "body" data */
-            printf("SEnd %p %ld\n", node->tr.data, node->tr.size);
-            if ((l = c->trans->send(c, node->tr.data, node->tr.size, 0)) < 0) {
-                ERROR(c, "send: Failed to send data: %s\n", strerror(l));
+            printf("send %p %ld\n", node->tr.data, node->tr.size);
+            if ((l = c->trans->send(c->conn, node->tr.data, node->tr.size, 0)) < 0) {
+                ERROR(c, "send: Failed to send data: %s\n", strerror(errno));
                 continue;
             }
 
-            /** Add to the list of active transactions */
-            //if (!active)
-            //    active = node;
-            //else {
-            //    node->next = active;
-            //    active = node;
-            //}
-
+            node->sent = 1;
             requests[node->tr.tag] = node;
         }
 
@@ -1250,13 +1264,16 @@ static void* _t9p_thread_proc(void* param) {
         } data;
 
         /** Recv pending transactions */
-        while ((l = c->trans->recv(c, data.buf, sizeof(data.buf), MSG_PEEK)) > 0) {
+        while ((l = c->trans->recv(c->conn, data.buf, sizeof(data.buf), T9P_RECV_PEEK)) > 0) {
             printf("recv: type=%d, tag=%d, size=%d\n", data.com.type, data.com.tag, data.com.size);
             if (data.com.tag >= MAX_TAGS) {
                 ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", data.com.tag);
                 c->trans->recv(c, data.buf, sizeof(data.buf), 0); /** Discard */
                 continue;
             }
+
+            if (l < sizeof(struct TRcommon))
+                continue;
 
             struct trans_node* n = requests[data.com.tag];
             if (!n) {
@@ -1267,10 +1284,10 @@ static void* _t9p_thread_proc(void* param) {
             /** Handle error responses */
             if (data.com.type == T9P_TYPE_Rlerror) {
                 if (n->tr.status)
-                    *n->tr.status = data.err.ecode;
+                    *n->tr.status = data.err.ecode < 0 ? data.err.ecode : -data.err.ecode;
                 if (n->tr.rdata)
                     memcpy(n->tr.rdata, &data.err, MIN(sizeof(data.err), n->tr.rsize));
-                c->trans->recv(c, data.buf, sizeof(data.buf), 0); /** Discard */
+                c->trans->recv(c->conn, data.buf, sizeof(data.buf), 0); /** Discard */
                 event_signal(n->event);
                 requests[n->tr.tag] = NULL;
                 continue;
@@ -1279,7 +1296,7 @@ static void* _t9p_thread_proc(void* param) {
             /** Check for type mismatch and discard if there is one */
             if (n->tr.rtype != 0 && data.com.type != n->tr.rtype) {
                 ERROR(c, "recv: Expected msg type '%d' but got '%d'; discarding!\n", n->tr.rtype, data.com.type);
-                c->trans->recv(c, data.buf, sizeof(data.buf), 0); /** Discard */
+                c->trans->recv(c->conn, data.buf, sizeof(data.buf), 0); /** Discard */
                 if (n->tr.status)
                     *n->tr.status = -1;
                 event_signal(n->event);
@@ -1288,17 +1305,13 @@ static void* _t9p_thread_proc(void* param) {
             }
 
             /** Finally, service the request */
-            l = c->trans->recv(c, n->tr.rdata ? n->tr.rdata : data.buf, n->tr.rdata ? n->tr.rsize : sizeof(data.buf), 0);
+            l = c->trans->recv(c->conn, n->tr.rdata ? n->tr.rdata : data.buf, n->tr.rdata ? n->tr.rsize : sizeof(data.buf), 0);
             if (n->tr.status)
-                *n->tr.status = l > 0 ? 0 : (l < 0 ? errno : -1);
+                *n->tr.status = l < 0 ? -errno : l;
             event_signal(n->event);
             requests[n->tr.tag] = NULL;
             
         }
-
-        //if (l < 0) {
-        //    ERROR(c, "recv failed: %s\n", strerror(l));
-        //}
     }
 
     return NULL;
@@ -1365,6 +1378,10 @@ int t9p_tcp_connect(void* context, const char* addr_or_file) {
         return -1;
     }
 
+    /** Set this after connect to avoid EAGAIN there */
+    int noblock = 1;
+    assert(ioctl(ctx->sock, FIONBIO, &noblock) == 0);
+
     return 0;
 }
 
@@ -1391,7 +1408,7 @@ ssize_t t9p_tcp_recv(void* context, void* data, size_t len, int flags) {
     if (flags & T9P_RECV_READ)
         return read(pc->sock, data, len);
     else
-        return recv(pc->sock, data, len, flags);
+        return recv(pc->sock, data, len, rflags);
 }
 
 #endif

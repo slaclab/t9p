@@ -131,6 +131,7 @@ extern void event_destroy(event_t* ev) {
     free(ev);
 }
 
+// Really dumb message queue because POSIX message queues don't cut the mustard...
 
 struct msg {
     size_t sz;

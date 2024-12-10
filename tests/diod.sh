@@ -24,4 +24,4 @@ if [ $DAEMON -eq 0 ]; then
     ARGS="$ARGS -f"
 fi
 
-diod $ARGS -L stderr -e $PWD/fs -l 0.0.0.0:10002 -n
+/sbin/diod $ARGS -L stderr -e $PWD/fs -l 0.0.0.0:10002 -n

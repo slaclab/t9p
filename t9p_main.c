@@ -214,6 +214,8 @@ void rm_cmd(int argc, const char* const* argv) {
         printf("Removed %s\n", argv[1]);
 }
 
+void help_cmd(int argc, const char* const* argv);
+
 struct command {
     const char* name;
     void (*func)(int argc, const char* const* argv);
@@ -228,8 +230,14 @@ struct command COMMANDS[] = {
     {"create", create_cmd},
     {"rm", rm_cmd},
     {"mkdir", mkdir_cmd},
+    {"help", help_cmd},
     {0,0}
 };
+
+void help_cmd(int argc, const char* const* argv) {
+    for (int i = 0; i < (sizeof(COMMANDS) / sizeof(COMMANDS[0]))-1; ++i)
+        printf("%s\n", COMMANDS[i].name);
+}
 
 int main(int argc, char** argv) {
     int opt;
