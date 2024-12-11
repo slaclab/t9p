@@ -140,6 +140,18 @@ typedef struct t9p_attr {
     uint64_t data_version;
 } t9p_attr_t;
 
+typedef struct t9p_statfs {
+    uint32_t type;
+    uint32_t bsize;
+    uint64_t blocks;
+    uint64_t bfree;
+    uint64_t bavail;
+    uint64_t files;
+    uint64_t ffree;
+    uint64_t fsid;
+    uint32_t namelen;
+} t9p_statfs_t;
+
 /**
  * \brief Init the options table with sensible defaults
  */
@@ -198,6 +210,17 @@ t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup);
  * Performs a getattr on the specified file handle
  */
 int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask);
+
+/**
+ * Performs a statfs operation with Tstatfs/Rstatfs. Much like statfs(2) on Linux
+ * \param c context
+ * \param h Handle to a file on the filesystem that we want to query
+ * \param statfs Result buffer to hold statfs info
+ * \return < 0 on error
+ */
+int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs);
+
+int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize);
 
 /**
  * Returns the file handle associated with the root

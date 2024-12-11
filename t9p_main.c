@@ -214,6 +214,60 @@ void rm_cmd(int argc, const char* const* argv) {
         printf("Removed %s\n", argv[1]);
 }
 
+void statfs_cmd(int argc, const char* const* argv) {
+    if (argc < 2) {
+        printf("usage: statfs <path>\n");
+        return;
+    }
+
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("unable to open handle for %s\n", argv[1]);
+        return;
+    }
+
+    struct t9p_statfs statfs;
+    if (t9p_statfs(ctx, h, &statfs) < 0) {
+        printf("unable to statfs\n");
+        return;
+    }
+
+    printf("bavail:  %ld\n", statfs.bavail);
+    printf("bfree:   %ld\n", statfs.bfree);
+    printf("blocks:  %ld\n", statfs.blocks);
+    printf("fsid:    %ld\n", statfs.fsid);
+    printf("ffree:   %ld\n", statfs.ffree);
+    printf("namelen: %d\n", statfs.namelen);
+    printf("files:   %ld\n", statfs.files);
+    printf("type:    %d\n", statfs.type);
+    printf("bsize:   %d\n", statfs.bsize);
+
+    t9p_close_handle(ctx, h);
+}
+
+static void readlink_cmd(int argc, const char* const* argv) {
+    if (argc < 2) {
+        printf("usage: statfs <path>\n");
+        return;
+    }
+
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("unable to open handle for %s\n", argv[1]);
+        return;
+    }
+
+    char path[PATH_MAX];
+    if (t9p_readlink(ctx, h, path, sizeof(path)) < 0) {
+        printf("readlink failed\n");
+    }
+    else {
+        printf("%s\n", path);
+    }
+
+    t9p_close_handle(ctx, h);
+}
+
 void help_cmd(int argc, const char* const* argv);
 
 struct command {
@@ -230,6 +284,8 @@ struct command COMMANDS[] = {
     {"create", create_cmd},
     {"rm", rm_cmd},
     {"mkdir", mkdir_cmd},
+    {"statfs", statfs_cmd},
+    {"readlink", readlink_cmd},
     {"help", help_cmd},
     {0,0}
 };

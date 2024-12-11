@@ -494,3 +494,32 @@ int decode_Rmkdir(struct Rmkdir* rm, const void* buf, size_t buflen) {
     rm->tag = BSWAP16(in->tag);
     return sizeof(*in);
 }
+
+int encode_Treadlink(void* buf, size_t buflen, uint16_t tag, uint32_t fid) {
+    if (buflen < sizeof(struct Treadlink))
+        return -1;
+
+    struct Treadlink* rl = buf;
+    rl->fid = BSWAP32(fid);
+    rl->size = BSWAP32(sizeof(*rl));
+    rl->tag = BSWAP16(tag);
+    rl->type = T9P_TYPE_Treadlink;
+    return sizeof *rl;
+}
+
+int decode_Rreadlink(struct Rreadlink* rl, char* linkPath, size_t linkPathSize, const void* buf, size_t buflen) {
+    const size_t minSize = sizeof(struct Rreadlink);
+    if (buflen < minSize)
+        return -1;
+
+    *rl = *(struct Rreadlink*)buf;
+    rl->tag = BSWAP16(rl->tag);
+    rl->size = BSWAP32(rl->size);
+    rl->plen = BSWAP16(rl->plen);
+
+    size_t toWrite = (linkPathSize < rl->plen) ? linkPathSize : rl->plen;
+    memcpy(linkPath, rl->path, toWrite);
+    linkPath[linkPathSize-1] = 0;
+
+    return sizeof(*rl) + rl->plen;
+}

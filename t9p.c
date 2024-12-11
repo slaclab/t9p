@@ -36,6 +36,8 @@
 #include "t9p.h"
 #include "t9proto.h"
 
+#define T9P_TARGET_VERSION "9P2000.L"
+
 #define PACKET_BUF_SIZE 8192
 
 #define MAX_PATH_COMPONENTS 256
@@ -144,11 +146,17 @@ static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h);
 static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 
 static int _mktag(struct t9p_context* c);
-static void _release_tag(struct t9p_context* c, int tag);
 
 static void* _t9p_thread_proc(void* param);
 
-static void _free_node_list(struct t9p_handle_node* head);
+/** Safe strcpy that ensures dest is NULL terminated */
+void strNcpy(char* dest, const char* src, size_t dmax) {
+    if (!dmax || !dest) return;
+    if (!src) dest[0] = 0;
+    strncpy(dest, src, dmax);
+    dest[dmax-1] = 0;
+}
+#define strncpy strNcpy
 
 /********************************************************************/
 /*                                                                  */
@@ -160,8 +168,8 @@ struct trans;
 struct trans_pool;
 struct trans_node;
 
-struct trans_node* trans_enqueue(struct trans_pool* q, struct trans* tr);
-void trans_release(struct trans_pool* q, struct trans_node* tn);
+struct trans_node* tr_enqueue(struct trans_pool* q, struct trans* tr);
+void tr_release(struct trans_pool* q, struct trans_node* tn);
 
 struct trans {
     uint32_t flags;         /**< Flags */
@@ -196,19 +204,19 @@ struct trans_node {
 /**
  * Init the transaction queue
  */
-int trans_pool_init(struct trans_pool* q, uint32_t num) {
+int tr_pool_init(struct trans_pool* q, uint32_t num) {
     memset(q, 0, sizeof(*q));
 
     q->queue = msg_queue_create("/tmp/TPOOL", sizeof(struct trans_node*), MAX_TRANSACTIONS);
     if (!q->queue)
         return -1;
 
-    if (!(q->guard = create_mutex())) {
+    if (!(q->guard = mutex_create())) {
         msg_queue_destroy(q->queue);
         return -1;
     }
 
-    lock_mutex(q->guard);
+    mutex_lock(q->guard);
 
     /** Allocate nodes */
     for (int i = 0; i < num; ++i) {
@@ -219,15 +227,15 @@ int trans_pool_init(struct trans_pool* q, uint32_t num) {
     }
     q->total = num;
 
-    unlock_mutex(q->guard);
+    mutex_unlock(q->guard);
     return 0;
 }
 
 /**
  * Destroy the transaction queue
  */
-void trans_pool_destroy(struct trans_pool* q) {
-    lock_mutex(q->guard);
+void tr_pool_destroy(struct trans_pool* q) {
+    mutex_lock(q->guard);
 
     /** Free both lists */
     for (struct trans_node* n = q->freehead; n;) {
@@ -239,8 +247,8 @@ void trans_pool_destroy(struct trans_pool* q) {
 
     msg_queue_destroy(q->queue);
 
-    unlock_mutex(q->guard);
-    destroy_mutex(q->guard);
+    mutex_unlock(q->guard);
+    mutex_destroy(q->guard);
 }
 
 /**
@@ -249,12 +257,12 @@ void trans_pool_destroy(struct trans_pool* q) {
  *  1. No remaining free transactions in the pool
  *  2. No remaining space in the message queue
  */
-struct trans_node* trans_enqueue(struct trans_pool* q, struct trans* tr) {
-    lock_mutex(q->guard);
+struct trans_node* tr_enqueue(struct trans_pool* q, struct trans* tr) {
+    mutex_lock(q->guard);
 
     if (!q->freehead) {
         /** Out of space in the trans queue */
-        unlock_mutex(q->guard);
+        mutex_unlock(q->guard);
         return NULL;
     }
 
@@ -266,11 +274,11 @@ struct trans_node* trans_enqueue(struct trans_pool* q, struct trans* tr) {
     us->next = NULL;
     us->tr = *tr;
 
-    unlock_mutex(q->guard);
+    mutex_unlock(q->guard);
 
     /** Send it to the I/O thread */
     if (msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
-        trans_release(q, us);
+        tr_release(q, us);
         return NULL;
     }
 
@@ -280,170 +288,20 @@ struct trans_node* trans_enqueue(struct trans_pool* q, struct trans* tr) {
 /**
  * Release a node back into the transaction pool.
  */
-void trans_release(struct trans_pool* q, struct trans_node* tn) {
-    lock_mutex(q->guard);
+void tr_release(struct trans_pool* q, struct trans_node* tn) {
+    mutex_lock(q->guard);
 
     tn->next = q->freehead;
     q->freehead = tn;
 
-    unlock_mutex(q->guard);
-}
-
-/** Safe strcpy that ensures dest is NULL terminated */
-void strNcpy(char* dest, const char* src, size_t dmax) {
-    if (!dmax || !dest) return;
-    if (!src) dest[0] = 0;
-    strncpy(dest, src, dmax);
-    dest[dmax-1] = 0;
-}
-#define strncpy strNcpy
-
-
-void t9p_opts_init(struct t9p_opts* opts) {
-    memset(opts, 0, sizeof(*opts));
-    opts->max_read_data_size = (2<<20); /** 1M */
-    opts->max_write_data_size = (2<<20); /** 1M */
-    opts->queue_size = T9P_PACKET_QUEUE_SIZE;
-    opts->max_fids = DEFAULT_MAX_FILES;
-    opts->send_timeo = DEFAULT_SEND_TIMEO;
-    opts->recv_timeo = DEFAULT_RECV_TIMEO;
-}
-
-t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, const char* apath, const char* addr, const char* mntpoint) {
-    /** Validate transport to prevent misuse **/
-    assert(transport);
-    assert(transport->connect);
-    assert(transport->disconnect);
-    assert(transport->recv);
-    assert(transport->send);
-    assert(transport->init);
-    assert(transport->shutdown);
-    assert(opts);
-    
-    t9p_context_t* c = calloc(1, sizeof(t9p_context_t));
-    strNcpy(c->mntpoint, mntpoint, sizeof(c->mntpoint));
-    strNcpy(c->addr, addr, sizeof(c->addr));
-    strNcpy(c->apath, apath, sizeof(c->apath));
-    c->trans = transport;
-    c->opts = *opts;
-
-    /** Init transport layer */
-    if (!(c->conn = transport->init())) {
-        ERRLOG("Transport init failed\n");
-        goto error_pre_fhl;
-    }
-
-    /** Attempt to connect */
-    if (transport->connect(c->conn, addr) < 0) {
-        ERRLOG("Connection to %s failed\n", addr);
-        goto error_pre_fhl;
-    }
-
-    /** Init file handle list */
-    c->fhl = malloc(sizeof(struct t9p_handle_node) * opts->max_fids);
-    c->fhl_max = opts->max_fids;
-    c->fhl_count = 0;
-    c->fhl_free = NULL;
-    struct t9p_handle_node* prev = NULL;
-    for (int i = 0; i < c->fhl_max; ++i) {
-        struct t9p_handle_node* n = &c->fhl[i];
-        n->next = c->fhl_free;
-        n->prev = prev;
-        n->h.fid = i;
-        c->fhl_free = n;
-        prev = c->fhl_free;
-    }
-
-    if (!(c->fhl_mutex = create_mutex())) {
-        ERRLOG("Unable to create fhl_mutex\n");
-        goto error_pre_fhl;
-    }
-
-    if (!(c->socket_lock = create_mutex())) {
-        ERRLOG("Unable to create socket_lock\n");
-        goto error_pre_fhl;
-    }
-
-    if (!(c->recv_event = event_create())) {
-        ERRLOG("Unable to create event\n");
-        goto error_post_fhl;
-    }
-
-    if (trans_pool_init(&c->trans_pool, MAX_TRANSACTIONS) < 0) {
-        ERRLOG("Unable to create transaction pool\n");
-        goto error_post_fhl;
-    }
-
-    /** Perform the version handshake */
-    if (_version_handshake(c) < 0) {
-        ERRLOG("Connection to %s failed\n", addr);
-        transport->disconnect(c->conn);
-        transport->shutdown(c->conn);
-        goto error_post_pool;
-    }
-
-    /** Attach to the root fs */
-    if (_attach_root(c) < 0) {
-        ERRLOG("Connected to %s failed\n", addr);
-        transport->disconnect(c->conn);
-        transport->shutdown(c->conn);
-        goto error_post_pool;
-    }
-
-    c->thr_run = 1;
-
-    /** Kick off thread */
-    if (!(c->io_thread = create_thread(_t9p_thread_proc, c))) {
-        t9p_shutdown(c);
-        return NULL;
-    }
-
-    return c;
-
-error_post_pool:
-    trans_pool_destroy(&c->trans_pool);
-error_post_fhl:
-    destroy_mutex(c->socket_lock);
-    destroy_mutex(c->fhl_mutex);
-    event_destroy(c->recv_event);
-    _free_node_list(c->fhl_free);
-    //_free_node_list(c->fhl_list);
-error_pre_fhl:
-    free(c);
-    return NULL;
-}
-
-void t9p_shutdown(t9p_context_t* c) {
-    /** Clunk all active file handles */
-    lock_mutex(c->fhl_mutex);
-    for (int i = 0; i < c->fhl_max; ++i)
-        if (c->fhl[i].h.valid_mask & T9P_HANDLE_FID_VALID)
-            _clunk_sync(c, c->fhl[i].h.fid);
-    unlock_mutex(c->fhl_mutex);
-
-    /** Disconnect and shutdown the transport layer */
-    c->trans->disconnect(c->conn);
-    c->trans->shutdown(c->conn);
-
-    _free_node_list(c->fhl_free);
-    //_free_node_list(c->fhl_list);
-
-    free(c->fhl);
-
-    /** Kill off the thread */
-    c->thr_run = 0;
-    thread_join(c->io_thread);
-
-    destroy_mutex(c->fhl_mutex);
-    event_destroy(c->recv_event);
-    free(c);
+    mutex_unlock(q->guard);
 }
 
 static int tr_send_recv(struct t9p_context* c, struct trans* tr) {
     int r = 0, status = 0;
     tr->status = &status; /** We always want to capture this */
 
-    struct trans_node* n = trans_enqueue(&c->trans_pool, tr);
+    struct trans_node* n = tr_enqueue(&c->trans_pool, tr);
     if (n == NULL) {
         tr->status = NULL;
         return -1;
@@ -455,14 +313,14 @@ static int tr_send_recv(struct t9p_context* c, struct trans* tr) {
         return -1;
     }
     tr->status = NULL;
-    trans_release(&c->trans_pool, n); /** Release the transaction back into the pool */
+    tr_release(&c->trans_pool, n); /** Release the transaction back into the pool */
     return status;
 }
 
 static int tr_send(struct t9p_context* c, struct trans* tr) {
     int r = 0;
 
-    struct trans_node* n = trans_enqueue(&c->trans_pool, tr);
+    struct trans_node* n = tr_enqueue(&c->trans_pool, tr);
     if (n == NULL) {
         return -1;
     }
@@ -515,7 +373,7 @@ static int _iserror(struct TRcommon* err) {
 }
 
 static int _version_handshake(struct t9p_context* c) {
-    const uint8_t version[] = "9P2000.L";
+    const uint8_t version[] = T9P_TARGET_VERSION;
 
     char buf[1024];
     int sendSize = encode_Tversion(buf, sizeof(buf), T9P_NOTAG, MAX(c->opts.max_read_data_size, c->opts.max_write_data_size), sizeof(version)-1, version);
@@ -653,6 +511,147 @@ static int _clunk_sync(struct t9p_context* c, int fid) {
 /*                      P U B L I C    A P I                        */
 /*                                                                  */
 /********************************************************************/
+
+void t9p_opts_init(struct t9p_opts* opts) {
+    memset(opts, 0, sizeof(*opts));
+    opts->max_read_data_size = (2<<20); /** 1M */
+    opts->max_write_data_size = (2<<20); /** 1M */
+    opts->queue_size = T9P_PACKET_QUEUE_SIZE;
+    opts->max_fids = DEFAULT_MAX_FILES;
+    opts->send_timeo = DEFAULT_SEND_TIMEO;
+    opts->recv_timeo = DEFAULT_RECV_TIMEO;
+}
+
+t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, const char* apath, const char* addr, const char* mntpoint) {
+    /** Validate transport to prevent misuse **/
+    assert(transport);
+    assert(transport->connect);
+    assert(transport->disconnect);
+    assert(transport->recv);
+    assert(transport->send);
+    assert(transport->init);
+    assert(transport->shutdown);
+    assert(opts);
+    
+    t9p_context_t* c = calloc(1, sizeof(t9p_context_t));
+    strNcpy(c->mntpoint, mntpoint, sizeof(c->mntpoint));
+    strNcpy(c->addr, addr, sizeof(c->addr));
+    strNcpy(c->apath, apath, sizeof(c->apath));
+    c->trans = transport;
+    c->opts = *opts;
+
+    /** Init transport layer */
+    if (!(c->conn = transport->init())) {
+        ERRLOG("Transport init failed\n");
+        goto error_pre_fhl;
+    }
+
+    /** Attempt to connect */
+    if (transport->connect(c->conn, addr) < 0) {
+        ERRLOG("Connection to %s failed\n", addr);
+        goto error_pre_fhl;
+    }
+
+    /** Init file handle list */
+    c->fhl = malloc(sizeof(struct t9p_handle_node) * opts->max_fids);
+    c->fhl_max = opts->max_fids;
+    c->fhl_count = 0;
+    c->fhl_free = NULL;
+    struct t9p_handle_node* prev = NULL;
+    for (int i = 0; i < c->fhl_max; ++i) {
+        struct t9p_handle_node* n = &c->fhl[i];
+        n->next = c->fhl_free;
+        n->prev = prev;
+        n->h.fid = i;
+        c->fhl_free = n;
+        prev = c->fhl_free;
+    }
+
+    if (!(c->fhl_mutex = mutex_create())) {
+        ERRLOG("Unable to create fhl_mutex\n");
+        goto error_pre_fhl;
+    }
+
+    if (!(c->socket_lock = mutex_create())) {
+        ERRLOG("Unable to create socket_lock\n");
+        goto error_pre_fhl;
+    }
+
+    if (!(c->recv_event = event_create())) {
+        ERRLOG("Unable to create event\n");
+        goto error_post_fhl;
+    }
+
+    if (tr_pool_init(&c->trans_pool, MAX_TRANSACTIONS) < 0) {
+        ERRLOG("Unable to create transaction pool\n");
+        goto error_post_fhl;
+    }
+
+    mutex_lock(c->socket_lock);
+
+    /** Perform the version handshake */
+    if (_version_handshake(c) < 0) {
+        ERRLOG("Connection to %s failed\n", addr);
+        transport->disconnect(c->conn);
+        transport->shutdown(c->conn);
+        mutex_unlock(c->socket_lock);
+        goto error_post_pool;
+    }
+
+    /** Attach to the root fs */
+    if (_attach_root(c) < 0) {
+        ERRLOG("Connected to %s failed\n", addr);
+        transport->disconnect(c->conn);
+        transport->shutdown(c->conn);
+        mutex_unlock(c->socket_lock);
+        goto error_post_pool;
+    }
+
+    mutex_unlock(c->socket_lock);
+
+    c->thr_run = 1;
+
+    /** Kick off thread */
+    if (!(c->io_thread = thread_create(_t9p_thread_proc, c))) {
+        t9p_shutdown(c);
+        return NULL;
+    }
+
+    return c;
+
+error_post_pool:
+    tr_pool_destroy(&c->trans_pool);
+error_post_fhl:
+    mutex_destroy(c->socket_lock);
+    mutex_destroy(c->fhl_mutex);
+    event_destroy(c->recv_event);
+error_pre_fhl:
+    free(c);
+    return NULL;
+}
+
+void t9p_shutdown(t9p_context_t* c) {
+    /** Clunk all active file handles */
+    mutex_lock(c->fhl_mutex);
+    for (int i = 0; i < c->fhl_max; ++i)
+        if (c->fhl[i].h.valid_mask & T9P_HANDLE_FID_VALID)
+            _clunk_sync(c, c->fhl[i].h.fid);
+    mutex_unlock(c->fhl_mutex);
+
+    /** Kill off the thread */
+    c->thr_run = 0;
+    thread_join(c->io_thread);
+
+    /** Disconnect and shutdown the transport layer */
+    c->trans->disconnect(c->conn);
+    c->trans->shutdown(c->conn);
+
+    free(c->fhl);
+
+    mutex_destroy(c->fhl_mutex);
+    event_destroy(c->recv_event);
+    free(c);
+}
 
 t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path) {
     char p[T9P_PATH_MAX];
@@ -1048,7 +1047,7 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
         .status = &status
     };
 
-    struct trans_node* n = trans_enqueue(&c->trans_pool, &tr);
+    struct trans_node* n = tr_enqueue(&c->trans_pool, &tr);
     if (!n) {
         ERROR(c, "%s: unable to queue\n", __FUNCTION__);
         return -1;
@@ -1062,7 +1061,7 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
         return 0; /** TODO: Returning -1 here and releasing the file handle would be inconsistent with the other error cases */
     }
 
-    trans_release(&c->trans_pool, n);
+    tr_release(&c->trans_pool, n);
 
     return 0;
 }
@@ -1139,6 +1138,88 @@ int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t 
     return 0;
 }
 
+int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs) {
+    char packet[PACKET_BUF_SIZE];
+    int l;
+    if (!t9p_is_valid(h))
+        return -1;
+
+    uint16_t tag = _mktag(c);
+
+    if ((l = encode_Tstatfs(packet, sizeof(packet), tag, h->fid)) < 0) {
+        ERROR(c, "%s: Unable to encode Tstatfs\n", __FUNCTION__);
+        return -1;
+    }
+
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .rtype = T9P_TYPE_Rstatfs,
+        .tag = tag,
+    };
+
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        return -1;
+    }
+
+    struct Rstatfs rs;
+    if (decode_Rstatfs(&rs, packet, l) < 0) {
+        ERROR(c, "%s: failed to decode Rstatfs\n", __FUNCTION__);
+        return -1;
+    }
+
+    statfs->bavail = rs.bavail;
+    statfs->bfree = rs.bfree;
+    statfs->blocks = rs.blocks;
+    statfs->fsid = rs.fsid;
+    statfs->ffree = rs.ffree;
+    statfs->namelen = rs.namelen;
+    statfs->files = rs.files;
+    statfs->type = rs.type;
+    statfs->bsize = rs.bsize;
+
+    return 0;
+}
+
+int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize) {
+    char packet[PACKET_BUF_SIZE];
+    int l;
+    if (!t9p_is_valid(h))
+        return -1;
+
+    uint16_t tag = _mktag(c);
+
+    if ((l = encode_Treadlink(packet, sizeof(packet), tag, h->fid)) < 0) {
+        ERROR(c, "%s: Unable to encode Treadlink\n", __FUNCTION__);
+        return -1;
+    }
+
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .rtype = T9P_TYPE_Rreadlink,
+        .tag = tag,
+    };
+
+    if ((l = tr_send_recv(c, &tr)) < 0) {
+        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, strerror(l));
+        return -1;
+    }
+
+    struct Rreadlink rl;
+    if (decode_Rreadlink(&rl, outPath, outPathSize, packet, l) < 0) {
+        ERROR(c, "%s: failed to decode Rreadlink\n", __FUNCTION__);
+        return -1;
+    }
+
+    return 0;
+}
+
 uint32_t t9p_get_iounit(t9p_handle_t h) {
     return h->iounit;
 }
@@ -1159,10 +1240,10 @@ int t9p_is_valid(t9p_handle_t h) {
 
 /** Alloc a new handle, locks fid table */
 static struct t9p_handle_node* _alloc_handle(struct t9p_context* c) {
-    lock_mutex(c->fhl_mutex);
+    mutex_lock(c->fhl_mutex);
     struct t9p_handle_node* n = c->fhl_free;
     if (!n) {
-        unlock_mutex(c->fhl_mutex);
+        mutex_unlock(c->fhl_mutex);
         return NULL;
     }
     /** Unlink from free list */
@@ -1172,13 +1253,13 @@ static struct t9p_handle_node* _alloc_handle(struct t9p_context* c) {
     /** Mark used */
     n->h.valid_mask |= T9P_HANDLE_ACTIVE;
 
-    unlock_mutex(c->fhl_mutex);
+    mutex_unlock(c->fhl_mutex);
     return n;
 }
 
 /** Release a handle for reuse */
 static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h) {
-    lock_mutex(c->fhl_mutex);
+    mutex_lock(c->fhl_mutex);
 
     /** Clear data, but preserve fid */
     memset(&h->h.qid, 0, sizeof(h->h.qid));
@@ -1190,7 +1271,7 @@ static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h) {
     h->next = c->fhl_free;
     c->fhl_free = h;
 
-    unlock_mutex(c->fhl_mutex);
+    mutex_unlock(c->fhl_mutex);
 }
 
 static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h) {
@@ -1199,19 +1280,6 @@ static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h) {
 
 static int _mktag(struct t9p_context* c) {
     return 0; // TODO:!!!!!
-}
-
-static void _release_tag(struct t9p_context* c, int tag) {
-
-}
-
-
-static void _free_node_list(struct t9p_handle_node* head) {
-    //for (struct t9p_handle_node* n = head; n;) {
-    //    struct t9p_handle_node* nn = n->next;
-    //    free(n);
-    //    n = nn;
-    //}
 }
 
 /** Can we read/write to a fid? */
@@ -1231,6 +1299,8 @@ static void* _t9p_thread_proc(void* param) {
         struct trans_node* node = NULL;
         size_t size;
         ssize_t l;
+
+        mutex_lock(c->socket_lock);
 
         /** Send pending transactions */
         while (msg_queue_recv(c->trans_pool.queue, &node, &size) == 0) {
@@ -1312,6 +1382,8 @@ static void* _t9p_thread_proc(void* param) {
             requests[n->tr.tag] = NULL;
             
         }
+
+        mutex_unlock(c->socket_lock);
     }
 
     return NULL;

@@ -24,6 +24,8 @@ enum {
     T9P_TYPE_Rlopen,
     T9P_TYPE_Tlcreate    = 14,
     T9P_TYPE_Rlcreate,
+	T9P_TYPE_Treadlink   = 22,
+	T9P_TYPE_Rreadlink,
     T9P_TYPE_Tgetattr    = 24,
     T9P_TYPE_Rgetattr,
 	T9P_TYPE_Tfsync      = 50,
@@ -408,3 +410,18 @@ struct T9P_PACKED Rmkdir {
 };
 
 int decode_Rmkdir(struct Rmkdir* rm, const void* buf, size_t buflen);
+
+struct T9P_PACKED Treadlink {
+    T9P_COMMON_FIELDS
+    uint32_t fid;
+};
+
+int encode_Treadlink(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
+
+struct T9P_PACKED Rreadlink {
+    T9P_COMMON_FIELDS
+    uint16_t plen;
+    char path[];
+};
+
+int decode_Rreadlink(struct Rreadlink* rl, char* linkPath, size_t linkPathSize, const void* buf, size_t buflen);

@@ -18,17 +18,17 @@
 typedef void*(*thread_proc_t)(void*);
 typedef struct _thread_s thread_t;
 
-extern thread_t* create_thread(thread_proc_t proc, void* param);
+extern thread_t* thread_create(thread_proc_t proc, void* param);
 extern void thread_join(thread_t* thr);
-extern void destroy_thread(thread_t* thread);
+extern void thread_destroy(thread_t* thread);
 
 /** Generic mutex API */
 
 typedef struct _mutex_s mutex_t;
-extern mutex_t* create_mutex();
-extern void lock_mutex(mutex_t* mut);
-extern void unlock_mutex(mutex_t* mut);
-extern void destroy_mutex(mutex_t* mut);
+extern mutex_t* mutex_create();
+extern void mutex_lock(mutex_t* mut);
+extern void mutex_unlock(mutex_t* mut);
+extern void mutex_destroy(mutex_t* mut);
 
 /** Generic event API */
 

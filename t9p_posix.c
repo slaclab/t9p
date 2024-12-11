@@ -24,7 +24,7 @@ struct _mutex_s {
     pthread_mutexattr_t attr;
 };
 
-thread_t* create_thread(thread_proc_t proc, void* param) {
+thread_t* thread_create(thread_proc_t proc, void* param) {
     thread_t* p = malloc(sizeof(struct _thread_s));
     if (!p)
         return NULL;
@@ -49,14 +49,14 @@ void thread_join(thread_t* thr) {
     thr->thread = 0;
 }
 
-void destroy_thread(thread_t* thread) {
+void thread_destroy(thread_t* thread) {
     if (thread->thread)
         pthread_join(thread->thread, NULL);
     pthread_attr_destroy(&thread->attr);
     free(thread);
 }
 
-mutex_t* create_mutex() {
+mutex_t* mutex_create() {
     mutex_t* m = malloc(sizeof(mutex_t));
     
     if (pthread_mutexattr_init(&m->attr) != 0) {
@@ -73,15 +73,15 @@ mutex_t* create_mutex() {
     return m;
 }
 
-void lock_mutex(mutex_t* mut) {
+void mutex_lock(mutex_t* mut) {
     pthread_mutex_lock(&mut->mutex);
 }
 
-void unlock_mutex(mutex_t* mut) {
+void mutex_unlock(mutex_t* mut) {
     pthread_mutex_unlock(&mut->mutex);
 }
 
-void destroy_mutex(mutex_t* mut) {
+void mutex_destroy(mutex_t* mut) {
     pthread_mutexattr_destroy(&mut->attr);
     pthread_mutex_destroy(&mut->mutex);
     free(mut);

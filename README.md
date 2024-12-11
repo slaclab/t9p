@@ -15,7 +15,7 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | remove        | Y |   |
 | attach        | Y |   |
 | auth          |   |   |
-| statfs        |   |   |
+| statfs        | Y |   |
 | lopen         | Y |   |
 | lcreate       | Y |   |
 | symlink       |   |   |
