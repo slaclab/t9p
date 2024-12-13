@@ -268,6 +268,17 @@ static void readlink_cmd(int argc, const char* const* argv) {
     t9p_close_handle(ctx, h);
 }
 
+static void symlink_cmd(int argc, const char* const* argv) {
+    if (argc < 3) {
+        printf("usage: symlink <to> <from>\n");
+        return;
+    }
+
+    if (t9p_symlink(ctx, t9p_get_root(ctx), argv[1], argv[2], T9P_NOGID, NULL) < 0) {
+        printf("symlink failed\n");
+    }
+}
+
 void help_cmd(int argc, const char* const* argv);
 
 struct command {
@@ -286,6 +297,7 @@ struct command COMMANDS[] = {
     {"mkdir", mkdir_cmd},
     {"statfs", statfs_cmd},
     {"readlink", readlink_cmd},
+    {"symlink", symlink_cmd},
     {"help", help_cmd},
     {0,0}
 };

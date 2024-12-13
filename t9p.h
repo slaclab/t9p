@@ -220,7 +220,17 @@ int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_
  */
 int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs);
 
+/**
+ * Reads the target of the symlink pointed to by h. If h is not a symlink, this returns error.
+ * \param c Context
+ * \param h Handle to the symlink
+ * \param outPath Buffer to hold the symlink target
+ * \param outPathSize Size of the aforementioned buffer
+ * \return < 0 on error
+ */
 int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize);
+
+int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char* src, uint32_t gid, qid_t* oqid);
 
 /**
  * Returns the file handle associated with the root

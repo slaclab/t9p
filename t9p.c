@@ -145,8 +145,6 @@ static struct t9p_handle_node* _alloc_handle(struct t9p_context* c);
 static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h);
 static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 
-static int _mktag(struct t9p_context* c);
-
 static void* _t9p_thread_proc(void* param);
 
 /** Safe strcpy that ensures dest is NULL terminated */
@@ -168,8 +166,10 @@ struct trans;
 struct trans_pool;
 struct trans_node;
 
-struct trans_node* tr_enqueue(struct trans_pool* q, struct trans* tr);
+struct trans_node* tr_enqueue(struct trans_pool* q, struct trans_node* tr);
 void tr_release(struct trans_pool* q, struct trans_node* tn);
+
+#define TR_FLAGS_NONE       0x0
 
 struct trans {
     uint32_t flags;         /**< Flags */
@@ -189,7 +189,6 @@ struct trans {
 
     /** 9p meta info */
     uint32_t rtype;         /**< Result message type. Set to 0 to accept any. */
-    uint16_t tag;           /**< Transaction tag */
 };
 
 struct trans_node {
@@ -197,6 +196,8 @@ struct trans_node {
 
     uint8_t sent;                   /**< Set once we've been sent */
     event_t* event;                 /**< Signaled when the response to this is receieved */
+    uint16_t tag;                   /**< Tag for this transaction node; For now, each node will have its
+                                         own associated tag. Somewhat sucks, but good enough for now. */
     
     struct trans_node* next;
 };
@@ -218,12 +219,15 @@ int tr_pool_init(struct trans_pool* q, uint32_t num) {
 
     mutex_lock(q->guard);
 
+    int tag = 0;
+
     /** Allocate nodes */
     for (int i = 0; i < num; ++i) {
         struct trans_node* on = q->freehead;
         q->freehead = calloc(1, sizeof(*on));
         q->freehead->event = event_create();
         q->freehead->next = on;
+        q->freehead->tag = tag++;
     }
     q->total = num;
 
@@ -252,12 +256,9 @@ void tr_pool_destroy(struct trans_pool* q) {
 }
 
 /**
- * Enqueue transaction. Returns the node in the queue for this transaction. On failure, this will
- * return NULL. Failure will occur in two situations:
- *  1. No remaining free transactions in the pool
- *  2. No remaining space in the message queue
+ * Grab a free node from the transaction node pool, returns NULL if none are available.
  */
-struct trans_node* tr_enqueue(struct trans_pool* q, struct trans* tr) {
+struct trans_node* tr_get_node(struct trans_pool* q) {
     mutex_lock(q->guard);
 
     if (!q->freehead) {
@@ -272,10 +273,20 @@ struct trans_node* tr_enqueue(struct trans_pool* q, struct trans* tr) {
 
     /** Copy in data */
     us->next = NULL;
-    us->tr = *tr;
+    memset(&us->tr, 0, sizeof(us->tr));
 
     mutex_unlock(q->guard);
 
+    return us;
+}
+
+/**
+ * Enqueue transaction. Returns the node in the queue for this transaction. On failure, this will
+ * return NULL. Failure will occur in two situations:
+ *  1. No remaining free transactions in the pool
+ *  2. No remaining space in the message queue
+ */
+struct trans_node* tr_enqueue(struct trans_pool* q, struct trans_node* us) {
     /** Send it to the I/O thread */
     if (msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
         tr_release(q, us);
@@ -297,35 +308,35 @@ void tr_release(struct trans_pool* q, struct trans_node* tn) {
     mutex_unlock(q->guard);
 }
 
-static int tr_send_recv(struct t9p_context* c, struct trans* tr) {
+/**
+ * Enqueues the node into the queue and waits for it to be servied
+ * This will release the node back into the pool on error, or after the node is serviced.
+ * \param c Context
+ * \param n Node
+ * \param tr Transaction description, copied into n->tr before sending
+ * \return < 0 on error
+ */
+static int tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr) {
     int r = 0, status = 0;
-    tr->status = &status; /** We always want to capture this */
+    n->tr = *tr;
+    n->tr.status = &status; /** We always want to capture this */
 
-    struct trans_node* n = tr_enqueue(&c->trans_pool, tr);
+    n = tr_enqueue(&c->trans_pool, n);
     if (n == NULL) {
-        tr->status = NULL;
+        n->tr.status = NULL;
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
     /** Wait until serviced (or timeout) */
     if ((r = event_wait(n->event, c->opts.recv_timeo)) != 0) {
-        tr->status = NULL;
+        n->tr.status = NULL;
+        //tr_release(&c->trans_pool, n); // FIXME: !!!!!!!!!!! use after free in thread
         return -1;
     }
-    tr->status = NULL;
+    n->tr.status = NULL;
     tr_release(&c->trans_pool, n); /** Release the transaction back into the pool */
     return status;
-}
-
-static int tr_send(struct t9p_context* c, struct trans* tr) {
-    int r = 0;
-
-    struct trans_node* n = tr_enqueue(&c->trans_pool, tr);
-    if (n == NULL) {
-        return -1;
-    }
-
-    return 0;
 }
 
 static int _send(struct t9p_context* c, const void* data, size_t sz, int flags) {
@@ -366,6 +377,10 @@ static void _perror(struct t9p_context* c, const char* msg, struct TRcommon* err
         buf[re->ename_len] = 0;
         ERROR(c, "%s: %s\n", msg, buf);
     }
+}
+
+static const char* _strerror(int err) {
+    return strerror(err < 0 ? -err : err);
 }
 
 static int _iserror(struct TRcommon* err) {
@@ -472,10 +487,14 @@ error:
 
 static int _clunk_sync(struct t9p_context* c, int fid) {
     char buf[1024];
-    uint16_t tag = _mktag(c);
+
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
+
     int l;
-    if ((l = encode_Tclunk(buf, sizeof(buf), tag, fid)) < 0) {
+    if ((l = encode_Tclunk(buf, sizeof(buf), n->tag, fid)) < 0) {
         ERROR(c, "Failed to encode Tclunk\n");
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
@@ -485,10 +504,9 @@ static int _clunk_sync(struct t9p_context* c, int fid) {
         .rtype = T9P_TYPE_Rclunk,
         .rsize = sizeof(buf),
         .rdata = buf,
-        .tag = tag
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: Tclunk failed\n", __FUNCTION__);
         return -1;
     }
@@ -670,7 +688,8 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
         comps[nwcount++] = s;
     }
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return NULL;
 
     struct t9p_handle_node* fh = _alloc_handle(c);
     if (!fh) {
@@ -679,8 +698,9 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
 
     char packet[PACKET_BUF_SIZE];
     int l = 0;
-    if ((l = encode_Twalk(packet, sizeof(packet), tag, parent->fid, fh->h.fid, nwcount, (const char* const*)comps)) < 0) {
+    if ((l = encode_Twalk(packet, sizeof(packet), n->tag, parent->fid, fh->h.fid, nwcount, (const char* const*)comps)) < 0) {
         ERROR(c, "%s: unable to encode Twalk\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         goto error;
     }
 
@@ -688,13 +708,12 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     struct trans tr = {
         .data = packet,
         .size = l,
-        .tag = tag,
         .rtype = T9P_TYPE_Rwalk,
         .rdata = packet,
         .rsize = sizeof(packet),
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: Twalk send/recv failed: %s\n", __FUNCTION__, strerror(l));
         goto error;
     }
@@ -734,10 +753,14 @@ t9p_handle_t t9p_get_root(t9p_context_t* c) {
 
 int t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode) {
     char packet[PACKET_BUF_SIZE];
-    uint16_t tag = _mktag(c);
+
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
+
     int l = 0;
-    if ((l = encode_Tlopen(packet, sizeof(packet), tag, h->fid, mode)) < 0) {
+    if ((l = encode_Tlopen(packet, sizeof(packet), n->tag, h->fid, mode)) < 0) {
         ERROR(c, "%s: unable to encode Tlopen", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
@@ -746,11 +769,10 @@ int t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode) {
         .size = l,
         .rdata = packet,
         .rsize = sizeof(packet),
-        .tag = tag,
         .rtype = T9P_TYPE_Rlopen,
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: Tlopen failed\n", __FUNCTION__);
         return -1;
     }
@@ -781,11 +803,13 @@ ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num
     if (!_can_rw_fid(h, 0))
         return -1;
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
 
     int l;
-    if ((l = encode_Tread(packet, sizeof(packet), tag, h->fid, offset, num)) < 0) {
+    if ((l = encode_Tread(packet, sizeof(packet), n->tag, h->fid, offset, num)) < 0) {
         ERROR(c, "%s: could not encode Tread\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
@@ -794,7 +818,6 @@ ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num
     void* recvData = malloc(recvSize);
 
     struct trans tr = {
-        .tag = tag,
         .data = packet,
         .size = l,
         .rdata = recvData,
@@ -802,7 +825,7 @@ ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num
         .rtype = T9P_TYPE_Rread,
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: send failed\n", __FUNCTION__);
         goto error;
     }
@@ -828,11 +851,13 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
     if (!_can_rw_fid(h, 1))
         return -1;
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
 
     int l;
-    if ((l = encode_Twrite(packet, sizeof(packet), tag, h->fid, offset, num)) < 0) {
+    if ((l = encode_Twrite(packet, sizeof(packet), n->tag, h->fid, offset, num)) < 0) {
         ERROR(c, "%s: unable to encode Twrite\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
@@ -841,13 +866,12 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
         .hsize = l,
         .data = inbuffer,
         .size = num,
-        .tag = tag,
         .rtype = T9P_TYPE_Rwrite,
         .rdata = packet,
         .rsize = sizeof(packet)
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: Twrite failed\n", __FUNCTION__);
         return -1;
     }
@@ -868,11 +892,13 @@ int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_
     if (!t9p_is_valid(h))
         return -1;
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
 
     int l;
-    if ((l = encode_Tgetattr(packet, sizeof(packet), tag, h->fid, mask)) < 0) {
+    if ((l = encode_Tgetattr(packet, sizeof(packet), n->tag, h->fid, mask)) < 0) {
         ERROR(c, "%s: failed to encode Tgetattr\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
@@ -882,10 +908,9 @@ int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_
         .rtype = T9P_TYPE_Rgetattr,
         .rdata = packet,
         .rsize = sizeof(packet),
-        .tag = tag
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: Tgetattr failed\n", __FUNCTION__);
         return -1;
     }
@@ -922,7 +947,8 @@ int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_
 int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags) {
     char packet[PACKET_BUF_SIZE];
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
 
     /** If parent is NULL, parent is root */
     if (!t9p_is_valid(parent))
@@ -934,9 +960,10 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
         return -1;
 
     int l;
-    if ((l = encode_Tlcreate(packet, sizeof(packet), tag, h->fid, name, flags, mode, gid)) < 0) {
+    if ((l = encode_Tlcreate(packet, sizeof(packet), n->tag, h->fid, name, flags, mode, gid)) < 0) {
         ERROR(c, "%s: failed to encode Tlcreate\n", __FUNCTION__);
         t9p_close_handle(c, h);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
     
@@ -945,11 +972,10 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
         .size = l,
         .rdata = packet,
         .rsize = sizeof(packet),
-        .tag = tag,
         .rtype = T9P_TYPE_Rlcreate
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: Tlcreate failed\n", __FUNCTION__);
         t9p_close_handle(c, h);
         return -1;
@@ -989,16 +1015,18 @@ t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup) {
         return NULL;
     }
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return NULL;
+
     int l;
-    if ((l=encode_Twalk(packet, sizeof(packet), tag, todup->fid, h->h.fid, 0, NULL)) < 0) {
+    if ((l=encode_Twalk(packet, sizeof(packet), n->tag, todup->fid, h->h.fid, 0, NULL)) < 0) {
         ERROR(c, "%s: failed to encode Twalk\n", __FUNCTION__);
         _release_handle(c, h);
+        tr_release(&c->trans_pool, n);
         return NULL;
     }
 
     struct trans tr = {
-        .tag = tag,
         .data = packet,
         .size = l,
         .rdata = packet,
@@ -1006,7 +1034,7 @@ t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup) {
         .rtype = T9P_TYPE_Rwalk,
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: send failed\n", __FUNCTION__);
         _release_handle(c, h);
         return NULL;
@@ -1029,16 +1057,18 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
     if (!t9p_is_valid(h))
         return -1;
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
+
     int l;
-    if ((l = encode_Tremove(packet, sizeof(packet), tag, h->fid)) < 0) {
+    if ((l = encode_Tremove(packet, sizeof(packet), n->tag, h->fid)) < 0) {
         ERROR(c, "%s: unable to encode Tremove\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
     int status;
     struct trans tr = {
-        .tag = tag,
         .data = packet,
         .size = l,
         .rdata = packet,
@@ -1046,8 +1076,9 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
         .rtype = T9P_TYPE_Rremove,
         .status = &status
     };
+    n->tr = tr;
 
-    struct trans_node* n = tr_enqueue(&c->trans_pool, &tr);
+    n = tr_enqueue(&c->trans_pool, n);
     if (!n) {
         ERROR(c, "%s: unable to queue\n", __FUNCTION__);
         return -1;
@@ -1058,6 +1089,7 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
 
     if (event_wait(n->event, c->opts.recv_timeo) != 0) {
         ERROR(c, "%s: timed out\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n); // FIXME:!!!!!!!!!!! USE AFTER FREE IN WORKER THREAD
         return 0; /** TODO: Returning -1 here and releasing the file handle would be inconsistent with the other error cases */
     }
 
@@ -1071,10 +1103,13 @@ int t9p_fsync(t9p_context_t* c, t9p_handle_t file) {
     if (!t9p_is_open(file))
         return -1;
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
+
     int l;
-    if ((l = encode_Tfsync(packet, sizeof(packet), tag, file->fid)) < 0) {
+    if ((l = encode_Tfsync(packet, sizeof(packet), n->tag, file->fid)) < 0) {
         ERROR(c, "%s: Unable to encode Tfsync\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
@@ -1082,12 +1117,11 @@ int t9p_fsync(t9p_context_t* c, t9p_handle_t file) {
         .data = packet,
         .size = l,
         .rtype = T9P_TYPE_Rfsync,
-        .tag = tag,
         .rdata = packet,
         .rsize = sizeof(packet)
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: send failed\n", __FUNCTION__);
         return -1;
     }
@@ -1100,15 +1134,17 @@ int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t 
     if (!t9p_is_valid(parent))
         return -1;
 
-    uint16_t tag = _mktag(c);
-
     if (gid == T9P_NOGID) {
         gid = c->opts.gid;
     }
 
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
+
     int l;
-    if ((l = encode_Tmkdir(packet, sizeof(packet), tag, parent->fid, name, mode, gid)) < 0) {
+    if ((l = encode_Tmkdir(packet, sizeof(packet), n->tag, parent->fid, name, mode, gid)) < 0) {
         ERROR(c, "%s: Unable to encode Tmkdir\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
@@ -1118,10 +1154,9 @@ int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t 
         .rtype = T9P_TYPE_Rmkdir,
         .rdata = packet,
         .rsize = sizeof(packet),
-        .tag = tag
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: send failed\n", __FUNCTION__);
         return -1;
     }
@@ -1144,10 +1179,12 @@ int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs) {
     if (!t9p_is_valid(h))
         return -1;
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
 
-    if ((l = encode_Tstatfs(packet, sizeof(packet), tag, h->fid)) < 0) {
+    if ((l = encode_Tstatfs(packet, sizeof(packet), n->tag, h->fid)) < 0) {
         ERROR(c, "%s: Unable to encode Tstatfs\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
         return -1;
     }
 
@@ -1157,10 +1194,9 @@ int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs) {
         .rdata = packet,
         .rsize = sizeof(packet),
         .rtype = T9P_TYPE_Rstatfs,
-        .tag = tag,
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: send failed\n", __FUNCTION__);
         return -1;
     }
@@ -1190,9 +1226,10 @@ int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPath
     if (!t9p_is_valid(h))
         return -1;
 
-    uint16_t tag = _mktag(c);
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
 
-    if ((l = encode_Treadlink(packet, sizeof(packet), tag, h->fid)) < 0) {
+    if ((l = encode_Treadlink(packet, sizeof(packet), n->tag, h->fid)) < 0) {
         ERROR(c, "%s: Unable to encode Treadlink\n", __FUNCTION__);
         return -1;
     }
@@ -1203,10 +1240,9 @@ int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPath
         .rdata = packet,
         .rsize = sizeof(packet),
         .rtype = T9P_TYPE_Rreadlink,
-        .tag = tag,
     };
 
-    if ((l = tr_send_recv(c, &tr)) < 0) {
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
         ERROR(c, "%s: send failed: %s\n", __FUNCTION__, strerror(l));
         return -1;
     }
@@ -1216,6 +1252,46 @@ int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPath
         ERROR(c, "%s: failed to decode Rreadlink\n", __FUNCTION__);
         return -1;
     }
+
+    return 0;
+}
+
+int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char* src, uint32_t gid, qid_t* oqid) {
+    char packet[PACKET_BUF_SIZE];
+    int l;
+    if (!t9p_is_valid(dir))
+        dir = t9p_get_root(c);
+
+    if (gid == T9P_NOGID)
+        gid = c->opts.gid;
+
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -1;
+
+    if ((l = encode_Tsymlink(packet, sizeof(packet), n->tag, dir->fid, dst, src, gid)) < 0) {
+        ERROR(c, "%s: Unable to encode Tsymlink\n", __FUNCTION__);
+        return -1;
+    }
+
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .rtype = T9P_TYPE_Rsymlink,
+    };
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
+        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _strerror(l));
+        return -1;
+    }
+
+    struct Rsymlink sl;
+    if ((decode_Rsymlink(&sl, packet, l)) < 0) {
+        ERROR(c, "%s: Failed to decode Rsymlink\n", __FUNCTION__);
+        return -1;
+    }
+
+    if (oqid) *oqid = sl.qid;
 
     return 0;
 }
@@ -1251,7 +1327,7 @@ static struct t9p_handle_node* _alloc_handle(struct t9p_context* c) {
     n->prev = n->next = NULL;
 
     /** Mark used */
-    n->h.valid_mask |= T9P_HANDLE_ACTIVE;
+    n->h.valid_mask = T9P_HANDLE_ACTIVE;
 
     mutex_unlock(c->fhl_mutex);
     return n;
@@ -1278,10 +1354,6 @@ static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h) {
     _release_handle(c, &c->fhl[h->fid]);
 }
 
-static int _mktag(struct t9p_context* c) {
-    return 0; // TODO:!!!!!
-}
-
 /** Can we read/write to a fid? */
 static int _can_rw_fid(t9p_handle_t h, int write) {
     if (!t9p_is_open(h))
@@ -1297,7 +1369,7 @@ static void* _t9p_thread_proc(void* param) {
 
     while (c->thr_run) {
         struct trans_node* node = NULL;
-        size_t size;
+        size_t size = sizeof(node);
         ssize_t l;
 
         mutex_lock(c->socket_lock);
@@ -1324,7 +1396,7 @@ static void* _t9p_thread_proc(void* param) {
             }
 
             node->sent = 1;
-            requests[node->tr.tag] = node;
+            requests[node->tag] = node;
         }
 
         union {
@@ -1359,7 +1431,7 @@ static void* _t9p_thread_proc(void* param) {
                     memcpy(n->tr.rdata, &data.err, MIN(sizeof(data.err), n->tr.rsize));
                 c->trans->recv(c->conn, data.buf, sizeof(data.buf), 0); /** Discard */
                 event_signal(n->event);
-                requests[n->tr.tag] = NULL;
+                requests[n->tag] = NULL;
                 continue;
             }
 
@@ -1370,7 +1442,7 @@ static void* _t9p_thread_proc(void* param) {
                 if (n->tr.status)
                     *n->tr.status = -1;
                 event_signal(n->event);
-                requests[n->tr.tag] = NULL;
+                requests[n->tag] = NULL;
                 continue;
             }
 
@@ -1379,7 +1451,7 @@ static void* _t9p_thread_proc(void* param) {
             if (n->tr.status)
                 *n->tr.status = l < 0 ? -errno : l;
             event_signal(n->event);
-            requests[n->tr.tag] = NULL;
+            requests[n->tag] = NULL;
             
         }
 

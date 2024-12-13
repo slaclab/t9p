@@ -1,4 +1,6 @@
 
+#define _T9P_PROTO_IMPL
+
 #include "t9proto.h"
 #include <byteswap.h>
 #include <string.h>
@@ -47,6 +49,12 @@ void wrbuf(uint8_t** pos, const uint8_t* buf, uint32_t bl) {
         *(*pos)++ = buf[n];
 }
 
+void wrstr(uint8_t** pos, const char* str, int len) {
+    len = len < 0 ? strlen(str) : len;
+    wr16(pos, len);
+    wrbuf(pos, (const uint8_t*)str, len);
+}
+
 const char* t9p_type_string(int type) {
     switch(type) {
     case T9P_TYPE_Rlerror:  return "Rlerror";
@@ -86,6 +94,10 @@ const char* t9p_type_string(int type) {
     case T9P_TYPE_Rwstat:   return "Rwstat";
 	case T9P_TYPE_Tstatfs:  return "Tstatfs";
 	case T9P_TYPE_Rstatfs:  return "Rstatfs";
+    case T9P_TYPE_Treadlink:return "Treadlink";
+    case T9P_TYPE_Rreadlink:return "Rreadlink";
+    case T9P_TYPE_Tsymlink: return "Tsymlink";
+    case T9P_TYPE_Rsymlink: return "Rsymlink";
     default: return "Tunknown";
     }
 }
@@ -207,7 +219,7 @@ int decode_Rwalk(struct Rwalk* rw, const void* buf, size_t buflen, qid_t** outqi
     ISWAP16(rw->nwqid);
     const qid_t* qs = (const qid_t*)((uint8_t*)buf + offsetof(struct Rwalk, nwqid));
 
-    *outqids = malloc(sizeof(qid_t) * rw->nwqid);
+    *outqids = calloc(rw->nwqid, sizeof(qid_t));
     for (int i = 0; i < rw->nwqid; ++i)
         (*outqids)[i] = swapqid(qs[i]);
 
@@ -512,14 +524,49 @@ int decode_Rreadlink(struct Rreadlink* rl, char* linkPath, size_t linkPathSize, 
     if (buflen < minSize)
         return -1;
 
-    *rl = *(struct Rreadlink*)buf;
+    *rl = *(const struct Rreadlink*)buf;
     rl->tag = BSWAP16(rl->tag);
     rl->size = BSWAP32(rl->size);
     rl->plen = BSWAP16(rl->plen);
 
-    size_t toWrite = (linkPathSize < rl->plen) ? linkPathSize : rl->plen;
-    memcpy(linkPath, rl->path, toWrite);
-    linkPath[linkPathSize-1] = 0;
+    size_t toWrite = (linkPathSize-1 < rl->plen) ? linkPathSize-1 : rl->plen;
+    memcpy(linkPath, ((const struct Rreadlink*)buf)->path, toWrite);
+    linkPath[toWrite] = 0;
 
     return sizeof(*rl) + rl->plen;
+}
+
+
+int encode_Tsymlink(void* buf, size_t buflen, uint16_t tag, uint32_t fid, const char* dst, const char* src, uint32_t gid) {
+    const size_t dstl = strlen(dst);
+    const size_t srcl = strlen(src);
+    uint32_t packSize = sizeof(struct TRcommon) + sizeof(fid)
+        + sizeof(uint16_t) + dstl
+        + sizeof(uint16_t) + srcl
+        + sizeof(gid);
+    if (buflen < packSize)
+        return -1;
+
+    struct TRcommon* rc = buf;
+    rc->type = T9P_TYPE_Tsymlink;
+    rc->size = BSWAP32(packSize);
+    rc->tag = BSWAP16(tag);
+    uint8_t* b = ((uint8_t*)buf) + sizeof(*rc);
+    wr32(&b, fid);
+    wrstr(&b, dst, dstl);
+    wrstr(&b, src, srcl);
+    wr32(&b, gid);
+
+    return packSize;
+}
+
+int decode_Rsymlink(struct Rsymlink* rs, const void* buf, size_t buflen) {
+    if (buflen < sizeof(*rs))
+        return -1;
+
+    rs->qid = swapqid(rs->qid);
+    rs->size = BSWAP32(rs->size);
+    rs->tag = BSWAP16(rs->tag);
+
+    return 0;
 }

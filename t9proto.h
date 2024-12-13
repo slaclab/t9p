@@ -24,6 +24,8 @@ enum {
     T9P_TYPE_Rlopen,
     T9P_TYPE_Tlcreate    = 14,
     T9P_TYPE_Rlcreate,
+	T9P_TYPE_Tsymlink    = 16,
+	T9P_TYPE_Rsymlink,
 	T9P_TYPE_Treadlink   = 22,
 	T9P_TYPE_Rreadlink,
     T9P_TYPE_Tgetattr    = 24,
@@ -421,7 +423,18 @@ int encode_Treadlink(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
 struct T9P_PACKED Rreadlink {
     T9P_COMMON_FIELDS
     uint16_t plen;
-    char path[];
+#ifdef _T9P_PROTO_IMPL
+    char path[]; /**< This field is not what you expect */
+#endif
 };
 
 int decode_Rreadlink(struct Rreadlink* rl, char* linkPath, size_t linkPathSize, const void* buf, size_t buflen);
+
+int encode_Tsymlink(void* buf, size_t buflen, uint16_t tag, uint32_t fid, const char* dst, const char* src, uint32_t gid);
+
+struct T9P_PACKED Rsymlink {
+    T9P_COMMON_FIELDS
+    qid_t qid;
+};
+
+int decode_Rsymlink(struct Rsymlink* rs, const void* buf, size_t buflen);
