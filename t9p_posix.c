@@ -108,18 +108,26 @@ int event_wait(event_t* ev, uint64_t timeout_ms) {
     struct timespec tv = {};
     clock_gettime(CLOCK_REALTIME, &tv);
     tv.tv_nsec += (timeout_ms % 1000) * 1e6;
-    tv.tv_sec += timeout_ms / 1000;
+    tv.tv_nsec %= 1000000000;
+    tv.tv_sec += (timeout_ms / 1000) + (tv.tv_nsec / 1000000);
+
+    //fprintf(stderr, "Wait event %p\n", ev);
 
     pthread_mutex_lock(&ev->mutex);
-    int r;
-    if ((r = pthread_cond_timedwait(&ev->cond, &ev->mutex, &tv)) != 0)
-        return r;
+    int r = 0;
+    do {
+    } while ((r = pthread_cond_timedwait(&ev->cond, &ev->mutex, &tv)) != 0 && (r == EAGAIN || r == EINTR));
+
     pthread_mutex_unlock(&ev->mutex); // Dont need to hold this mutex
-    return 0;
+
+    return r;
 }
 
 void event_signal(event_t* ev) {
+    //printf("Signal event %p\n", ev);
+    pthread_mutex_lock(&ev->mutex);
     pthread_cond_broadcast(&ev->cond);
+    pthread_mutex_unlock(&ev->mutex);
 }
 
 extern void event_destroy(event_t* ev) {
@@ -143,7 +151,8 @@ struct _msg_queue_s {
     //mqd_t id;
     int id;
 
-    event_t* ev;
+    //event_t* ev;
+    mutex_t* mut;
 
     struct msg* fh;
     struct msg* q;
@@ -162,7 +171,8 @@ msg_queue_t* msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs) {
     }
 
     q->msize = msgSize;
-    q->ev = event_create();
+    //q->ev = event_create();
+    q->mut = mutex_create();
     return q;
 }
 
@@ -184,13 +194,17 @@ void msg_queue_destroy(msg_queue_t* q) {
 
 int msg_queue_send(msg_queue_t* q, const void* data, size_t size) {
     assert(size <= q->msize);
-    pthread_mutex_lock(&q->ev->mutex);
+    //pthread_mutex_lock(&q->ev->mutex);
+    mutex_lock(q->mut);
 
     struct msg* p = q->fh;
     if (!p) {
-        pthread_mutex_unlock(&q->ev->mutex);
+        //pthread_mutex_unlock(&q->ev->mutex);
+        mutex_unlock(q->mut);
         return -1;
     }
+
+    q->fh = p->next;
 
     struct msg* m;
     for (m = q->q; m && m->next; m = m->next)
@@ -204,21 +218,24 @@ int msg_queue_send(msg_queue_t* q, const void* data, size_t size) {
     p->sz = size;
     memcpy(p->data, data, size);
 
-    pthread_mutex_unlock(&q->ev->mutex);
+    mutex_unlock(q->mut);
 
-    event_signal(q->ev);
+//    pthread_mutex_unlock(&q->ev->mutex);
+//
+//    event_signal(q->ev);
 
     return 0;
 }
 
 int msg_queue_recv(msg_queue_t* q, void* data, size_t* size) {
 
-    struct msg* p;
-    pthread_mutex_lock(&q->ev->mutex);
+    struct msg* p = NULL;
+    //pthread_mutex_lock(&q->ev->mutex);
+    mutex_lock(q->mut);
 
     p = q->q;
 
-    pthread_mutex_unlock(&q->ev->mutex);
+    //pthread_mutex_unlock(&q->ev->mutex);
 
     if (p) {
         q->q = p->next;
@@ -226,7 +243,9 @@ int msg_queue_recv(msg_queue_t* q, void* data, size_t* size) {
         q->fh = p;
         memcpy(data, p->data, *size < p->sz ? *size : p->sz);
         *size = p->sz;
+        mutex_unlock(q->mut);
         return 0;
     }
+    mutex_unlock(q->mut);
     return -1;
 }

@@ -36,6 +36,8 @@
 #include "t9p.h"
 #include "t9proto.h"
 
+//#define DO_TRACE
+
 #define T9P_TARGET_VERSION "9P2000.L"
 
 #define PACKET_BUF_SIZE 8192
@@ -184,7 +186,7 @@ struct trans {
                                  this->data is. This is used to avoid unnecessary copies */
     size_t hsize;           /**< Optional; header data size */
 
-    int32_t* status;        /**< Pointer to combined status/length variable. If < 0, this represents an
+    int32_t status;         /**< Combined status/length variable. If < 0, this represents an
                                  error condition. If >= 0, it's the number of bytes written to rdata. */
 
     /** 9p meta info */
@@ -241,10 +243,10 @@ int tr_pool_init(struct trans_pool* q, uint32_t num) {
 void tr_pool_destroy(struct trans_pool* q) {
     mutex_lock(q->guard);
 
-    /** Free both lists */
+    /** Free the nodes */
     for (struct trans_node* n = q->freehead; n;) {
         struct trans_node* b = n->next;
-        event_destroy(b->event);
+        event_destroy(n->event);
         free(n);
         n = b;
     }
@@ -289,6 +291,7 @@ struct trans_node* tr_get_node(struct trans_pool* q) {
 struct trans_node* tr_enqueue(struct trans_pool* q, struct trans_node* us) {
     /** Send it to the I/O thread */
     if (msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
+        printf("Error while sending to message queue\n");
         tr_release(q, us);
         return NULL;
     }
@@ -317,24 +320,22 @@ void tr_release(struct trans_pool* q, struct trans_node* tn) {
  * \return < 0 on error
  */
 static int tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr) {
-    int r = 0, status = 0;
+    int r = 0;
     n->tr = *tr;
-    n->tr.status = &status; /** We always want to capture this */
 
     n = tr_enqueue(&c->trans_pool, n);
     if (n == NULL) {
-        n->tr.status = NULL;
         tr_release(&c->trans_pool, n);
         return -1;
     }
 
     /** Wait until serviced (or timeout) */
     if ((r = event_wait(n->event, c->opts.recv_timeo)) != 0) {
-        n->tr.status = NULL;
         //tr_release(&c->trans_pool, n); // FIXME: !!!!!!!!!!! use after free in thread
+        perror("wait failed");
         return -1;
     }
-    n->tr.status = NULL;
+    uint32_t status = n->tr.status;
     tr_release(&c->trans_pool, n); /** Release the transaction back into the pool */
     return status;
 }
@@ -532,8 +533,8 @@ static int _clunk_sync(struct t9p_context* c, int fid) {
 
 void t9p_opts_init(struct t9p_opts* opts) {
     memset(opts, 0, sizeof(*opts));
-    opts->max_read_data_size = (2<<20); /** 1M */
-    opts->max_write_data_size = (2<<20); /** 1M */
+    opts->max_read_data_size = (1<<20); /** 1M */
+    opts->max_write_data_size = (1<<20); /** 1M */
     opts->queue_size = T9P_PACKET_QUEUE_SIZE;
     opts->max_fids = DEFAULT_MAX_FILES;
     opts->send_timeo = DEFAULT_SEND_TIMEO;
@@ -872,7 +873,7 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: Twrite failed\n", __FUNCTION__);
+        ERROR(c, "%s: Twrite failed: %s\n", __FUNCTION__, _strerror(l));
         return -1;
     }
 
@@ -1067,14 +1068,12 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
         return -1;
     }
 
-    int status;
     struct trans tr = {
         .data = packet,
         .size = l,
         .rdata = packet,
         .rsize = sizeof(packet),
-        .rtype = T9P_TYPE_Rremove,
-        .status = &status
+        .rtype = T9P_TYPE_Rremove
     };
     n->tr = tr;
 
@@ -1083,6 +1082,10 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
         ERROR(c, "%s: unable to queue\n", __FUNCTION__);
         return -1;
     }
+
+    /** FIXME: We should only release the FID if we get back either Rerror or Rlerror from the server.
+      * It is true that Tremove will clunk even on Rlerror, but we need to make sure that the server *actually* gets 
+      * our Tremove... With TCP transport, this probably doesn't matter too much. */
 
     /** Tremove is basically just a clunk with the side effect of removing a file. This will clunk even if the remove fails */
     _release_handle_by_fid(c, h);
@@ -1362,6 +1365,17 @@ static int _can_rw_fid(t9p_handle_t h, int write) {
         && (write ? 1 : h->qid.type != T9P_QID_APPEND));
 }
 
+static void _discard(struct t9p_context* c, struct TRcommon* com) {
+    char buf[256];
+    ssize_t left = com->size;
+    while (left > 0) {
+        size_t r = MIN(sizeof(buf), left);
+        if (c->trans->recv(c->conn, buf, r, 0) == -1)
+            return;
+        left -= r;
+    }
+}
+
 static void* _t9p_thread_proc(void* param) {
     t9p_context_t* c = param;
 
@@ -1382,80 +1396,120 @@ static void* _t9p_thread_proc(void* param) {
                 continue;
             }
 
+        #ifdef  DO_TRACE
+            if (node->tr.hdata)
+                printf("send: (header) type=%d, len=%d, tag=%d\n", ((struct TRcommon*)node->tr.hdata)->type, ((struct TRcommon*)node->tr.hdata)->size, ((struct TRcommon*)node->tr.hdata)->tag);
+            if (node->tr.data)
+                printf("send: type=%d, len=%d, tag=%d\n", ((struct TRcommon*)node->tr.data)->type, ((struct TRcommon*)node->tr.data)->size, ((struct TRcommon*)node->tr.data)->tag);
+        #endif
+
             /** Send any header data first */
             if (node->tr.hdata && (l = c->trans->send(c->conn, node->tr.hdata, node->tr.hsize, 0)) < 0) {
-                ERROR(c, "send: Failed to send header data: %s\n", strerror(l));
+                if (errno == EAGAIN) {
+                    continue; /** Just try again next iteration */
+                }
+                ERROR(c, "send: Failed to send header data: %s\n", strerror(errno));
                 continue;
             }
 
             /** Send "body" data */
-            printf("send %p %ld\n", node->tr.data, node->tr.size);
             if ((l = c->trans->send(c->conn, node->tr.data, node->tr.size, 0)) < 0) {
                 ERROR(c, "send: Failed to send data: %s\n", strerror(errno));
                 continue;
             }
 
             node->sent = 1;
+            assert(!requests[node->tag]);
             requests[node->tag] = node;
         }
 
-        union {
-            char buf[128];
-            struct TRcommon com;
-            struct Rlerror err;
-        } data;
+        char buf[256] = {0};
 
         /** Recv pending transactions */
-        while ((l = c->trans->recv(c->conn, data.buf, sizeof(data.buf), T9P_RECV_PEEK)) > 0) {
-            printf("recv: type=%d, tag=%d, size=%d\n", data.com.type, data.com.tag, data.com.size);
-            if (data.com.tag >= MAX_TAGS) {
-                ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", data.com.tag);
-                c->trans->recv(c, data.buf, sizeof(data.buf), 0); /** Discard */
+        while ((l = c->trans->recv(c->conn, buf, sizeof(buf), T9P_RECV_PEEK)) > 0) {
+            struct TRcommon com = {0};
+            if (decode_TRcommon(&com, buf, l) < 0) {
+                ERROR(c, "recv: Unable to decode common header; discarding!\n");
+                c->trans->recv(c->conn, buf, sizeof(buf), 0); /** Discard */
                 continue;
             }
 
-            if (l < sizeof(struct TRcommon))
-                continue;
+        #ifdef DO_TRACE
+            printf("recv: type=%d, tag=%d, size=%d\n", com.type, com.tag, com.size);
+        #endif
 
-            struct trans_node* n = requests[data.com.tag];
+            if (com.tag >= MAX_TAGS) {
+                ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", com.tag);
+                _discard(c, &com);
+                continue;
+            }
+
+            struct trans_node* n = requests[com.tag];
             if (!n) {
-                ERROR(c, "recv: Tag '%d' not found in request list; discarding!\n", data.com.tag);
+                ERROR(c, "recv: Tag '%d' not found in request list; discarding!\n", com.tag);
+                _discard(c, &com);
                 continue;
             }
 
             /** Handle error responses */
-            if (data.com.type == T9P_TYPE_Rlerror) {
-                if (n->tr.status)
-                    *n->tr.status = data.err.ecode < 0 ? data.err.ecode : -data.err.ecode;
+            if (com.type == T9P_TYPE_Rlerror) {
+                struct Rlerror err = {0};
+                if (decode_Rlerror(&err, buf, l) < 0)
+                    err.ecode = -1;
+
+                n->tr.status = err.ecode < 0 ? err.ecode : -err.ecode;
+                
                 if (n->tr.rdata)
-                    memcpy(n->tr.rdata, &data.err, MIN(sizeof(data.err), n->tr.rsize));
-                c->trans->recv(c->conn, data.buf, sizeof(data.buf), 0); /** Discard */
+                    memcpy(n->tr.rdata, &err, MIN(sizeof(err), n->tr.rsize));
+                _discard(c, &com);
                 event_signal(n->event);
                 requests[n->tag] = NULL;
                 continue;
             }
 
             /** Check for type mismatch and discard if there is one */
-            if (n->tr.rtype != 0 && data.com.type != n->tr.rtype) {
-                ERROR(c, "recv: Expected msg type '%d' but got '%d'; discarding!\n", n->tr.rtype, data.com.type);
-                c->trans->recv(c->conn, data.buf, sizeof(data.buf), 0); /** Discard */
-                if (n->tr.status)
-                    *n->tr.status = -1;
+            if (n->tr.rtype != 0 && com.type != n->tr.rtype) {
+                ERROR(c, "recv: Expected msg type '%d' but got '%d'; discarding!\n", n->tr.rtype, com.type);
+                _discard(c, &com);
+                n->tr.status = -1;
                 event_signal(n->event);
                 requests[n->tag] = NULL;
                 continue;
             }
 
-            /** Finally, service the request */
-            l = c->trans->recv(c->conn, n->tr.rdata ? n->tr.rdata : data.buf, n->tr.rdata ? n->tr.rsize : sizeof(data.buf), 0);
-            if (n->tr.status)
-                *n->tr.status = l < 0 ? -errno : l;
+            /** No result data space? well, discard... */
+            if (!n->tr.rdata || n->tr.rsize == 0)
+                _discard(c, &com);
+            else {
+                /** Read off what we can */
+                l = c->trans->recv(c->conn, n->tr.rdata, MIN(n->tr.rsize, com.size), 0);
+                if (l > 0) {
+                    ssize_t rem = com.size - l;
+
+                    /** Discard the rest */
+                    while (rem > 0) {
+                        ssize_t r = c->trans->recv(c->conn, buf, MIN(sizeof(buf), rem), 0);
+                        if (r <= 0)
+                            break;
+                        rem -= r;
+                    }
+
+                    if (rem > 0)
+                        ERROR(c, "recv: Partial discard\n" );
+                }
+            }
+            
+            /** Set status accordingly */
+            n->tr.status = l < 0 ? -errno : l;
+
             event_signal(n->event);
             requests[n->tag] = NULL;
-            
+            continue;
         }
 
         mutex_unlock(c->socket_lock);
+
+        usleep(1000);
     }
 
     return NULL;
@@ -1549,9 +1603,9 @@ ssize_t t9p_tcp_recv(void* context, void* data, size_t len, int flags) {
 
     struct tcp_context* pc = context;
     /** Read behavior instead of peek */
-    if (flags & T9P_RECV_READ)
-        return read(pc->sock, data, len);
-    else
+    //if (flags & T9P_RECV_READ)
+    //    return read(pc->sock, data, len);
+    //else
         return recv(pc->sock, data, len, rflags);
 }
 

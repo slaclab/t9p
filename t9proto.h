@@ -93,6 +93,8 @@ struct T9P_PACKED TRcommon {
     T9P_COMMON_FIELDS
 };
 
+int decode_TRcommon(struct TRcommon* com, const void* buf, size_t len);
+
 struct T9P_PACKED Tversion {
     T9P_COMMON_FIELDS
     uint32_t msize;
@@ -135,6 +137,8 @@ struct T9P_PACKED Rlerror {
     T9P_COMMON_FIELDS
     uint32_t ecode;
 };
+
+int decode_Rlerror(struct Rlerror* rl, const void* buf, size_t len);
 
 struct T9P_PACKED Tflush {
     T9P_COMMON_FIELDS

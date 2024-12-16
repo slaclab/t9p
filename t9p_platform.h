@@ -13,6 +13,22 @@
 #define T9P_TARGETT9P_TARGET_RTEMS4
 #endif
 
+#if defined(__GNUC__) || defined(__clang__)
+typedef uint32_t atomic_uint32_t;
+
+inline uint32_t atomic_load32(atomic_uint32_t* p) {
+    return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+}
+
+inline void atomic_store32(atomic_uint32_t* p, uint32_t val) {
+    __atomic_store_n(p, val, __ATOMIC_SEQ_CST);
+}
+
+inline int atomic_compare_exchange32(atomic_uint32_t* p, uint32_t expected, uint32_t newval) {
+    return __atomic_compare_exchange(p, &expected, &newval, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);
+}
+#endif
+
 /** Generic thread API */
 
 typedef void*(*thread_proc_t)(void*);

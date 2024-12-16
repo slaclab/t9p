@@ -568,5 +568,27 @@ int decode_Rsymlink(struct Rsymlink* rs, const void* buf, size_t buflen) {
     rs->size = BSWAP32(rs->size);
     rs->tag = BSWAP16(rs->tag);
 
-    return 0;
+    return sizeof(*rs);
+}
+
+int decode_TRcommon(struct TRcommon* com, const void* buf, size_t len) {
+    if (len < sizeof(*com))
+        return -1;
+
+    *com = *(const struct TRcommon*)buf;
+    com->size = BSWAP32(com->size);
+    com->tag = BSWAP16(com->tag);
+    return sizeof(*com);
+}
+
+
+int decode_Rlerror(struct Rlerror* rl, const void* buf, size_t len) {
+    if (len < sizeof *rl)
+        return -1;
+
+    *rl = *(const struct Rlerror*)buf;
+    rl->ecode = BSWAP32(rl->ecode);
+    rl->size = BSWAP32(rl->size);
+    rl->tag = BSWAP16(rl->tag);
+    return sizeof *rl;
 }

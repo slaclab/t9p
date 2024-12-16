@@ -6,3 +6,6 @@ t9p
 tests/mnt
 tests/bvec_test
 *.pcap*
+tests/t9p_threaded_test
+*.log
+vgcore*
