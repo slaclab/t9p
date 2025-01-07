@@ -1,5 +1,9 @@
-#pragma once
 
+#include "t9p_platform.h"
+
+#include <rtems.h>
+#include <rtems/thread.h>
+#include <stdlib.h>
 
 #if 0
 /* the file handlers table */
@@ -60,3 +64,37 @@ struct _rtems_filesystem_file_handlers_r nfs_link_file_handlers = {
 };
 
 #endif
+
+/** Provide our own posix message queue */
+#define _T9P_NO_POSIX_MQ
+#include "t9p_posix.c"
+
+struct _msg_queue_s {
+    rtems_name name;
+    rtems_id queue;
+};
+
+msg_queue_t* msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs) {
+    msg_queue_t* q = calloc(1, sizeof(msg_queue_t));
+    q->name = rtems_build_name(id[0], id[1], id[2], id[3]);
+    rtems_status_code status = rtems_message_queue_create(q->name, maxMsgs, msgSize, RTEMS_FIFO, &q->queue);
+    if (status != RTEMS_SUCCESSFUL) {
+        free(q);
+        return NULL;
+    }
+    return q;
+}
+
+void msg_queue_destroy(msg_queue_t* q) {
+    rtems_message_queue_delete(q->queue);
+    free(q);
+}
+
+int msg_queue_send(msg_queue_t* q, const void* data, size_t size) {
+    return rtems_message_queue_send(q->queue, data, size) == RTEMS_SUCCESSFUL ? 0 : -1;
+}
+
+int msg_queue_recv(msg_queue_t* q, void* data, size_t* size) {
+    return rtems_message_queue_receive(q->queue, data, size, RTEMS_NO_WAIT, 0) == RTEMS_SUCCESSFUL ? 0 : -1;
+}
+

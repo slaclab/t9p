@@ -13,7 +13,6 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <byteswap.h>
 #include <time.h>
 #include <string.h>
 #include <pthread.h>
@@ -26,9 +25,9 @@
 #endif
 
 #if HAVE_TCP || HAVE_UDP
+#include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #endif
@@ -62,16 +61,6 @@
 #define DEBUG(_context, ...) LOG(_context, T9P_LOG_DEBUG, __VA_ARGS__)
 #define WARN(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
 #define ERROR(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
-
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#define BSWAP32(x) bswap_32(x)
-#define BSWAP16(x) bswap_16(x)
-#define BSWAP64(x) bswap_64(x)
-#else
-#define BSWAP32(x) (x)
-#define BSWAP16(x) (x)
-#define BSWAP64(x) (x)
-#endif
 
 struct trans_pool {
     struct trans_node* freehead;

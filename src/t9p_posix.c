@@ -10,7 +10,6 @@
 #include <mqueue.h>
 #include <errno.h>
 #include <stdio.h>
-#include <sys/msg.h>
 #include <assert.h>
 
 
@@ -111,8 +110,6 @@ int event_wait(event_t* ev, uint64_t timeout_ms) {
     tv.tv_nsec %= 1000000000;
     tv.tv_sec += (timeout_ms / 1000) + (tv.tv_nsec / 1000000);
 
-    //fprintf(stderr, "Wait event %p\n", ev);
-
     pthread_mutex_lock(&ev->mutex);
     int r = 0;
     do {
@@ -124,7 +121,6 @@ int event_wait(event_t* ev, uint64_t timeout_ms) {
 }
 
 void event_signal(event_t* ev) {
-    //printf("Signal event %p\n", ev);
     pthread_mutex_lock(&ev->mutex);
     pthread_cond_broadcast(&ev->cond);
     pthread_mutex_unlock(&ev->mutex);
@@ -141,6 +137,8 @@ extern void event_destroy(event_t* ev) {
 
 // Really dumb message queue because POSIX message queues don't cut the mustard...
 
+#ifndef _T9P_NO_POSIX_MQ
+
 struct msg {
     size_t sz;
     struct msg* next;
@@ -148,10 +146,8 @@ struct msg {
 };
 
 struct _msg_queue_s {
-    //mqd_t id;
     int id;
 
-    //event_t* ev;
     mutex_t* mut;
 
     struct msg* fh;
@@ -194,12 +190,10 @@ void msg_queue_destroy(msg_queue_t* q) {
 
 int msg_queue_send(msg_queue_t* q, const void* data, size_t size) {
     assert(size <= q->msize);
-    //pthread_mutex_lock(&q->ev->mutex);
     mutex_lock(q->mut);
 
     struct msg* p = q->fh;
     if (!p) {
-        //pthread_mutex_unlock(&q->ev->mutex);
         mutex_unlock(q->mut);
         return -1;
     }
@@ -220,22 +214,15 @@ int msg_queue_send(msg_queue_t* q, const void* data, size_t size) {
 
     mutex_unlock(q->mut);
 
-//    pthread_mutex_unlock(&q->ev->mutex);
-//
-//    event_signal(q->ev);
-
     return 0;
 }
 
 int msg_queue_recv(msg_queue_t* q, void* data, size_t* size) {
 
     struct msg* p = NULL;
-    //pthread_mutex_lock(&q->ev->mutex);
     mutex_lock(q->mut);
 
     p = q->q;
-
-    //pthread_mutex_unlock(&q->ev->mutex);
 
     if (p) {
         q->q = p->next;
@@ -249,3 +236,5 @@ int msg_queue_recv(msg_queue_t* q, void* data, size_t* size) {
     mutex_unlock(q->mut);
     return -1;
 }
+
+#endif

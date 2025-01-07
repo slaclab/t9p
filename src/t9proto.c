@@ -2,7 +2,7 @@
 #define _T9P_PROTO_IMPL
 
 #include "t9proto.h"
-#include <byteswap.h>
+#include <endian.h>
 #include <string.h>
 #include <stdlib.h>
 

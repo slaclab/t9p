@@ -1,6 +1,6 @@
 
-#include "../t9p.h"
-#include "../t9p_platform.h"
+#include "t9p.h"
+#include "t9p_platform.h"
 
 #include <stdio.h>
 #include <unistd.h>

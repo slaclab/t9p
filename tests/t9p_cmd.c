@@ -2,18 +2,43 @@
 #include "t9p.h"
 
 #include <stdio.h>
+#include <getopt.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <string.h>
+#include <unistd.h>
+
+#ifdef __linux__
+#include <linux/limits.h>
+#else
+#define PATH_MAX 256
+#endif
+
+#ifndef __rtems__
 #include <readline/readline.h>
 #include <readline/history.h>
-#include <getopt.h>
-#include <linux/limits.h>
-#include <stdlib.h>
+#define HAVE_READLINE 1
+#endif
 
 struct t9p_context* ctx;
 int run = 1;
+static char ipAddr[256];
+static char mntpt[256];
+static char remotePath[256];
+static char user[256];
+static char prompt[512];
+static int uid;
 
 static void usage() {
     printf("t9p -u user -a apath -m mntpt ip\n");
     exit(1);
+}
+
+static int check_connection() {
+    if (ctx != NULL)
+        return 1;
+    printf("Not connected; use 'connect' first\n");
+    return 0;
 }
 
 void ls(const char* loc) {
@@ -21,6 +46,9 @@ void ls(const char* loc) {
 }
 
 void hopen_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 2) {
         printf("usage: hopen <path>\n");
         return;
@@ -39,6 +67,9 @@ void exit_cmd(int argc, const char* const* argv) {
 }
 
 void cat_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 2) {
         printf("usage: cat <path>\n");
         return;
@@ -68,6 +99,9 @@ void cat_cmd(int argc, const char* const* argv) {
 }
 
 void create_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 2) {
         printf("usage: create <path>\n");
         return;
@@ -101,6 +135,9 @@ void create_cmd(int argc, const char* const* argv) {
 }
 
 void mkdir_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 2) {
         printf("usage: mkdir <path>\n");
         return;
@@ -132,6 +169,9 @@ void mkdir_cmd(int argc, const char* const* argv) {
 }
 
 void getattr_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 2) {
         printf("usage: getattr <path>\n");
         return;
@@ -173,6 +213,9 @@ void getattr_cmd(int argc, const char* const* argv) {
 }
 
 void put_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 3) {
         printf("usage: put <path> <data_str>\n");
         return;
@@ -199,6 +242,9 @@ void put_cmd(int argc, const char* const* argv) {
 }
 
 void rm_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 2) {
         printf("usage: rm <path>\n");
         return;
@@ -215,6 +261,9 @@ void rm_cmd(int argc, const char* const* argv) {
 }
 
 void statfs_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 2) {
         printf("usage: statfs <path>\n");
         return;
@@ -246,6 +295,9 @@ void statfs_cmd(int argc, const char* const* argv) {
 }
 
 static void readlink_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 2) {
         printf("usage: statfs <path>\n");
         return;
@@ -269,6 +321,9 @@ static void readlink_cmd(int argc, const char* const* argv) {
 }
 
 static void symlink_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+
     if (argc < 3) {
         printf("usage: symlink <to> <from>\n");
         return;
@@ -281,12 +336,54 @@ static void symlink_cmd(int argc, const char* const* argv) {
 
 void help_cmd(int argc, const char* const* argv);
 
+static int do_init() {
+    t9p_transport_t trans;
+    if (t9p_init_tcp_transport(&trans) < 0) {
+        printf("tcp unsupported\n");
+        return -1;
+    }
+
+    t9p_opts_t opts;
+    t9p_opts_init(&opts);
+    opts.log_level = T9P_LOG_DEBUG;
+    opts.uid = uid;
+    strcpy(opts.user, user);
+    
+    ctx = t9p_init(&trans, &opts, remotePath, ipAddr, mntpt);
+    if (!ctx) {
+        printf("t9p init failed, exiting...\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static void connect_cmd(int argc, const char* const* argv) {
+    if (argc < 5) {
+        printf("usage: connect ip remotePath mntpt user\n");
+        return;
+    }
+
+    strcpy(ipAddr, argv[1]);
+    strcpy(remotePath, argv[2]);
+    strcpy(mntpt, argv[3]);
+    strcpy(user, argv[4]);
+
+
+    if (do_init() < 0) {
+        printf("error while initting\n");
+    }
+
+    snprintf(prompt, sizeof(prompt), "%s> ", ipAddr);
+}
+
 struct command {
     const char* name;
     void (*func)(int argc, const char* const* argv);
 };
 
 struct command COMMANDS[] = {
+    {"connect", connect_cmd},
     {"hopen", hopen_cmd},
     {"exit", exit_cmd},
     {"cat", cat_cmd},
@@ -307,23 +404,32 @@ void help_cmd(int argc, const char* const* argv) {
         printf("%s\n", COMMANDS[i].name);
 }
 
+#ifndef HAVE_READLINE
+static char* readline(const char* prompt) {
+    printf("%s", prompt);
+    fflush(stdout);
+    char* buf = malloc(1024);
+    buf[0] = 0;
+    do {
+        fgets(buf, 1024, stdin);
+        usleep(1000);
+    } while (buf[0] == 0);
+    return buf;
+}
+#endif
+
 int main(int argc, char** argv) {
     int opt;
-    char user[128] = {0};
-    char mntpoint[PATH_MAX] = {0};
-    char ap[PATH_MAX] = {0};
-    char ip[PATH_MAX] = {0};
-    int uid = 0;
     while ((opt = getopt(argc, argv, "hu:a:m:i:")) != -1) {
         switch(opt) {
         case 'u':
             strcpy(user, optarg);
             break;
         case 'a':
-            strcpy(ap, optarg);
+            strcpy(remotePath, optarg);
             break;
         case 'm':
-            strcpy(mntpoint, optarg);
+            strcpy(mntpt, optarg);
             break;
         case 'i':
             uid = atoi(optarg);
@@ -337,39 +443,27 @@ int main(int argc, char** argv) {
     }
 
     if (optind < argc)
-        strcpy(ip, argv[optind]);
+        strcpy(ipAddr, argv[optind]);
 
-    if (!*ap || !*mntpoint || !*ip) {
-        usage();
-    }
-
-    t9p_transport_t trans;
-    if (t9p_init_tcp_transport(&trans) < 0) {
-        printf("tcp unsupported\n");
+    if (*ipAddr && do_init() < 0)
         return -1;
-    }
 
-    t9p_opts_t opts;
-    t9p_opts_init(&opts);
-    opts.log_level = T9P_LOG_DEBUG;
-    opts.uid = uid;
-    strcpy(opts.user, user);
-    
-    ctx = t9p_init(&trans, &opts, ap, ip, mntpoint);
-    if (!ctx) {
-        printf("Fail\n");
-        return -1;
-    }
+    if (!*ipAddr)
+        printf("Use the connect command to begin\n");
 
+#ifdef HAVE_READLINE
     rl_initialize();
+#endif
 
-    char prompt[512];
-    snprintf(prompt, sizeof(prompt), "%s> ", ip);
+    snprintf(prompt, sizeof(prompt), "%s> ", ipAddr);
 
     char* ptr = NULL;
+    
     while(run && (ptr = readline(prompt)) != NULL) {
         if (!ptr) continue;
+    #ifdef HAVE_READLINE
         add_history(ptr);
+    #endif
         const char* comps[256] = {0};
         int n = 0;
         for (char* c = ptr; *c; c++) {
@@ -408,5 +502,6 @@ int main(int argc, char** argv) {
         ptr = NULL;
     }
 
-    t9p_shutdown(ctx);
+    if (ctx)
+        t9p_shutdown(ctx);
 }

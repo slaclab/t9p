@@ -9,3 +9,9 @@ tests/bvec_test
 tests/t9p_threaded_test
 *.log
 vgcore*
+
+.vscode
+/.cache/
+/build*
+
+compile_commands.json
