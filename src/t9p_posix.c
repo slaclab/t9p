@@ -34,6 +34,8 @@ thread_t* thread_create(thread_proc_t proc, void* param) {
     }
     // TODO: set priority properly
 
+    assert(proc);
+
     if (pthread_create(&p->thread, &p->attr, proc, param) != 0) {
         pthread_attr_destroy(&p->attr);
         free(p);

@@ -4,15 +4,24 @@ set -e
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-#if [ -z "$RTEMS_TOP" ]; then
-#    echo "Set RTEMS_TOP to the top directory of your SLAC RTEMS installation"
-#    exit 1
-#fi
+QEMU_ARGS=""
 
-#"$RTEMS_TOP/scripts/run-i386-qemu.sh" "$PWD/../build-i386-rtems/t9p_rtems_test" $@ 
+while test $# -gt 0; do
+    case $1 in
+    --gdb)
+        QEMU_ARGS="$QEMU_ARGS -s -S"
+        ;;
+    *)
+        echo "Unknown arg $1"
+        exit 1
+        ;;
+    esac
+    shift
+done
 
-#qemu-system-i386 -kernel $PWD/../build-i386-rtems/t9p_rtems_test -serial mon:stdio -device ne2k_isa,netdev=if0 \
-#    -netdev user,id=if0,hostfwd=tcp::5075-:5075,hostfwd=udp::5076-:5076 -m 1024 --no-reboot -nographic -append "--video=off --console=/dev/com1" $@
+# diod running on host port 10002
+BSP_ARGS="--console=/dev/com1 -i $(id -u) -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
-qemu-system-i386 -no-reboot -serial stdio -monitor none -nographic -s -S \
-    -append "--console=/dev/com1" -kernel $PWD/../build-i386-rtems/t9p_rtems_test
+qemu-system-i386 $QEMU_ARGS -no-reboot -serial mon:stdio -nographic \
+    -device e1000,netdev=em0 -netdev user,id=em0,hostfwd=tcp::10003-:10003 \
+    -append "$BSP_ARGS" -kernel $PWD/../build-i386-rtems/t9p_rtems_test

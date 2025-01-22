@@ -13,6 +13,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <bsp.h>
+#ifdef RTEMS_LIBBSD_STACK
+#include <rtems/rtems-debugger-remote-tcp.h>
+#include <rtems/rtems-debugger.h>
+#endif
 
 /** From t9p_cmd.c */
 extern int main(int, char**);
@@ -36,12 +40,21 @@ static void configure_network()
 
     rtems_bsd_ifconfig_lo0();
 
+    char ipbuf[200];
+    const char* iparg = bsp_cmdline_arg("--ip");
+    strcpy(ipbuf, iparg ? iparg : "");
+    strtok(ipbuf, "=");
+    const char* ip = strtok(NULL, "=");
+
+    if (ip) {
+        printf("Using IP %s\n", ip);
+    }
+
     char* ifcmd[] = {
         "ifconfig",
-        "cgem0",
-        "up",
+        "em0",
         "inet",
-        "10.2.0.1",
+        "10.0.2.15",
         "netmask",
         "255.255.255.0",
         NULL
@@ -58,21 +71,32 @@ static void configure_network()
 static void* POSIX_Init(void* arg)
 {
     printf("** t9p RTEMS test application\n");
-    fprintf(stderr, "test\n");
 
-    /** Configue settings for stdin */
-    struct termios t;
-    if (tcgetattr (fileno (stdin), &t) < 0) {
-        printf ("tcgetattr failed: %s\n", strerror (errno));
-        return NULL;
-    }
-    t.c_iflag &= ~(IXOFF | IXON | IXANY);
-    if (tcsetattr (fileno (stdin), TCSANOW, &t) < 0) {
-        printf ("tcsetattr failed: %s\n", strerror (errno));
+    printf("bsp_cmdline: %s\n", bsp_cmdline());
+
+    struct stat st;
+    if (fstat(fileno(stdin), &st) < -1) {
+        perror("Unable to stat stdin");
+        abort();
         return NULL;
     }
 
-    printf("cheese\n");
+    if (S_ISCHR(st.st_mode)) {
+        /** Configue settings for stdin */
+        struct termios t;
+        if (tcgetattr (fileno(stdin), &t) < 0) {
+            printf ("tcgetattr failed: %s\n", strerror (errno));
+            //return NULL;
+        }
+        t.c_iflag &= ~(IXOFF | IXON | IXANY);
+        if (tcsetattr (fileno(stdin), TCSANOW, &t) < 0) {
+            printf ("tcsetattr failed: %s\n", strerror (errno));
+            //return NULL;
+        }
+    }
+    else {
+        printf("stdin is not a chardev, you will not have any input!\n");
+    }
 
     rtems_shell_init_environment();
 
@@ -102,8 +126,21 @@ static void* POSIX_Init(void* arg)
         }
     }
 
-    char* args[] = {"t9p_cmd"};
-    int r = main(0, args);
+    const int MAX_ARGS = 32;
+    char* args[MAX_ARGS] = {};
+
+    /** Tokenize the BSP command line into something that can be consumed by t9p */
+    char buf[1024];
+    strcpy(buf, bsp_cmdline());
+
+    int n = 0;
+    for (char* s = strtok(buf, " "); s && n < MAX_ARGS; s = strtok(NULL, " ")) {
+        if (!strncmp(s, "--console", sizeof("--console")-1))
+            continue; /** Skip console arg */
+        args[n++] = strdup(s);
+    }
+
+    int r = main(n, args);
 
     if (r != 0)
         printf("*** FAILED T9P CMD ***\n");
@@ -114,7 +151,6 @@ static void* POSIX_Init(void* arg)
 }
 
 /* Ensure that stdio goes to serial (so it can be captured) */
-//#define USE_COM1_AS_CONSOLE 1
 #if defined(__i386__) && !USE_COM1_AS_CONSOLE
 #include <uart.h>
 #if __RTEMS_MAJOR__ > 4
@@ -138,13 +174,16 @@ void bsp_predriver_hook(void)
 /** POSIX configuration */
 #define CONFIGURE_POSIX_INIT_THREAD_TABLE
 #define CONFIGURE_POSIX_INIT_THREAD_ENTRY_POINT POSIX_Init
-#define CONFIGURE_POSIX_INIT_THREAD_STACK_SIZE  (64*1024)
+#define CONFIGURE_POSIX_INIT_THREAD_STACK_SIZE  (128*1024)
+#define CONFIGURE_MAXIMUM_POSIX_THREADS 2
 
 #define CONFIGURE_MAXIMUM_PERIODS 	5
 #define CONFIGURE_MICROSECONDS_PER_TICK 10000
 #define CONFIGURE_MALLOC_STATISTICS     1
 /* MINIMUM_STACK_SIZE == 8K */
-#define CONFIGURE_EXTRA_TASK_STACKS         (4000 * RTEMS_MINIMUM_STACK_SIZE)
+#define CONFIGURE_EXTRA_TASK_STACKS         (8000 * RTEMS_MINIMUM_STACK_SIZE)
+
+#define CONFIGURE_MAXIMUM_MESSAGE_QUEUES 10
 
 #define CONFIGURE_FILESYSTEM_DEVFS
 #define CONFIGURE_FILESYSTEM_NFS
@@ -161,7 +200,7 @@ void bsp_predriver_hook(void)
 
 /** RTEMS config */
 #define CONFIGURE_APPLICATION_NEEDS_CLOCK_DRIVER
-#define CONFIGURE_APPLICATION_NEEDS_SIMPLE_CONSOLE_DRIVER
+#define CONFIGURE_APPLICATION_NEEDS_CONSOLE_DRIVER
 #define CONFIGURE_APPLICATION_NEEDS_STUB_DRIVER
 #define CONFIGURE_APPLICATION_NEEDS_ZERO_DRIVER
 

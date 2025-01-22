@@ -21,6 +21,8 @@
 #include <unistd.h>
 #ifdef __linux__
 #include <linux/limits.h>
+#elif defined(__rtems__)
+#include <sys/limits.h>
 #else
 #define PATH_MAX 256
 #endif
@@ -203,7 +205,7 @@ struct trans_node {
 int tr_pool_init(struct trans_pool* q, uint32_t num) {
     memset(q, 0, sizeof(*q));
 
-    q->queue = msg_queue_create("/tmp/TPOOL", sizeof(struct trans_node*), MAX_TRANSACTIONS);
+    q->queue = msg_queue_create("T9PQ", sizeof(struct trans_node*), MAX_TRANSACTIONS);
     if (!q->queue)
         return -1;
 
@@ -1372,7 +1374,7 @@ static void _discard(struct t9p_context* c, struct TRcommon* com) {
 static void* _t9p_thread_proc(void* param) {
     t9p_context_t* c = param;
 
-    static struct trans_node* requests[MAX_TAGS] = {0};
+    struct trans_node** requests = calloc(MAX_TAGS, sizeof(struct trans_node*));
 
     while (c->thr_run) {
         struct trans_node* node = NULL;
@@ -1505,6 +1507,7 @@ static void* _t9p_thread_proc(void* param) {
         usleep(1000);
     }
 
+    free(requests);
     return NULL;
 }
 

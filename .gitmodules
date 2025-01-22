@@ -1,0 +1,4 @@
+[submodule "toolchains"]
+	path = rtems-tools
+	url = git@github.com:JJL772/rtems-cmake-toolchains.git
+	branch = main
