@@ -2,9 +2,16 @@
 #define _T9P_PROTO_IMPL
 
 #include "t9proto.h"
-#include <endian.h>
 #include <string.h>
 #include <stdlib.h>
+
+#if __RTEMS_MAJOR__ < 5
+#define bswap_32(x) __builtin_bswap32(x)
+#define bswap_64(x) __builtin_bswap64(x)
+#define bswap_16(x) __builtin_bswap16(x)
+#else
+#include <endian.h>
+#endif
 
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #define BSWAP32(x) bswap_32(x)

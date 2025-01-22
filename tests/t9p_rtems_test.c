@@ -1,9 +1,12 @@
 
+#include <sys/types.h>
 #include <rtems.h>
+#ifndef RTEMS_LEGACY_STACK
 #include <machine/rtems-bsd-commands.h>
 #include <rtems/bsd.h>
 #include <rtems/bsd/iface.h>
 #include <rtems/bsd/bsd.h>
+#endif
 #include <rtems/shell.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -149,10 +152,12 @@ void bsp_predriver_hook(void)
 
 #define CONFIGURE_USE_IMFS_AS_BASE_FILESYSTEM
 
+#ifndef RTEMS_LEGACY_STACK
 /** libbsd config */
 #define RTEMS_BSD_CONFIG_BSP_CONFIG
 #define RTEMS_BSD_CONFIG_INIT
 #include <machine/rtems-bsd-config.h>
+#endif
 
 /** RTEMS config */
 #define CONFIGURE_APPLICATION_NEEDS_CLOCK_DRIVER

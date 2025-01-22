@@ -5,6 +5,7 @@
 #include "t9p_platform.h"
 
 #include <getopt.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -25,6 +26,9 @@
 #endif
 
 #if HAVE_TCP || HAVE_UDP
+#if __RTEMS_MAJOR__ < 5
+#include "netinet/in_systm.h"
+#endif
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/in.h>
@@ -1587,8 +1591,6 @@ ssize_t t9p_tcp_recv(void* context, void* data, size_t len, int flags) {
     int rflags = 0;
     if (flags & T9P_RECV_PEEK)
         rflags |= MSG_PEEK;
-    if (flags & T9P_RECV_NOWAIT)
-        rflags |= MSG_DONTWAIT;
 
     struct tcp_context* pc = context;
     /** Read behavior instead of peek */

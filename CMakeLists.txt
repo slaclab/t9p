@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(t9p C)
 
+set(CMAKE_C_STANDARD 99)
+
 set(T9P_SOURCES
     "src/t9p.c"
     "src/t9proto.c"
