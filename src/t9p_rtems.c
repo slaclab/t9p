@@ -67,10 +67,10 @@ struct _rtems_filesystem_file_handlers_r nfs_link_file_handlers = {
 #endif
 
 /** Provide our own posix message queue */
-#define _T9P_NO_POSIX_MQ
+//#define _T9P_NO_POSIX_MQ
 #include "t9p_posix.c"
 
-#if 1
+#if 0
 struct _msg_queue_s {
     rtems_name name;
     rtems_id queue;

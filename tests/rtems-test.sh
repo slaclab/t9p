@@ -20,8 +20,8 @@ while test $# -gt 0; do
 done
 
 # diod running on host port 10002
-BSP_ARGS="--console=/dev/com1 -i $(id -u) -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
+BSP_ARGS="--console=/dev/com1 -u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
 qemu-system-i386 $QEMU_ARGS -no-reboot -serial mon:stdio -nographic \
-    -device e1000,netdev=em0 -netdev user,id=em0,hostfwd=tcp::10003-:10003 \
+    -device e1000,netdev=em0 -netdev user,id=em0,hostfwd=tcp::10003-:10003,hostfwd=tcp::1234-:1234 \
     -append "$BSP_ARGS" -kernel $PWD/../build-i386-rtems/t9p_rtems_test

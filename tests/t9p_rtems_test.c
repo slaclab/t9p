@@ -25,6 +25,7 @@ extern int main(int, char**);
 static void configure_network()
 {
 #if defined(__i386__)
+    // From EPICS base:
     // glorious hack to stub out useless EEPROM check
     // which takes sooooo longggg w/ QEMU
     // Writes a 'ret' instruction to immediatly return to the caller
@@ -38,6 +39,7 @@ static void configure_network()
         exit(EXIT_FAILURE);
     }
 
+    /** Setup loopback */
     rtems_bsd_ifconfig_lo0();
 
     char ipbuf[200];
@@ -66,6 +68,13 @@ static void configure_network()
     /** Display current network configuration */
     char* cmd[] = {"ifconfig", NULL};
     rtems_bsd_command_ifconfig(1, cmd);
+
+#if __RTEMS_MAJOR__ >= 6
+    rtems_debugger_register_tcp_remote();
+    rtems_printer printer;
+    rtems_print_printer_printf(&printer);
+    rtems_debugger_start("tcp", "1234", RTEMS_DEBUGGER_TIMEOUT, 1, &printer);
+#endif
 }
 
 static void* POSIX_Init(void* arg)
@@ -254,11 +263,7 @@ void bsp_predriver_hook(void)
 
 #define CONFIGURE_MAXIMUM_DRIVERS 40
 
-//#if defined(BSP_pc386) || defined(BSP_pc686)
 #define RTEMS_BSD_CONFIG_DOMAIN_PAGE_MBUFS_SIZE (64 * 1024 * 1024)
-//#elif defined(BSP_qoriq_e500)
-//#define RTEMS_BSD_CONFIG_DOMAIN_PAGE_MBUFS_SIZE (32 * 1024 * 1024)
-//#endif
 
 #define CONFIGURE_INIT
 

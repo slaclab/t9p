@@ -78,12 +78,13 @@ typedef struct t9p_context t9p_context_t;
 typedef struct t9p_handle* t9p_handle_t;
 
 /**< Logging levels */
-enum t9p_log {
-    T9P_LOG_DEBUG = -1,
+typedef enum t9p_log {
+    T9P_LOG_TRACE = -2,
+    T9P_LOG_DEBUG,
     T9P_LOG_INFO = 0,
     T9P_LOG_WARN,
     T9P_LOG_ERR,
-};
+} t9p_log_t;
 
 typedef struct t9p_opts {
     uint32_t max_write_data_size;       /**< Max amount of data that can be transferred in a write packet */
@@ -116,6 +117,9 @@ typedef struct t9p_opts {
 #define T9P_GETATTR_BASIC        0x000007ffULL
 #define T9P_GETATTR_ALL          0x00003fffULL
 
+/**
+ * \brief File attributes, used with t9p_getattr
+ */
 typedef struct t9p_attr {
     uint64_t valid;
     qid_t qid;
@@ -139,6 +143,9 @@ typedef struct t9p_attr {
     uint64_t data_version;
 } t9p_attr_t;
 
+/**
+ * \brief File system stats, used with t9p_statfs
+ */
 typedef struct t9p_statfs {
     uint32_t type;
     uint32_t bsize;
@@ -160,12 +167,49 @@ t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, cons
 void t9p_shutdown(t9p_context_t* context);
 
 t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path);
+
+/**
+ * \brief Closes a handle
+ * Unlike t9p_close, this will actually clunk the file handle allowing it to be reused for a different file.
+ * \param c Context
+ * \param h Handle
+ */
 void t9p_close_handle(t9p_context_t* c, t9p_handle_t h);
 
+/**
+ * \brief Opens a file for writing
+ * \param c Context
+ * \param h File handle
+ * \param mode Mode (i.e. T9P_OREAD, T9P_OWRITE, etc.)
+ */
 int t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode);
+
+/**
+ * \brief Closes a file handle
+ * This will not clunk the fid. In reality, this does almost nothing
+ */
 void t9p_close(t9p_handle_t handle);
 
+/**
+ * Read data from a file handle
+ * \param c Context
+ * \param h File handle
+ * \param offset Offset within the file, in bytes
+ * \param num Number of bytes to read
+ * \param outbuffer Buffer to hold the data
+ * \returns Number of bytes read, or a negative error code
+ */
 ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer);
+
+/**
+ * Write data to a file
+ * \param c Context
+ * \param h File handle
+ * \param offset Offset within the file, in bytes
+ * \param num Number of bytes to write
+ * \param inbuffer Buffer
+ * \returns Number of bytes written, or a negative error code
+ */
 ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer);
 
 /**
@@ -187,7 +231,7 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
  * \param name Name of the new directory
  * \param mode Mode (i.e. 0777 for o+rwx/g+rwx/u+rwx)
  * \param gid GID of the owner (or T9P_NOGID)
- * \param outqid Optional parameter to hold the qid of the new dir
+ * \param outqid [Optional] parameter to hold the qid of the new dir
  * \return < 0 on error
  */
 int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, qid_t* outqid);
@@ -202,8 +246,12 @@ int t9p_fsync(t9p_context_t* c, t9p_handle_t file);
 
 /**
  * Duplicates a file handle
+ * \param c Context
+ * \param todup File handle to duplicated
+ * \param handle Output parameter holding the parameter
+ * \returns < 0 on error
  */
-t9p_handle_t t9p_dup(t9p_context_t* c, t9p_handle_t todup);
+int t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle);
 
 /**
  * Performs a getattr on the specified file handle
@@ -229,6 +277,15 @@ int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs);
  */
 int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize);
 
+/**
+ * Creates a symlink to src at dst
+ * \param c Context
+ * \param dir Handle to the directory to create the symlink in
+ * \param dst Name of the actual symlink
+ * \param src Source of the symlink, i.e. where it points to
+ * \param gid GID of the new symlink
+ * \param oquid [Optional] output parameter holding the QID of the new symlink
+ */
 int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char* src, uint32_t gid, qid_t* oqid);
 
 /**
@@ -256,6 +313,11 @@ int t9p_is_valid(t9p_handle_t h);
  * TCP transport layer. Returns -1 if unsupported, otherwise fills out `tp`
  */
 int t9p_init_tcp_transport(t9p_transport_t* tp);
+
+/**
+ * \brief Sets the current log level of the context
+ */
+void t9p_set_log_level(t9p_context_t* c, t9p_log_t level);
 
 #ifdef __cplusplus
 }

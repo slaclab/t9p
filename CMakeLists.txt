@@ -39,6 +39,7 @@ if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
         rtemsbsp
         rtemscpu
         bsd
+        debugger
         m
     )
 
