@@ -23,6 +23,7 @@
 #include <linux/limits.h>
 #elif defined(__rtems__)
 #include <sys/limits.h>
+#include <rtems/version.h>
 #else
 #define PATH_MAX 256
 #endif
@@ -73,6 +74,7 @@ struct trans_pool {
     mutex_t* guard;
     uint32_t total;
     msg_queue_t* queue;
+    event_t* recv_ev;
 };
 
 struct t9p_context {
@@ -209,8 +211,14 @@ int tr_pool_init(struct trans_pool* q, uint32_t num) {
     if (!q->queue)
         return -1;
 
+    if (!(q->recv_ev = event_create())) {
+        msg_queue_destroy(q->queue);
+        return -1;
+    }
+
     if (!(q->guard = mutex_create())) {
         msg_queue_destroy(q->queue);
+        event_destroy(q->recv_ev);
         return -1;
     }
 
@@ -250,6 +258,7 @@ void tr_pool_destroy(struct trans_pool* q) {
 
     mutex_unlock(q->guard);
     mutex_destroy(q->guard);
+    event_destroy(q->recv_ev);
 }
 
 /**
@@ -291,6 +300,8 @@ struct trans_node* tr_enqueue(struct trans_pool* q, struct trans_node* us) {
         return NULL;
     }
 
+    /** Wake worker thread */
+    event_signal(q->recv_ev);
     return us;
 }
 
@@ -320,8 +331,8 @@ static int tr_send_recv(struct t9p_context* c, struct trans_node* n, struct tran
 
     n = tr_enqueue(&c->trans_pool, n);
     if (n == NULL) {
-        tr_release(&c->trans_pool, n);
-        return -1;
+        //tr_release(&c->trans_pool, n);
+        return -ENOMEM;
     }
 
     /** Wait until serviced (or timeout) */
@@ -330,7 +341,7 @@ static int tr_send_recv(struct t9p_context* c, struct trans_node* n, struct tran
           * leading to a use-after-free scenario. Maybe I need to add a flag to trans_node to indicate that it should 
           * be automatically released by the thread? */
         //tr_release(&c->trans_pool, n);
-        perror("wait failed");
+        printf("event_wait: %s\n", strerror(r));
         return -1;
     }
 
@@ -1274,7 +1285,7 @@ int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char*
         gid = c->opts.gid;
 
     struct trans_node* n = tr_get_node(&c->trans_pool);
-    if (!n) return -1;
+    if (!n) return -ENOMEM;
 
     if ((l = encode_Tsymlink(packet, sizeof(packet), n->tag, dir->fid, dst, src, gid)) < 0) {
         ERROR(c, "%s: Unable to encode Tsymlink\n", __FUNCTION__);
@@ -1304,6 +1315,118 @@ int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char*
     return 0;
 }
 
+struct _t9p_parse_dir_param {
+    struct t9p_dir_info** prev;
+    struct t9p_dir_info** head;
+    uint64_t* offset;
+};
+
+/**
+ * Used with decode_Rreaddir.
+ */
+static void _t9p_parse_dir_callback(void* param, struct Rreaddir_dir dir, const char* name) {
+    struct _t9p_parse_dir_param* dp = param;
+    struct t9p_dir_info* di = calloc(sizeof(struct t9p_dir_info) + dir.namelen + 1, 1);
+    di->qid = dir.qid;
+    di->type = dir.type;
+
+    memcpy(di->name, name, dir.namelen);
+    di->name[dir.namelen] = 0;
+
+    /** Set the previous node to us */
+    if (*dp->prev)
+        (*dp->prev)->next = di;
+    *dp->prev = di;
+    
+    /** Set head */
+    if (!*dp->head)
+        *dp->head = di;
+
+    /** Record the offset of this record; needed for additional Treaddir calls */
+    *dp->offset = dir.offset;
+}
+
+int t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs) {
+    char packet[PACKET_BUF_SIZE];
+    int l, status = 0;
+    *outdirs = NULL;
+    t9p_dir_info_t* prev = NULL, *head = NULL;
+
+    /** fid must be valid AND open */
+    if (!t9p_is_valid(dir) || !t9p_is_open(dir))
+        return -EBADF;
+    
+    /** Only work on dirs.. */
+    if (!(dir->qid.type & T9P_QID_DIR))
+        return -ENOTDIR;
+
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -ENOMEM;
+
+    /** Treaddir is a bit of a strange call. count does not refer to the number of records returned,
+     *  but instead refers to the number of bytes returned. In some ways this is better than the number
+     *  of records because we can constrain the number of bytes better than arbitrary length records.
+     *  Count will always be our packet buffer size minus the Rreaddir header size. Offset is adjusted
+     *  accordingly.
+     */
+    const uint32_t count = sizeof(packet) - sizeof(struct Rreaddir);
+    uint64_t offset = 0;
+    for (int i = 0; i < 999; ++i) {
+
+        if ((l = encode_Treaddir(packet, sizeof(packet), n->tag, dir->fid, offset, count)) < 0) {
+            ERROR(c, "%s: Unable to encode Treaddir\n", __FUNCTION__);
+            status = -EINVAL;
+            goto error;
+        }
+
+        struct trans tr = {
+            .data = packet,
+            .size = l,
+            .rdata = packet,
+            .rsize = sizeof(packet),
+            .rtype = T9P_TYPE_Rreaddir
+        };
+
+        if ((l = tr_send_recv(c, n, &tr)) < 0) {
+            ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _strerror(l));
+            status = l;
+            goto error;
+        }
+
+        /** NOTE: offset and prev will be set by _t9p_parse_dir_callback */
+        struct _t9p_parse_dir_param dp = {
+            .prev = &prev,
+            .head = &head,
+            .offset = &offset
+        };
+
+        struct Rreaddir rd;
+        if ((decode_Rreaddir(&rd, packet, l, _t9p_parse_dir_callback, &dp)) < 0) {
+            ERROR(c, "%s: Failed to decode Rreaddir\n", __FUNCTION__);
+            status = -EPROTO;
+            goto error;
+        }
+
+        /** Rreaddir returns count = 0 or offset = -1 when no more data is available to be read */
+        if (rd.count == 0 || offset == (uint64_t)-1)
+            break;
+    }
+
+    *outdirs = head;
+    return 0;
+error:
+    for (t9p_dir_info_t* d = *outdirs; d;) {
+        t9p_dir_info_t* dn = d->next;
+        free(d);
+        d = dn;
+    }
+    return status;
+}
+
+int t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file) {
+    
+}
+
 uint32_t t9p_get_iounit(t9p_handle_t h) {
     return h->iounit;
 }
@@ -1314,6 +1437,22 @@ int t9p_is_open(t9p_handle_t h) {
 
 int t9p_is_valid(t9p_handle_t h) {
     return !!(h->valid_mask & T9P_HANDLE_ACTIVE);
+}
+
+qid_t t9p_get_qid(t9p_handle_t h) {
+    if (h->valid_mask & T9P_HANDLE_QID_VALID)
+        return h->qid;
+    qid_t inval = {0};
+    return inval;
+}
+
+void t9p_free_dirs(t9p_dir_info_t* head) {
+    if (!head) return;
+    for (t9p_dir_info_t* d = head; d;) {
+        t9p_dir_info_t* dn = d->next;
+        free(d);
+        d = dn;
+    }
 }
 
 /********************************************************************/
@@ -1514,7 +1653,9 @@ static void* _t9p_thread_proc(void* param) {
 
         mutex_unlock(c->socket_lock);
 
-        usleep(1000);
+        /** Interruptible sleep */
+        event_wait(c->trans_pool.recv_ev, 1000);
+        //usleep(1000);
     }
 
     free(requests);
@@ -1540,13 +1681,6 @@ void* t9p_tcp_init() {
         free(ctx);
         return NULL;
     }
-
-    if (fcntl(ctx->sock, F_SETFL, O_NONBLOCK) < 0) {
-        perror("Failed to set O_NONBLOCK on socket");
-        close(ctx->sock);
-        free(ctx);
-        return NULL;
-    }    
     return ctx;
 }
 
@@ -1589,9 +1723,18 @@ int t9p_tcp_connect(void* context, const char* addr_or_file) {
         return -1;
     }
 
-    /** Set this after connect to avoid EAGAIN there */
+#if __RTEMS_MAJOR__ < 5
+    /** Nonblock for RTEMS legacy networking */
     int noblock = 1;
     assert(ioctl(ctx->sock, FIONBIO, &noblock) == 0);
+#else
+    /** Set nonblock */
+    if (fcntl(ctx->sock, F_SETFL, O_NONBLOCK) < 0) {
+        perror("Failed to set O_NONBLOCK on socket");
+        close(ctx->sock);
+        return 1;
+    }
+#endif
 
     return 0;
 }

@@ -30,6 +30,8 @@ enum {
 	T9P_TYPE_Rreadlink,
     T9P_TYPE_Tgetattr    = 24,
     T9P_TYPE_Rgetattr,
+	T9P_TYPE_Treaddir    = 40,
+	T9P_TYPE_Rreaddir,
 	T9P_TYPE_Tfsync      = 50,
 	T9P_TYPE_Rfsync,
 	T9P_TYPE_Tlock       = 52,
@@ -442,3 +444,32 @@ struct T9P_PACKED Rsymlink {
 };
 
 int decode_Rsymlink(struct Rsymlink* rs, const void* buf, size_t buflen);
+
+struct T9P_PACKED Treaddir {
+    T9P_COMMON_FIELDS
+    uint32_t fid;
+    uint64_t offset;
+    uint32_t count;
+};
+
+int encode_Treaddir(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count);
+
+/** Single directory entry */
+struct T9P_PACKED Rreaddir_dir {
+    qid_t qid;
+    uint64_t offset;
+    uint8_t type;
+    uint16_t namelen;
+    char name[];        /**< NOT null terminated */
+};
+
+struct T9P_PACKED Rreaddir {
+    T9P_COMMON_FIELDS
+    uint32_t count;
+    /*struct Rreaddir_dir dirs[]*/
+};
+
+/**
+ * Unlike other encode/decode functions, this one uses a callback pattern to avoid unnecessary memory allocations.
+ */
+int decode_Rreaddir(struct Rreaddir* rd, const void* buf, size_t buflen, void (*parse_dir_callback)(void*, struct Rreaddir_dir, const char*), void* param);

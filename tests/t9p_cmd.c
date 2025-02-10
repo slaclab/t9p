@@ -41,8 +41,34 @@ static int check_connection() {
     return 0;
 }
 
-void ls(const char* loc) {
+void ls(int argc, const char* const* argv) {
+    if (argc < 2) {
+        printf("usage: ls <path>\n");
+        return;
+    }
 
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("unable to open %s\n", argv[1]);
+        return;
+    }
+    
+    if (t9p_open(ctx, h, T9P_OREAD) < 0) {
+        printf("unable to open!\n");
+        return;
+    }
+    
+    t9p_dir_info_t* dirs;
+    if (t9p_readdir(ctx, h, &dirs) < 0) {
+        printf("ls failed\n");
+    }
+    else {
+        for (t9p_dir_info_t* d = dirs; d; d = d->next) {
+            printf(" %s\n", d->name);
+        }
+    }
+    
+    t9p_close_handle(ctx, h);
 }
 
 void hopen_cmd(int argc, const char* const* argv) {
@@ -395,6 +421,7 @@ struct command COMMANDS[] = {
     {"statfs", statfs_cmd},
     {"readlink", readlink_cmd},
     {"symlink", symlink_cmd},
+    {"ls", ls},
     {"help", help_cmd},
     {0,0}
 };

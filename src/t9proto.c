@@ -105,6 +105,8 @@ const char* t9p_type_string(int type) {
     case T9P_TYPE_Rreadlink:return "Rreadlink";
     case T9P_TYPE_Tsymlink: return "Tsymlink";
     case T9P_TYPE_Rsymlink: return "Rsymlink";
+    case T9P_TYPE_Rreaddir: return "Rreaddir";
+    case T9P_TYPE_Treaddir: return "Treaddir";
     default: return "Tunknown";
     }
 }
@@ -196,7 +198,7 @@ int encode_Tlopen(void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint32_
     struct Tlopen* tl = buf;
     tl->fid = BSWAP32(fid);
     tl->flags = BSWAP32(flags);
-    tl->size = BSWAP64(sizeof(*tl));
+    tl->size = BSWAP32(sizeof(*tl));
     tl->tag = BSWAP16(tag);
     tl->type = T9P_TYPE_Tlopen;
 
@@ -598,4 +600,77 @@ int decode_Rlerror(struct Rlerror* rl, const void* buf, size_t len) {
     rl->size = BSWAP32(rl->size);
     rl->tag = BSWAP16(rl->tag);
     return sizeof *rl;
+}
+
+int encode_Treaddir(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count) {
+    if (buflen < sizeof(struct Treaddir))
+        return -1;
+    
+    struct Treaddir* tr = buf;
+    tr->count = BSWAP32(count);
+    tr->type = T9P_TYPE_Treaddir;
+    tr->fid = BSWAP32(fid);
+    tr->offset = BSWAP64(offset);
+    tr->size = BSWAP32(sizeof(*tr));
+    tr->tag = BSWAP16(tag);
+    return sizeof *tr;
+}
+
+int decode_Rreaddir(struct Rreaddir* rd, const void* buf, size_t buflen, void (*parse_dir_callback)(void*, struct Rreaddir_dir, const char*), void* param) {
+    const uint8_t* bp = buf;
+    struct Rreaddir_dir hdr;
+    int n = 0;
+    uint32_t off = 0;
+
+    if (buflen < sizeof(*rd))
+        return -1;
+    
+    *rd = *(const struct Rreaddir*)buf;
+    rd->count = BSWAP32(rd->count);
+    rd->size = BSWAP32(rd->size);
+    rd->tag = BSWAP16(rd->tag);
+    
+    //*outdirs = calloc(sizeof(struct Rreaddir_dir*), rd->count);
+
+    while (off < rd->count) {
+        if (off+sizeof(hdr) >= rd->count) return -1;
+
+        hdr = *(const struct Rreaddir_dir*)(bp + off + sizeof(*rd)); /** off is relative to start of data (after hdr *rd) */
+        hdr.namelen = BSWAP16(hdr.namelen);
+        hdr.offset = BSWAP32(hdr.offset);
+        hdr.qid = swapqid(hdr.qid);
+
+        off += sizeof(hdr);
+        if (off+hdr.namelen > rd->count) return -1;
+        
+        parse_dir_callback(param, hdr, (const char*)(bp + off + sizeof(*rd)));
+        off += hdr.namelen;
+    }
+
+#if 0
+    for (uint32_t count = rd->count; count > 0; --count) {
+        hdr = *(struct Rreaddir_dir*)(bp + off);
+        off += sizeof(struct Rreaddir_dir);
+        if (off >= buflen)
+            return -1;
+        
+        hdr.qid = swapqid(hdr.qid);
+        hdr.offset = BSWAP32(hdr.offset);
+        hdr.namelen = BSWAP16(hdr.namelen);
+
+        if (off + hdr.namelen >= buflen)
+            return -1;
+
+        parse_dir_callback(param, hdr, (const char*)(bp + off));
+        
+        //outdirs[n++] = calloc(sizeof(hdr) + hdr.namelen + 1, 1);
+        //memcpy(outdirs[n], &hdr, sizeof(hdr) + hdr.namelen);
+    }
+#endif
+
+    return 0;
+    
+error:
+    //free(*outdirs);
+    return -1;
 }

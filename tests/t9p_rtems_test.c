@@ -18,6 +18,8 @@
 #include <rtems/rtems-debugger.h>
 #endif
 
+#define BSP_CMDLINE "-u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
+
 /** From t9p_cmd.c */
 extern int main(int, char**);
 
@@ -42,16 +44,6 @@ static void configure_network()
     /** Setup loopback */
     rtems_bsd_ifconfig_lo0();
 
-    char ipbuf[200];
-    const char* iparg = bsp_cmdline_arg("--ip");
-    strcpy(ipbuf, iparg ? iparg : "");
-    strtok(ipbuf, "=");
-    const char* ip = strtok(NULL, "=");
-
-    if (ip) {
-        printf("Using IP %s\n", ip);
-    }
-
     char* ifcmd[] = {
         "ifconfig",
         "em0",
@@ -69,7 +61,7 @@ static void configure_network()
     char* cmd[] = {"ifconfig", NULL};
     rtems_bsd_command_ifconfig(1, cmd);
 
-#if __RTEMS_MAJOR__ >= 6
+#if __RTEMS_MAJOR__ >= 6 && __i386__
     rtems_debugger_register_tcp_remote();
     rtems_printer printer;
     rtems_print_printer_printf(&printer);
@@ -81,7 +73,9 @@ static void* POSIX_Init(void* arg)
 {
     printf("** t9p RTEMS test application\n");
 
+#if __i386__
     printf("bsp_cmdline: %s\n", bsp_cmdline());
+#endif
 
     struct stat st;
     if (fstat(fileno(stdin), &st) < -1) {
@@ -140,8 +134,11 @@ static void* POSIX_Init(void* arg)
 
     /** Tokenize the BSP command line into something that can be consumed by t9p */
     char buf[1024];
+#if __i386__
     strcpy(buf, bsp_cmdline());
-
+#else
+    strcpy(buf, BSP_CMDLINE);
+#endif
     int n = 0;
     for (char* s = strtok(buf, " "); s && n < MAX_ARGS; s = strtok(NULL, " ")) {
         if (!strncmp(s, "--console", sizeof("--console")-1))

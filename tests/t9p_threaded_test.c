@@ -78,7 +78,6 @@ int main(int argc, char** argv) {
     t9p_opts_init(&opts);
     opts.log_level = T9P_LOG_DEBUG;
     opts.uid = uid;
-    opts.recv_timeo = 10;
     strcpy(opts.user, user);
     
     ctx = t9p_init(&trans, &opts, ap, ip, mntpoint);
@@ -164,8 +163,6 @@ static void* thread_proc(void* p) {
             abort();
             continue;
         }
-
-        //printf("%d: finished write\n", me);
 
         t9p_close(h);
         t9p_close_handle(c, h);

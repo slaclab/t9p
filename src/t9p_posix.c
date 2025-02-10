@@ -108,9 +108,9 @@ event_t* event_create() {
 int event_wait(event_t* ev, uint64_t timeout_ms) {
     struct timespec tv = {};
     clock_gettime(CLOCK_REALTIME, &tv);
-    tv.tv_nsec += (timeout_ms % 1000) * 1e6;
-    tv.tv_nsec %= 1000000000;
-    tv.tv_sec += (timeout_ms / 1000) + (tv.tv_nsec / 1000000);
+    uint64_t ns = tv.tv_nsec + timeout_ms * 1e6;
+    tv.tv_nsec = ns % 1000000000ULL;
+    tv.tv_sec += (ns / 1000000000ULL);
 
     pthread_mutex_lock(&ev->mutex);
     int r = 0;

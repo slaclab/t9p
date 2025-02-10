@@ -20,25 +20,28 @@ extern "C" {
 #define T9P_NOGID (~0U)
 
 /** Flags for Tlopen (these match Linux O_XXX bits)*/
-#define T9P_OREAD   00
-#define T9P_OWRITE  01
-#define T9P_ORDWR   02
-#define T9P_OEXEC   3
-#define T9P_OTRUNC  0x10
-#define T9P_ORCLOSE 0x40
-
-#define T9P_OEXCL 0x1000
+typedef enum t9p_open_flags {
+    T9P_OREAD       = 00,
+    T9P_OWRITE      = 01,
+    T9P_ORDWR       = 02,
+    T9P_OEXEC       = 3,
+    T9P_OTRUNC      = 0x10,
+    T9P_ORCLOSE     = 0x40,
+    T9P_OEXCL       = 0x1000,
+} t9p_open_flags_t;
 
 /** QID types */
-#define T9P_QID_DIR     0x80    /**< Directory */
-#define T9P_QID_APPEND  0x40    /**< File is append only */
-#define T9P_QID_EXCL    0x20    /**< Exclusive; only one handle at a time */
-#define T9P_QID_MOUNT   0x10    /**< Mount point */
-#define T9P_QID_AUTH    0x8     /**< Auth file */
-#define T9P_QID_MP      0x4     /**< Non-backed up file */
-#define T9P_QID_SYMLINK 0x2     /**< Symbolic link */
-#define T9P_QID_LINK    0x1     /**< Hard link */
-#define T9P_QID_FILE    0x0     /**< Normal file */
+typedef enum t9p_qid_type {
+    T9P_QID_DIR     = 0x80,    /**< Directory */
+    T9P_QID_APPEND  = 0x40,    /**< File is append only */
+    T9P_QID_EXCL    = 0x20,    /**< Exclusive; only one handle at a time */
+    T9P_QID_MOUNT   = 0x10,    /**< Mount point */
+    T9P_QID_AUTH    = 0x8,     /**< Auth file */
+    T9P_QID_MP      = 0x4,     /**< Non-backed up file */
+    T9P_QID_SYMLINK = 0x2,     /**< Symbolic link */
+    T9P_QID_LINK    = 0x1,     /**< Hard link */
+    T9P_QID_FILE    = 0x0,     /**< Normal file */
+} t9p_qid_type_t;
 
 /**
  * Transport flags
@@ -62,6 +65,8 @@ typedef ssize_t(*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/, 
  * Transport interface.
  * this abstracts out some platform specific behavior (i.e. socket creation/read/write). This must be provided by
  * users of the library.
+ * Method descriptions:
+ *   recv: Recv some bytes. Should be non-blocking, i.e. returns immediately if no bytes are available to be read.
  */
 typedef struct t9p_transport {
     t9p_init_t init;
@@ -100,22 +105,24 @@ typedef struct t9p_opts {
 } t9p_opts_t;
 
 /** Flags for t9p_getattr */
-#define T9P_GETATTR_MODE         0x00000001ULL
-#define T9P_GETATTR_NLINK        0x00000002ULL
-#define T9P_GETATTR_UID          0x00000004ULL
-#define T9P_GETATTR_GID          0x00000008ULL
-#define T9P_GETATTR_RDEV         0x00000010ULL
-#define T9P_GETATTR_ATIME        0x00000020ULL
-#define T9P_GETATTR_MTIME        0x00000040ULL
-#define T9P_GETATTR_CTIME        0x00000080ULL
-#define T9P_GETATTR_INO          0x00000100ULL
-#define T9P_GETATTR_SIZE         0x00000200ULL
-#define T9P_GETATTR_BLOCKS       0x00000400ULL
-#define T9P_GETATTR_BTIME        0x00000800ULL
-#define T9P_GETATTR_GEN          0x00001000ULL
-#define T9P_GETATTR_DATA_VERSION 0x00002000ULL
-#define T9P_GETATTR_BASIC        0x000007ffULL
-#define T9P_GETATTR_ALL          0x00003fffULL
+typedef enum t9p_getattr_mask {
+    T9P_GETATTR_MODE         = 0x00000001ULL,
+    T9P_GETATTR_NLINK        = 0x00000002ULL,
+    T9P_GETATTR_UID          = 0x00000004ULL,
+    T9P_GETATTR_GID          = 0x00000008ULL,
+    T9P_GETATTR_RDEV         = 0x00000010ULL,
+    T9P_GETATTR_ATIME        = 0x00000020ULL,
+    T9P_GETATTR_MTIME        = 0x00000040ULL,
+    T9P_GETATTR_CTIME        = 0x00000080ULL,
+    T9P_GETATTR_INO          = 0x00000100ULL,
+    T9P_GETATTR_SIZE         = 0x00000200ULL,
+    T9P_GETATTR_BLOCKS       = 0x00000400ULL,
+    T9P_GETATTR_BTIME        = 0x00000800ULL,
+    T9P_GETATTR_GEN          = 0x00001000ULL,
+    T9P_GETATTR_DATA_VERSION = 0x00002000ULL,
+    T9P_GETATTR_BASIC        = 0x000007ffULL,
+    T9P_GETATTR_ALL          = 0x00003fffULL,
+} t9p_getattr_mask_t;
 
 /**
  * \brief File attributes, used with t9p_getattr
@@ -158,12 +165,34 @@ typedef struct t9p_statfs {
     uint32_t namelen;
 } t9p_statfs_t;
 
+typedef struct t9p_dir_info {
+    struct t9p_dir_info* next;
+    qid_t qid;
+    uint8_t type;
+    char name[];
+} t9p_dir_info_t;
+
 /**
  * \brief Init the options table with sensible defaults
  */
 void t9p_opts_init(struct t9p_opts* opts);
 
+/**
+ * Init a t9p context
+ * \param transport Pointer to a transport structure, defining the transport operations
+ * \param opts Pointer to options @see t9p_opts_t
+ * \param apath Remote path
+ * \param addr IP address of the server, with port
+ * \param mntpoint Mount point
+ * \returns Context pointer, or NULL if there was an error during connection
+ */
 t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, const char* apath, const char* addr, const char* mntpoint);
+
+/**
+ * Shutdown a t9p context. This will clunk all fids, disconnect and shutdown transport, and free the context pointer.
+ * Do not use `context` after this method is called
+ * \param context Context pointer
+ */
 void t9p_shutdown(t9p_context_t* context);
 
 t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path);
@@ -255,6 +284,10 @@ int t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle);
 
 /**
  * Performs a getattr on the specified file handle
+ * \param c Context
+ * \param h File handle
+ * \param attr Output buffer to hold the attr info
+ * \param mask Attribute mask, @see T9P_GETATTR_XXX macros
  */
 int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask);
 
@@ -289,6 +322,22 @@ int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPath
 int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char* src, uint32_t gid, qid_t* oqid);
 
 /**
+ * Gets a list of all files in a directory
+ * \param c Context
+ * \param dir Handle of the directory. This must be opened with at least O_READ with t9p_open!
+ * \param dirs Output pointer holding a linked list of directories. Free with t9p_free_dirs @see t9p_dir_info_t
+ * \return < 0 on error
+ */
+int t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** dirs);
+
+/**
+ * \brief Frees a list of directories returned by t9p_readdir
+ */
+void t9p_free_dirs(t9p_dir_info_t* head);
+
+int t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file);
+
+/**
  * Returns the file handle associated with the root
  */
 t9p_handle_t t9p_get_root(t9p_context_t* c);
@@ -297,6 +346,11 @@ t9p_handle_t t9p_get_root(t9p_context_t* c);
  * Returns the IO size for an opened handle. If it's not opened, then this will return 0
  */
 uint32_t t9p_get_iounit(t9p_handle_t h);
+
+/** 
+ * Returns the QID of the opened handle
+ */
+qid_t t9p_get_qid(t9p_handle_t h);
 
 /**
  * Remove the object referred to by fid
