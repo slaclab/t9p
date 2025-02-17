@@ -125,10 +125,10 @@ typedef enum t9p_getattr_mask {
 } t9p_getattr_mask_t;
 
 /**
- * \brief File attributes, used with t9p_getattr and t9p_setattr
+ * \brief File attributes, used with t9p_getattr
  */
-typedef struct t9p_attr {
-    uint64_t valid;
+typedef struct t9p_getattr {
+    uint32_t valid;
     qid_t qid;
     uint32_t mode;
     uint32_t uid;
@@ -148,7 +148,37 @@ typedef struct t9p_attr {
     uint64_t btime_nsec;
     uint64_t gen;
     uint64_t data_version;
-} t9p_attr_t;
+} t9p_getattr_t;
+
+/**
+ * \brief Flags for t9p_setattr
+ */
+typedef enum t9p_setattr_mask {
+    T9P_SETATTR_MODE        = 0x1UL,
+    T9P_SETATTR_UID         = 0x2UL,
+    T9P_SETATTR_GID         = 0x4UL,
+    T9P_SETATTR_SIZE        = 0x8UL,
+    T9P_SETATTR_ATIME       = 0x10UL,
+    T9P_SETATTR_MTIME       = 0x20UL,
+    T9P_SETATTR_CTIME       = 0x40UL,
+    T9P_SETATTR_ATIME_SET   = 0x80UL,
+    T9P_SETATTR_MTIME_SET   = 0x100UL,
+} t9p_setattr_mask_t;
+
+/**
+ * \brief File attributes for t9p_setattr
+ */
+typedef struct t9p_setattr {
+    uint64_t valid;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t size;
+    uint64_t atime_sec;
+    uint64_t atime_nsec;
+    uint64_t mtime_sec;
+    uint64_t mtime_nsec;
+} t9p_setattr_t;
 
 /**
  * \brief File system stats, used with t9p_statfs
@@ -296,7 +326,7 @@ int t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle);
  * \param attr Output buffer to hold the attr info
  * \param mask Attribute mask, @see T9P_GETATTR_XXX macros
  */
-int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask);
+int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t mask);
 
 /**
  * Performs a statfs operation with Tstatfs/Rstatfs. Much like statfs(2) on Linux
@@ -368,16 +398,19 @@ int t9p_renameat(t9p_context_t* c, t9p_handle_t olddirfid, const char* oldname, 
 
 /**
  * Returns the file handle associated with the root
+ * \param c Context
  */
 t9p_handle_t t9p_get_root(t9p_context_t* c);
 
 /**
- * Returns the IO size for an opened handle. If it's not opened, then this will return 0
+ * Returns the IO size for an opened handle. If it's not opened, or the handle is invalid, then this will return 0
+ * \param h A valid file handle 
  */
 uint32_t t9p_get_iounit(t9p_handle_t h);
 
 /** 
  * Returns the QID of the opened handle
+ * \param h A valid file handle
  */
 qid_t t9p_get_qid(t9p_handle_t h);
 
@@ -388,6 +421,60 @@ qid_t t9p_get_qid(t9p_handle_t h);
  * \param h File handle. After this operation, this handle will be clunked
  */
 int t9p_remove(t9p_context_t* c, t9p_handle_t h);
+
+/**
+ * Set file attributes
+ * \param c Context
+ * \param h File handle to set attributes on
+ * \param mask File attributes mask @see t9p_setattr_mask
+ * \param attr Attributes to set @see t9p_setattr
+ * \returns < 0 on error
+ */
+int t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_setattr* attr);
+
+/**
+ * Performs a truncate operation on the file. This is functionally similar to ftruncate(2)
+ * This expands to a setattr call. Fails if h is NOT a file!
+ * \param c Context
+ * \param h File handle to truncate (does not need to be open?)
+ * \param size Size, in bytes, to truncate at
+ * \returns < 0 on error
+ */
+int t9p_truncate(t9p_context_t* c, t9p_handle_t h, uint64_t size);
+
+/**
+ * Performs a chown operation on the handle.
+ * This expands to a setattr call
+ * \param c Context
+ * \param h File handle
+ * \param uid user ID to own the handle. If T9P_NOUID is supplied, we skip the uid chown
+ * \param gid group ID to own the handle. If T9P_NOGID is supplied, we skip the gid chown
+ * \returns < 0 on error
+ */
+int t9p_chown(t9p_context_t* c, t9p_handle_t h, uint32_t uid, uint32_t gid);
+
+/**
+ * Sets the modification time of the handle to the current time on the server.
+ * Same as running `touch myfile` on the server.
+ * This expands to a setattr call
+ * \param c Context
+ * \param h File handle
+ * \param mtime If set to 1, we set mtime
+ * \param atime If set to 1, we set atime
+ * \param ctime If set to 1, we set ctime
+ * \returns < 0 on error
+ */
+int t9p_touch(t9p_context_t* c, t9p_handle_t h, int mtime, int atime, int ctime);
+
+/**
+ * Performs a chmod operation on the handle.
+ * This expands to a setattr call with the mode mask. @see t9p_setattr
+ * \param c Context
+ * \param h Handle
+ * \param mode Linux mode bits (i.e. 0777)
+ * \returns < 0 on error
+ */
+int t9p_chmod(t9p_context_t* c, t9p_handle_t h, mode_t mode);
 
 /** Returns TRUE if open for I/O, FALSE otherwise */
 int t9p_is_open(t9p_handle_t h);
@@ -400,17 +487,17 @@ int t9p_is_dir(t9p_handle_t h);
 
 /** Returns TRUE if the handle is a file, FALSE otherwise */
 static inline int t9p_is_file(t9p_handle_t h) {
-    return !!(t9p_get_qid(h).type & T9P_QID_FILE);
+    return !t9p_is_dir(h);
 }
 
 /** Returns TRUE if the handle is a symlink, FALSE otherwise */
 static inline int t9p_is_symlink(t9p_handle_t h) {
-    return !!(t9p_get_qid(h).type & T9P_QID_SYMLINK);
+    return !!(t9p_get_qid(h).type == T9P_QID_SYMLINK);
 }
 
 /** Returns TRUE if the handle is a hard link, FALSE otherwise */
 static inline int t9p_is_link(t9p_handle_t h) {
-    return !!(t9p_get_qid(h).type & T9P_QID_LINK);
+    return !!(t9p_get_qid(h).type == T9P_QID_LINK);
 }
 
 /**

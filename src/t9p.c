@@ -17,6 +17,7 @@
 #include <time.h>
 #include <string.h>
 #include <pthread.h>
+#include <inttypes.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -365,6 +366,9 @@ static ssize_t _recv_type(struct t9p_context* c, void* data, size_t sz, int flag
         n = c->trans.recv(c->conn, data, sz, 0);
         if (n >= sizeof(struct TRcommon)) {
             struct TRcommon* com = data;
+            if (com->tag != tag) {
+                printf("Discarding mismatched tag. %d expected, got %d\n", tag, com->tag);
+            }
             if (com->type == type || ((com->type == T9P_TYPE_Rlerror || com->type == T9P_TYPE_Rerror) && com->tag == tag))
                 return n;
         }
@@ -374,6 +378,7 @@ static ssize_t _recv_type(struct t9p_context* c, void* data, size_t sz, int flag
         int diffMs = ((tp.tv_sec - start.tv_sec) * 1000) + ((tp.tv_nsec - start.tv_nsec) / 1000000);
         if (diffMs >= timeoutMs)
             break;
+        usleep(1000);
     }
     return -ETIMEDOUT;
 }
@@ -415,9 +420,9 @@ static int _version_handshake(struct t9p_context* c) {
     }
 
     /** Listen for the return message */
-    ssize_t read = _recv_type(c, buf, sizeof(buf)-1, 0, T9P_TYPE_Rversion, 0);
+    ssize_t read = _recv_type(c, buf, sizeof(buf)-1, 0, T9P_TYPE_Rversion, T9P_NOTAG);
     if (read < 0) {
-        ERROR(c, "Rversion handshake failed: read timeout\n");
+        ERROR(c, "Rversion handshake failed: %s\n", strerror(errno));
         return -1;
     }
 
@@ -695,6 +700,10 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     int nwcount = 0;
     char* comps[MAX_PATH_COMPONENTS];
 
+    /** If we start with a slash, strip it off. Files are assumed to be relative to root already */
+    while (*path == '/')
+        ++path;
+
     /** Split path into components for walk */
     char* sp = NULL;
     for (char* s = strtok_r(p, "/", &sp); s && *s; s = strtok_r(NULL, "/", &sp)) {
@@ -712,7 +721,7 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     char packet[PACKET_BUF_SIZE];
     int l = 0;
     if ((l = encode_Twalk(packet, sizeof(packet), n->tag, parent->fid, fh->h.fid, nwcount, (const char* const*)comps)) < 0) {
-        ERROR(c, "%s: unable to encode Twalk\n", __FUNCTION__);
+        ERROR(c, "%s(%s): unable to encode Twalk\n", __FUNCTION__, path);
         tr_release(&c->trans_pool, n);
         goto error;
     }
@@ -727,7 +736,7 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: Twalk send/recv failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        ERROR(c, "%s(%s): Twalk send/recv failed: %s\n", __FUNCTION__, path, _t9p_strerror(l));
         goto error;
     }
 
@@ -906,7 +915,7 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
 }
 
 
-int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_attr* attr, uint64_t mask) {
+int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t mask) {
     char packet[PACKET_BUF_SIZE];
 
     if (!t9p_is_valid(h))
@@ -1512,6 +1521,91 @@ int t9p_renameat(t9p_context_t* c, t9p_handle_t olddirfid, const char* oldname, 
     return 0;
 }
 
+int t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_setattr* attr) {
+    char packet[PACKET_BUF_SIZE];
+    ssize_t l;
+
+    if (!t9p_is_valid(h))
+        return -EBADF;
+
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -ENOMEM;
+
+    if ((l = encode_Tsetattr(packet, sizeof(packet), n->tag, h->fid, mask, attr)) < 0) {
+        ERROR(c, "%s: Unable to encode Tsetattr\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
+        return -EINVAL;
+    }
+
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .rtype = T9P_TYPE_Rsetattr,
+    };
+
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
+        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        return l;
+    }
+
+    struct Rsetattr rs;
+    if (decode_Rsetattr(&rs, packet, l) < 0) {
+        ERROR(c, "%s: failed to decode Rsetattr\n", __FUNCTION__);
+        return -EPROTO;
+    }
+
+    return 0;
+}
+
+int t9p_truncate(t9p_context_t* c, t9p_handle_t h, uint64_t size) {
+    if (!t9p_is_file(h))
+        return -EBADF; /** FIXME: what error?? */
+    
+    struct t9p_setattr sa = {
+        .size = size,
+    };
+    return t9p_setattr(c, h, T9P_SETATTR_SIZE, &sa);
+}
+
+int t9p_chown(t9p_context_t* c, t9p_handle_t h, uint32_t uid, uint32_t gid) {
+    uint32_t mask = 0;
+    if (uid != T9P_NOUID)
+        mask |= T9P_SETATTR_UID;
+    if (gid != T9P_NOGID)
+        mask |= T9P_SETATTR_GID;
+
+    if (!mask)
+        return 0; /** No-op */
+    
+    struct t9p_setattr sa = {
+        .uid = uid,
+        .gid = gid
+    };
+    return t9p_setattr(c, h, mask, &sa);
+}
+
+int t9p_touch(t9p_context_t* c, t9p_handle_t h, int mtime, int atime, int ctime) {
+    struct t9p_setattr sa = {0};
+    int mask = 0;
+    if (mtime)
+        mask |= T9P_SETATTR_MTIME;
+    if (atime)
+        mask |= T9P_SETATTR_ATIME;
+    if (ctime)
+        mask |= T9P_SETATTR_CTIME;
+
+    return t9p_setattr(c, h, mask, &sa);
+}
+
+int t9p_chmod(t9p_context_t* c, t9p_handle_t h, mode_t mode) {
+    struct t9p_setattr sa = {
+        .mode = mode
+    };
+    return t9p_setattr(c, h, T9P_SETATTR_MODE, &sa);
+}
+
 uint32_t t9p_get_iounit(t9p_handle_t h) {
     return h->iounit;
 }
@@ -1541,7 +1635,7 @@ void t9p_free_dirs(t9p_dir_info_t* head) {
 }
 
 int t9p_is_dir(t9p_handle_t h) {
-    return (t9p_get_qid(h).type & T9P_QID_DIR) || (t9p_get_qid(h).type & T9P_QID_MOUNT);
+    return (t9p_get_qid(h).type == T9P_QID_DIR) || (t9p_get_qid(h).type == T9P_QID_MOUNT);
 }
 
 void t9p_get_parent_dir(const char* file_or_dir, char* outbuf, size_t outsize) {

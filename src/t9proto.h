@@ -11,6 +11,7 @@
 #endif
 
 struct t9p_stat;
+struct t9p_setattr;
 
 #define T9P_NOTAG (~(uint16_t)0)
 #define T9P_NOFID (~(uint32_t)0)
@@ -30,6 +31,8 @@ enum {
 	T9P_TYPE_Rreadlink,
     T9P_TYPE_Tgetattr    = 24,
     T9P_TYPE_Rgetattr,
+	T9P_TYPE_Tsetattr    = 26,
+	T9P_TYPE_Rsetattr,
 	T9P_TYPE_Treaddir    = 40,
 	T9P_TYPE_Rreaddir,
 	T9P_TYPE_Tfsync      = 50,
@@ -506,3 +509,25 @@ struct T9P_PACKED Rrenameat {
 };
 
 int decode_Rrenameat(struct Rrenameat* ra, const void* buf, size_t buflen);
+
+struct T9P_PACKED Tsetattr {
+    T9P_COMMON_FIELDS
+    uint32_t fid;
+    uint32_t valid;
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t fsize;
+    uint64_t atime_sec;
+    uint64_t atime_nsec;
+    uint64_t mtime_sec;
+    uint64_t mtime_nsec;
+};
+
+int encode_Tsetattr(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t valid, const struct t9p_setattr* attr);
+
+struct T9P_PACKED Rsetattr {
+    T9P_COMMON_FIELDS
+};
+
+int decode_Rsetattr(struct Rsetattr* rs, const void* buf, size_t buflen);

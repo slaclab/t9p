@@ -18,6 +18,8 @@
 #include <rtems/rtems-debugger.h>
 #endif
 
+#include "t9p_rtems.h"
+
 #define BSP_CMDLINE "-u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
 /** From t9p_cmd.c */
@@ -67,6 +69,9 @@ static void configure_network()
     rtems_print_printer_printf(&printer);
     rtems_debugger_start("tcp", "1234", RTEMS_DEBUGGER_TIMEOUT, 1, &printer);
 #endif
+
+    /** Register 9P fs backend */
+    t9p_rtems_register();
 }
 
 static void* POSIX_Init(void* arg)
@@ -182,6 +187,8 @@ void bsp_predriver_hook(void)
 #define CONFIGURE_POSIX_INIT_THREAD_ENTRY_POINT POSIX_Init
 #define CONFIGURE_POSIX_INIT_THREAD_STACK_SIZE  (128*1024)
 #define CONFIGURE_MAXIMUM_POSIX_THREADS 2
+
+#define CONFIGURE_MINIMUM_TASK_STACK_SIZE 65536
 
 #define CONFIGURE_MAXIMUM_PERIODS 	5
 #define CONFIGURE_MICROSECONDS_PER_TICK 10000

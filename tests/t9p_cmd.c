@@ -210,7 +210,7 @@ void getattr_cmd(int argc, const char* const* argv) {
         return;
     }
 
-    struct t9p_attr a;
+    struct t9p_getattr a;
     if (t9p_getattr(ctx, h, &a, T9P_GETATTR_ALL) < 0) {
         printf("getattr failed\n");
     }
@@ -236,6 +236,52 @@ void getattr_cmd(int argc, const char* const* argv) {
         printf(" data_version:  %"PRIu64"\n", a.data_version);
     }
 
+    t9p_close_handle(ctx, h);
+}
+
+void touch_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+    
+    if (argc < 2) {
+        printf("usage: touch <path>\n");
+        return;
+    }
+    
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("failed to open %s\n", argv[1]);
+        return;
+    }
+    
+    if (t9p_touch(ctx, h, 1, 1, 0) < 0) {
+        printf("failed to touch file\n");
+    }
+    
+    t9p_close_handle(ctx, h);
+}
+
+void truncate_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+    
+    if (argc < 3) {
+        printf("usage: truncate <path> <size>\n");
+        return;
+    }
+    
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+    if (!h) {
+        printf("failed to open %s\n", argv[1]);
+        return;
+    }
+    
+    int r;
+    if ((r = t9p_truncate(ctx, h, atoi(argv[2]))) < 0) {
+        printf("failed to truncate %s at %s: %s\n", argv[1], argv[2], strerror(-r));
+        return;
+    }
+    
     t9p_close_handle(ctx, h);
 }
 
@@ -495,6 +541,8 @@ struct command COMMANDS[] = {
     {"ls", ls},
     {"unlink", unlink_cmd},
     {"mv", mv_cmd},
+    {"touch", touch_cmd},
+    {"truncate", truncate_cmd},
     {"help", help_cmd},
     {0,0}
 };

@@ -1,6 +1,7 @@
 
 #define _T9P_PROTO_IMPL
 
+#include "t9p.h"
 #include "t9proto.h"
 #include <string.h>
 #include <stdlib.h>
@@ -719,4 +720,36 @@ int decode_Rrenameat(struct Rrenameat* ra, const void* buf, size_t buflen) {
     ra->size = BSWAP32(ra->size);
     ra->tag = BSWAP16(ra->tag);
     return sizeof(*ra);
+}
+
+int encode_Tsetattr(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t valid, const struct t9p_setattr* attr) {
+    if (buflen < sizeof(struct Tsetattr))
+        return -1;
+    struct Tsetattr* ts = buf;
+    ts->type = T9P_TYPE_Tsetattr;
+    ts->tag = BSWAP16(tag);
+    ts->size = BSWAP32(sizeof(struct Tsetattr));
+
+    ts->fid = BSWAP32(fid);
+    ts->valid = BSWAP32(valid);
+    ts->mode = BSWAP32(attr->mode);
+    ts->uid = BSWAP32(attr->uid);
+    ts->gid = BSWAP32(attr->gid);
+    ts->fsize = BSWAP64(attr->size);
+    ts->atime_sec = BSWAP64(attr->atime_sec);
+    ts->atime_nsec = BSWAP64(attr->atime_nsec);
+    ts->mtime_sec = BSWAP64(attr->mtime_sec);
+    ts->mtime_nsec = BSWAP64(attr->mtime_nsec);
+    
+    return sizeof *ts;
+}
+
+int decode_Rsetattr(struct Rsetattr* rs, const void* buf, size_t buflen) {
+    if (buflen < sizeof(*rs))
+        return -1;
+    
+    *rs = *(const struct Rsetattr*)buf;
+    rs->size = BSWAP32(rs->size);
+    rs->tag = BSWAP16(rs->tag);
+    return sizeof(*rs);
 }

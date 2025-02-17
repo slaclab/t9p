@@ -23,7 +23,7 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | rename        |   |   |
 | readlink      | Y |   |
 | getattr       | Y |   |
-| setattr       |   |   |
+| setattr       | Y | trunc, chmod, chown, etc. wrappers too  |
 | xattrwalk     |   |   |
 | xattrcreate   |   |   |
 | readdir       | Y |   |
@@ -36,7 +36,7 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | unlinkat      | Y |   |
 
 
-Implementation percentage: 18/28 (64%)
+Implementation percentage: 19/28 (67%)
 
 ## Building
 

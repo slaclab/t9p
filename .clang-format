@@ -3,3 +3,5 @@ BasedOnStyle: LLVM
 IndentWidth: 4
 PointerAlignment: Left
 ColumnLimit: 140
+AlwaysBreakAfterDefinitionReturnType: All
+BreakAfterReturnType: All
