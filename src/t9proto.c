@@ -23,10 +23,6 @@
 #define BSWAP64(x) (x)
 #endif
 
-#define ISWAP16(x) (x) = BSWAP16(x)
-#define ISWAP32(x) (x) = BSWAP32(x)
-#define ISWAP64(x) (x) = BSWAP64(x)
-
 qid_t swapqid(qid_t in) {
     qid_t q = {
         .path = BSWAP64(in.path),
@@ -171,10 +167,9 @@ int decode_Rattach(struct Rattach* out, const void* buf, size_t buflen) {
         return -1;
 
     *out = *(struct Rattach*)buf;
-    ISWAP32(out->size);
-    ISWAP16(out->tag);
-    ISWAP32(out->qid.version);
-    ISWAP64(out->qid.path);
+    out->size = BSWAP32(out->size);
+    out->tag = BSWAP16(out->tag);
+    out->qid = swapqid(out->qid);
     return sizeof(*out);
 }
 
@@ -223,9 +218,9 @@ int decode_Rwalk(struct Rwalk* rw, const void* buf, size_t buflen, qid_t** outqi
         return -1;
 
     *rw = *(struct Rwalk*)buf;
-    ISWAP32(rw->size);
-    ISWAP16(rw->tag);
-    ISWAP16(rw->nwqid);
+    rw->size = BSWAP32(rw->size);
+    rw->tag = BSWAP16(rw->tag);
+    rw->nwqid = BSWAP16(rw->nwqid);
     const qid_t* qs = (const qid_t*)((uint8_t*)buf + offsetof(struct Rwalk, nwqid));
 
     *outqids = calloc(rw->nwqid, sizeof(qid_t));
@@ -646,31 +641,82 @@ int decode_Rreaddir(struct Rreaddir* rd, const void* buf, size_t buflen, void (*
         parse_dir_callback(param, hdr, (const char*)(bp + off + sizeof(*rd)));
         off += hdr.namelen;
     }
-
-#if 0
-    for (uint32_t count = rd->count; count > 0; --count) {
-        hdr = *(struct Rreaddir_dir*)(bp + off);
-        off += sizeof(struct Rreaddir_dir);
-        if (off >= buflen)
-            return -1;
-        
-        hdr.qid = swapqid(hdr.qid);
-        hdr.offset = BSWAP32(hdr.offset);
-        hdr.namelen = BSWAP16(hdr.namelen);
-
-        if (off + hdr.namelen >= buflen)
-            return -1;
-
-        parse_dir_callback(param, hdr, (const char*)(bp + off));
-        
-        //outdirs[n++] = calloc(sizeof(hdr) + hdr.namelen + 1, 1);
-        //memcpy(outdirs[n], &hdr, sizeof(hdr) + hdr.namelen);
-    }
-#endif
-
     return 0;
     
 error:
     //free(*outdirs);
     return -1;
+}
+
+/**
+ * size[4] Tunlinkat tag[2] dirfd[4] name[s] flags[4]
+ * size[4] Runlinkat tag[2]
+ */
+int encode_Tunlinkat(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name, uint32_t flags) {
+    const uint16_t nlen = strlen(name);
+    const uint32_t totalSize = sizeof(struct Tunlinkat) + nlen + sizeof(flags) + sizeof(nlen);
+    if (buflen < totalSize)
+        return -1;
+    
+    struct Tunlinkat* tu = buf;
+    tu->dirfd = BSWAP32(dfid);
+    tu->tag = BSWAP16(tag);
+    tu->type = T9P_TYPE_Tunlinkat;
+    tu->size = BSWAP32(totalSize);
+    
+    uint8_t* off = sizeof(*tu) + (uint8_t*)buf;
+    wrstr(&off, name, nlen);
+    wr32(&off, flags);
+
+    return totalSize;
+}
+
+int decode_Runlinkat(struct Runlinkat* ru, const void* buf, size_t buflen) {
+    if (buflen < sizeof(*ru))
+        return -1;
+    
+    const struct Runlinkat* cu = buf;
+    *ru = *cu;
+    ru->size = BSWAP32(cu->size);
+    ru->tag = BSWAP16(cu->tag);
+    return sizeof(*cu);
+}
+
+/**
+ * size[4] Trenameat tag[2] olddirfid[4] oldname[s] newdirfid[4] newname[s]
+ * size[4] Rrenameat tag[2]
+ */
+int encode_Trenameat(void* buf, size_t buflen, uint16_t tag, uint32_t olddirfd, const char* oldname, uint32_t newdirfd, const char* newname) {
+    const uint16_t oldnamelen = strlen(oldname);
+    const uint16_t newnamelen = strlen(newname);
+    const uint32_t totalSize = sizeof(struct TRcommon) + sizeof(olddirfd) + sizeof(oldnamelen) 
+        + sizeof(newnamelen) + oldnamelen + newnamelen + sizeof(newdirfd);
+
+    if (buflen < totalSize) {
+        return -1;
+    }
+    
+    struct TRcommon* com = buf;
+    com->tag = BSWAP16(tag);
+    com->type = T9P_TYPE_Trenameat;
+    com->size = BSWAP32(totalSize);
+    
+    uint8_t* ptr = sizeof(*com) + (uint8_t*)buf;
+    wr32(&ptr, olddirfd);
+    wrstr(&ptr, oldname, oldnamelen);
+    wr32(&ptr, newdirfd);
+    wrstr(&ptr, newname, newnamelen);
+    
+    return totalSize;
+}
+
+int decode_Rrenameat(struct Rrenameat* ra, const void* buf, size_t buflen) {
+    if (buflen < sizeof(*ra))
+        return -1;
+    
+    const struct Rrenameat* ia = buf;
+    *ra = *ia;
+    ra->size = BSWAP32(ra->size);
+    ra->tag = BSWAP16(ra->tag);
+    return sizeof(*ra);
 }

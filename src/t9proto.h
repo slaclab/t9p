@@ -473,3 +473,36 @@ struct T9P_PACKED Rreaddir {
  * Unlike other encode/decode functions, this one uses a callback pattern to avoid unnecessary memory allocations.
  */
 int decode_Rreaddir(struct Rreaddir* rd, const void* buf, size_t buflen, void (*parse_dir_callback)(void*, struct Rreaddir_dir, const char*), void* param);
+
+struct T9P_PACKED Tunlinkat {
+    T9P_COMMON_FIELDS
+    uint32_t dirfd;
+    /*uint16_t namelen;*/
+    /*char name[];*/
+    /*uint32_t flags*/ /* Why is this after the name? Really? */
+};
+
+int encode_Tunlinkat(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name, uint32_t flags);
+
+struct T9P_PACKED Runlinkat {
+    T9P_COMMON_FIELDS
+};
+
+int decode_Runlinkat(struct Runlinkat* ru, const void* buf, size_t buflen);
+
+struct T9P_PACKED Trenameat {
+    T9P_COMMON_FIELDS
+    uint32_t olddirfd;
+    uint16_t oldnamelen;
+    char oldname[];
+    /*uint32_t newdirfid*/
+    /*newname[s]*/
+};
+
+int encode_Trenameat(void* buf, size_t buflen, uint16_t tag, uint32_t olddirfd, const char* oldname, uint32_t newdirfd, const char* newname);
+
+struct T9P_PACKED Rrenameat {
+    T9P_COMMON_FIELDS
+};
+
+int decode_Rrenameat(struct Rrenameat* ra, const void* buf, size_t buflen);

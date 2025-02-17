@@ -125,7 +125,7 @@ typedef enum t9p_getattr_mask {
 } t9p_getattr_mask_t;
 
 /**
- * \brief File attributes, used with t9p_getattr
+ * \brief File attributes, used with t9p_getattr and t9p_setattr
  */
 typedef struct t9p_attr {
     uint64_t valid;
@@ -171,6 +171,13 @@ typedef struct t9p_dir_info {
     uint8_t type;
     char name[];
 } t9p_dir_info_t;
+
+/**
+ * Flags for use with t9p_unlinkat.
+ */
+enum t9p_unlinkat_flags {
+    T9P_AT_REMOVEDIR = 0x200,
+};
 
 /**
  * \brief Init the options table with sensible defaults
@@ -335,7 +342,29 @@ int t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** dirs);
  */
 void t9p_free_dirs(t9p_dir_info_t* head);
 
-int t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file);
+/**
+ * Unlinks a file or directory.
+ * According to diod's docs, if the server returns -ENOTSUPP you should fallback to
+ * the more widely supported Tremove.
+ * \param c Context
+ * \param dir Parent directory containing the file/directory
+ * \param file File/directory to unlink
+ * \param flags Flags. @see t9p_unlinkat_flags
+ * \returns < 0 on error
+ */
+int t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t flags);
+
+/**
+ * Renames a file or directory
+ * Similar to unlinkat, if this returns -ENOTSUPP, use the other rename call instead
+ * \param c Context
+ * \param olddirfid Old directory's FID
+ * \param oldname Old file name
+ * \param newdirfid New directory's FID
+ * \param newname New file's name
+ * \returns < 0 on error
+ */
+int t9p_renameat(t9p_context_t* c, t9p_handle_t olddirfid, const char* oldname, t9p_handle_t newdirfid, const char* newname);
 
 /**
  * Returns the file handle associated with the root
@@ -353,7 +382,10 @@ uint32_t t9p_get_iounit(t9p_handle_t h);
 qid_t t9p_get_qid(t9p_handle_t h);
 
 /**
- * Remove the object referred to by fid
+ * Remove the object referred to by fid, and clunk fid.
+ * This will *always* clunk the fid pointed to by h, even if the remove fails on the server
+ * \param c Context
+ * \param h File handle. After this operation, this handle will be clunked
  */
 int t9p_remove(t9p_context_t* c, t9p_handle_t h);
 
@@ -362,6 +394,24 @@ int t9p_is_open(t9p_handle_t h);
 
 /** Returns TRUE if the handle is valid, FALSE otherwise */
 int t9p_is_valid(t9p_handle_t h);
+
+/** Returns TRUE if the handle is a directory, FALSE otherwise */
+int t9p_is_dir(t9p_handle_t h);
+
+/** Returns TRUE if the handle is a file, FALSE otherwise */
+static inline int t9p_is_file(t9p_handle_t h) {
+    return !!(t9p_get_qid(h).type & T9P_QID_FILE);
+}
+
+/** Returns TRUE if the handle is a symlink, FALSE otherwise */
+static inline int t9p_is_symlink(t9p_handle_t h) {
+    return !!(t9p_get_qid(h).type & T9P_QID_SYMLINK);
+}
+
+/** Returns TRUE if the handle is a hard link, FALSE otherwise */
+static inline int t9p_is_link(t9p_handle_t h) {
+    return !!(t9p_get_qid(h).type & T9P_QID_LINK);
+}
 
 /**
  * TCP transport layer. Returns -1 if unsupported, otherwise fills out `tp`
@@ -372,6 +422,14 @@ int t9p_init_tcp_transport(t9p_transport_t* tp);
  * \brief Sets the current log level of the context
  */
 void t9p_set_log_level(t9p_context_t* c, t9p_log_t level);
+
+/**
+ * \brief Utility function to return the parent of the directory.
+ * This only operates on a string, and it effectively strips the last chunk after the last pathsep
+ */
+void t9p_get_parent_dir(const char* file_or_dir, char* outbuf, size_t outsize);
+
+void t9p_get_basename(const char* file_or_dir, char* outbuf, size_t outsize);
 
 #ifdef __cplusplus
 }

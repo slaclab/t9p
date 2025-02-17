@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <unistd.h>
+#include <inttypes.h>
 
 #ifdef __linux__
 #include <linux/limits.h>
@@ -218,21 +219,21 @@ void getattr_cmd(int argc, const char* const* argv) {
         printf(" mode:          %d\n", a.mode);
         printf(" uid:           %d\n", a.uid);
         printf(" gid:           %d\n", a.gid);
-        printf(" nlink:         %ld\n", a.nlink);
-        printf(" rdev:          %ld\n", a.rdev);
-        printf(" fsize:         %ld\n", a.fsize);
-        printf(" blksize:       %ld\n", a.blksize);
-        printf(" blocks:        %ld\n", a.blocks);
-        printf(" atime_sec:     %ld\n", a.atime_sec);
-        printf(" atime_nsec:    %ld\n", a.atime_nsec);
-        printf(" mtime_sec:     %ld\n", a.mtime_sec);
-        printf(" mtime_nsec:    %ld\n", a.mtime_nsec);
-        printf(" ctime_sec:     %ld\n", a.ctime_sec);
-        printf(" ctime_nsec:    %ld\n", a.ctime_nsec);
-        printf(" btime_sec:     %ld\n", a.btime_sec);
-        printf(" btime_nsec:    %ld\n", a.btime_nsec);
-        printf(" gen:           %ld\n", a.gen);
-        printf(" data_version:  %ld\n", a.data_version);
+        printf(" nlink:         %"PRIu64"\n", a.nlink);
+        printf(" rdev:          %"PRIu64"\n", a.rdev);
+        printf(" fsize:         %"PRIu64"\n", a.fsize);
+        printf(" blksize:       %"PRIu64"\n", a.blksize);
+        printf(" blocks:        %"PRIu64"\n", a.blocks);
+        printf(" atime_sec:     %"PRIu64"\n", a.atime_sec);
+        printf(" atime_nsec:    %"PRIu64"\n", a.atime_nsec);
+        printf(" mtime_sec:     %"PRIu64"\n", a.mtime_sec);
+        printf(" mtime_nsec:    %"PRIu64"\n", a.mtime_nsec);
+        printf(" ctime_sec:     %"PRIu64"\n", a.ctime_sec);
+        printf(" ctime_nsec:    %"PRIu64"\n", a.ctime_nsec);
+        printf(" btime_sec:     %"PRIu64"\n", a.btime_sec);
+        printf(" btime_nsec:    %"PRIu64"\n", a.btime_nsec);
+        printf(" gen:           %"PRIu64"\n", a.gen);
+        printf(" data_version:  %"PRIu64"\n", a.data_version);
     }
 
     t9p_close_handle(ctx, h);
@@ -265,6 +266,76 @@ void put_cmd(int argc, const char* const* argv) {
     }
 
     t9p_close_handle(ctx, h);
+}
+
+void mv_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+    
+    if (argc < 3) {
+        printf("usage: mv <oldpath> <newpath>\n");
+        return;
+    }
+    
+    char oparent[1024];
+    t9p_get_parent_dir(argv[1], oparent, sizeof(oparent));
+    char ofile[1024];
+    t9p_get_basename(argv[1], ofile, sizeof(ofile));
+    
+    char nparent[1024];
+    t9p_get_parent_dir(argv[2], nparent, sizeof(nparent));
+    char nfile[1024];
+    t9p_get_basename(argv[2], nfile, sizeof(nfile));
+    
+    t9p_handle_t odirh, ndirh;
+    if ((odirh = t9p_open_handle(ctx, NULL, oparent)) == NULL) {
+        printf("unable to open %s\n", oparent);
+        return;
+    }
+    
+    if ((ndirh = t9p_open_handle(ctx, NULL, nparent)) == NULL) {
+        printf("unable to open %s\n", nparent);
+        t9p_close_handle(ctx, odirh);
+        return;
+    }
+    
+    int r = t9p_renameat(ctx, odirh, ofile, ndirh, nfile);
+    if (r < 0) {
+        printf("failed to rename: %s\n", strerror(-r));
+    }
+    
+    t9p_close_handle(ctx, odirh);
+    t9p_close_handle(ctx, ndirh);
+}
+
+void unlink_cmd(int argc, const char* const* argv) {
+    if (!check_connection())
+        return;
+    
+    if (argc < 2) {
+        printf("usage: unlink <path>\n");
+        return;
+    }
+    
+    char parent[1024];
+    t9p_get_parent_dir(argv[1], parent, sizeof(parent));
+    char file[1024];
+    t9p_get_basename(argv[1], file, sizeof(file));
+    
+    t9p_handle_t h = t9p_open_handle(ctx, NULL, parent);
+    if (!h) {
+        printf("unable to find parent %s\n", parent);
+        return;
+    }
+
+    int r;
+    if ((r=t9p_unlinkat(ctx, h, file, T9P_AT_REMOVEDIR)) < 0) {
+        printf("unable to unlink %s/%s: %s\n", parent, file, strerror(r));
+        return;
+    }
+
+    t9p_close_handle(ctx, h);
+    printf("removing %s/%s\n", parent, file);
 }
 
 void rm_cmd(int argc, const char* const* argv) {
@@ -307,13 +378,13 @@ void statfs_cmd(int argc, const char* const* argv) {
         return;
     }
 
-    printf("bavail:  %ld\n", statfs.bavail);
-    printf("bfree:   %ld\n", statfs.bfree);
-    printf("blocks:  %ld\n", statfs.blocks);
-    printf("fsid:    %ld\n", statfs.fsid);
-    printf("ffree:   %ld\n", statfs.ffree);
+    printf("bavail:  %"PRIu64"\n", statfs.bavail);
+    printf("bfree:   %"PRIu64"\n", statfs.bfree);
+    printf("blocks:  %"PRIu64"\n", statfs.blocks);
+    printf("fsid:    %"PRIu64"\n", statfs.fsid);
+    printf("ffree:   %"PRIu64"\n", statfs.ffree);
     printf("namelen: %d\n", statfs.namelen);
-    printf("files:   %ld\n", statfs.files);
+    printf("files:   %"PRIu64"\n", statfs.files);
     printf("type:    %d\n", statfs.type);
     printf("bsize:   %d\n", statfs.bsize);
 
@@ -422,6 +493,8 @@ struct command COMMANDS[] = {
     {"readlink", readlink_cmd},
     {"symlink", symlink_cmd},
     {"ls", ls},
+    {"unlink", unlink_cmd},
+    {"mv", mv_cmd},
     {"help", help_cmd},
     {0,0}
 };

@@ -13,7 +13,7 @@ for d in $DIRS; do
     for f in $FILES; do
         base64 /dev/urandom | head -c 8192 > "$d/$f";
     done
-    ln -s a.txt link
-    ln -s link link2
-    ln -s b.txt link3
+    ln -s a.txt link 2> /dev/null || true
+    ln -s link link2 2> /dev/null || true
+    ln -s b.txt link3 2> /dev/null || true
 done

@@ -32,11 +32,11 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | getlock       |   |   |
 | link          |   |   |
 | mkdir         | Y |   |
-| renameat      |   |   |
-| unlinkat      |   |   |
+| renameat      | Y |   |
+| unlinkat      | Y |   |
 
 
-Implementation percentage: 16/28 (57%)
+Implementation percentage: 18/28 (64%)
 
 ## Building
 

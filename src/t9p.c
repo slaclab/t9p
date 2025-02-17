@@ -138,6 +138,7 @@ static void _perror(struct t9p_context* c, const char* msg, struct TRcommon* err
 static int _iserror(struct TRcommon* err);
 static int _clunk_sync(struct t9p_context* c, int fid);
 static int _can_rw_fid(t9p_handle_t h, int write);
+static const char* _t9p_strerror(int e);
 
 /** t9p_context 'methods' */
 static struct t9p_handle_node* _alloc_handle(struct t9p_context* c);
@@ -341,7 +342,7 @@ static int tr_send_recv(struct t9p_context* c, struct trans_node* n, struct tran
           * leading to a use-after-free scenario. Maybe I need to add a flag to trans_node to indicate that it should 
           * be automatically released by the thread? */
         //tr_release(&c->trans_pool, n);
-        printf("event_wait: %s\n", strerror(r));
+        printf("event_wait: %s\n", _t9p_strerror(r));
         return -1;
     }
 
@@ -379,7 +380,7 @@ static ssize_t _recv_type(struct t9p_context* c, void* data, size_t sz, int flag
 
 static void _perror(struct t9p_context* c, const char* msg, struct TRcommon* err) {
     if (err->type == T9P_TYPE_Rlerror) {
-        ERROR(c, "%s: %s\n", msg, strerror(((struct Rlerror*)err)->ecode));
+        ERROR(c, "%s: %s\n", msg, _t9p_strerror(((struct Rlerror*)err)->ecode));
     }
     else if (err->tag == T9P_TYPE_Rerror) {
         struct Rerror* re = (struct Rerror*)err;
@@ -390,7 +391,7 @@ static void _perror(struct t9p_context* c, const char* msg, struct TRcommon* err
     }
 }
 
-static const char* _strerror(int err) {
+static const char* _t9p_strerror(int err) {
     return strerror(err < 0 ? -err : err);
 }
 
@@ -726,7 +727,7 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: Twalk send/recv failed: %s\n", __FUNCTION__, strerror(l));
+        ERROR(c, "%s: Twalk send/recv failed: %s\n", __FUNCTION__, _t9p_strerror(l));
         goto error;
     }
 
@@ -737,7 +738,11 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
         goto error;
     }
 
-    fh->h.qid = qids[rw.nwqid-1];
+    /** We have cloned the fid */
+    if (rw.nwqid == 0)
+        fh->h.qid = parent->qid;
+    else
+        fh->h.qid = qids[rw.nwqid-1];
     fh->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
     free(qids);
 
@@ -887,7 +892,7 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: Twrite failed: %s\n", __FUNCTION__, _strerror(l));
+        ERROR(c, "%s: Twrite failed: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -969,6 +974,10 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
     if (!t9p_is_valid(parent))
         parent = t9p_get_root(c);
 
+    /** Use default gid if none provided */
+    if (gid == T9P_NOGID)
+        gid = c->opts.gid;
+
     /** Duplicate fid of parent */
     t9p_handle_t h;
     if (t9p_dup(c, parent, &h) < 0)
@@ -991,7 +1000,7 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: Tlcreate failed: %s\n", __FUNCTION__, strerror(l));
+        ERROR(c, "%s: Tlcreate failed: %s\n", __FUNCTION__, _t9p_strerror(l));
         t9p_close_handle(c, h);
         return l;
     }
@@ -1262,7 +1271,7 @@ int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPath
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, strerror(l));
+        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -1300,7 +1309,7 @@ int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char*
         .rtype = T9P_TYPE_Rsymlink,
     };
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _strerror(l));
+        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -1388,7 +1397,7 @@ int t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs) {
         };
 
         if ((l = tr_send_recv(c, n, &tr)) < 0) {
-            ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _strerror(l));
+            ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
             status = l;
             goto error;
         }
@@ -1423,8 +1432,84 @@ error:
     return status;
 }
 
-int t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file) {
+int t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t flags) {
+    char packet[PACKET_BUF_SIZE];
+    ssize_t l;
+
+    if (!t9p_is_valid(dir))
+        return -EBADF;
+
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -ENOMEM;
+
+    if ((l = encode_Tunlinkat(packet, sizeof(packet), n->tag, dir->fid, file, flags)) < 0) {
+        ERROR(c, "%s: Unable to encode Tunlinkat\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
+        return -EINVAL;
+    }
+
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .rtype = T9P_TYPE_Runlinkat,
+    };
+
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
+        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(-l));
+        return l;
+    }
+
+    struct Runlinkat ru;
+    if (decode_Runlinkat(&ru, packet, l) < 0) {
+        ERROR(c, "%s: failed to decode Runlinkat\n", __FUNCTION__);
+        return -EPROTO;
+    }
+
+    return 0;
+}
+
+int t9p_renameat(t9p_context_t* c, t9p_handle_t olddirfid, const char* oldname, t9p_handle_t newdirfid, const char* newname) {
+    char packet[PACKET_BUF_SIZE];
+    ssize_t l;
+
+    if (!t9p_is_valid(olddirfid) || !t9p_is_valid(newdirfid))
+        return -EBADF;
     
+    if (!t9p_is_dir(olddirfid) || !t9p_is_dir(newdirfid))
+        return -ENOTDIR;
+
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) return -ENOMEM;
+
+    if ((l = encode_Trenameat(packet, sizeof(packet), n->tag, 
+          olddirfid->fid, oldname, newdirfid->fid, newname)) < 0) {
+        ERROR(c, "%s: Unable to encode Trenameat\n", __FUNCTION__);
+        tr_release(&c->trans_pool, n);
+        return -EINVAL;
+    }
+
+    struct trans tr = {
+        .data = packet,
+        .size = l,
+        .rdata = packet,
+        .rsize = sizeof(packet),
+        .rtype = T9P_TYPE_Rrenameat,
+    };
+
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
+        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        return l;
+    }
+
+    struct Rrenameat ru;
+    if (decode_Rrenameat(&ru, packet, l) < 0) {
+        ERROR(c, "%s: failed to decode Rrenameat\n", __FUNCTION__);
+        return -EPROTO;
+    }
+
+    return 0;
 }
 
 uint32_t t9p_get_iounit(t9p_handle_t h) {
@@ -1453,6 +1538,33 @@ void t9p_free_dirs(t9p_dir_info_t* head) {
         free(d);
         d = dn;
     }
+}
+
+int t9p_is_dir(t9p_handle_t h) {
+    return (t9p_get_qid(h).type & T9P_QID_DIR) || (t9p_get_qid(h).type & T9P_QID_MOUNT);
+}
+
+void t9p_get_parent_dir(const char* file_or_dir, char* outbuf, size_t outsize) {
+    strNcpy(outbuf, file_or_dir, outsize);
+    char* s = strrchr(outbuf, '/');
+    if (!s) {
+        strNcpy(outbuf, "/", outsize);
+        return;
+    }
+
+    while (s >= outbuf && *s == '/')
+        *(s--) = 0;
+    
+    if (outbuf[0] == 0)
+        outbuf[0] = '/';
+}
+
+void t9p_get_basename(const char* file_or_dir, char* outbuf, size_t outsize) {
+    const char* last = strrchr(file_or_dir, '/');
+    if (!last)
+        strNcpy(outbuf, file_or_dir, outsize);
+    else
+        strNcpy(outbuf, last+1, outsize);
 }
 
 /********************************************************************/
@@ -1552,13 +1664,13 @@ static void* _t9p_thread_proc(void* param) {
                 if (errno == EAGAIN) {
                     continue; /** Just try again next iteration */
                 }
-                ERROR(c, "send: Failed to send header data: %s\n", strerror(errno));
+                ERROR(c, "send: Failed to send header data: %s\n", _t9p_strerror(errno));
                 continue;
             }
 
             /** Send "body" data */
             if ((l = c->trans.send(c->conn, node->tr.data, node->tr.size, 0)) < 0) {
-                ERROR(c, "send: Failed to send data: %s\n", strerror(errno));
+                ERROR(c, "send: Failed to send data: %s\n", _t9p_strerror(errno));
                 continue;
             }
 
@@ -1654,7 +1766,7 @@ static void* _t9p_thread_proc(void* param) {
         mutex_unlock(c->socket_lock);
 
         /** Interruptible sleep */
-        event_wait(c->trans_pool.recv_ev, 1000);
+        event_wait(c->trans_pool.recv_ev, 1);
         //usleep(1000);
     }
 
@@ -1692,7 +1804,7 @@ int t9p_tcp_disconnect(void* context) {
 #else
     if (connect(ctx->sock, &s, sizeof(s)) < 0) {
 #endif
-        fprintf(stderr, "Disconnect failed: %s\n", strerror(errno));
+        fprintf(stderr, "Disconnect failed: %s\n", _t9p_strerror(errno));
         return -1;
     }
 
@@ -1719,7 +1831,7 @@ int t9p_tcp_connect(void* context, const char* addr_or_file) {
         addr.sin_port = htons(T9P_DEFAULT_PORT);
 
     if (connect(ctx->sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "Connect failed to %s: %s\n", addr_or_file, strerror(errno));
+        fprintf(stderr, "Connect failed to %s: %s\n", addr_or_file, _t9p_strerror(errno));
         return -1;
     }
 
@@ -1753,7 +1865,7 @@ ssize_t t9p_tcp_send(void* context, const void* data, size_t len, int flags) {
 ssize_t t9p_tcp_recv(void* context, void* data, size_t len, int flags) {
     int rflags = 0;
     if (flags & T9P_RECV_PEEK)
-        rflags |= MSG_PEEK | MSG_DONTWAIT;
+        rflags |= MSG_PEEK;
 
     struct tcp_context* pc = context;
     /** Read behavior instead of peek */
