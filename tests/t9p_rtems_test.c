@@ -18,6 +18,7 @@
 #include <rtems/rtems-debugger.h>
 #endif
 
+#include "rtems_test_cfg.h"
 #include "t9p_rtems.h"
 
 #define BSP_CMDLINE "-u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
@@ -124,6 +125,10 @@ static void* POSIX_Init(void* arg)
     char b;
     b = getchar();
     if (b == 's') {
+        mkdir("/test", 0777);
+        const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID "";
+        mount("10.0.2.2:10002:"RTEMS_TEST_PATH"/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts);
+
         rtems_status_code status = rtems_shell_init("shell", 8192, 100, "/dev/console", false, true, NULL);
         if (status != RTEMS_SUCCESSFUL) {
             printf("** Error starting RTEMS shell: %s\n", rtems_status_text(status));

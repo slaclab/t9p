@@ -1,0 +1,8 @@
+/**
+ * Basic test configuration 
+ */
+#pragma once
+
+#define RTEMS_TEST_UID "${RTEMS_TEST_UID}"
+#define RTEMS_TEST_GID "${RTEMS_TEST_GID}"
+#define RTEMS_TEST_PATH "${RTEMS_TEST_PATH}"

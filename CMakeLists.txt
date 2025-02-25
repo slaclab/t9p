@@ -25,6 +25,12 @@ add_library(
 )
 
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
+    execute_process(COMMAND id -u OUTPUT_VARIABLE RTEMS_TEST_UID OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND id -g OUTPUT_VARIABLE RTEMS_TEST_GID OUTPUT_STRIP_TRAILING_WHITESPACE)
+    set(RTEMS_TEST_PATH "${CMAKE_CURRENT_LIST_DIR}")
+
+    configure_file(tests/rtems_test_cfg.h.in ${CMAKE_CURRENT_BINARY_DIR}/rtems_test_cfg.h)
+
     # RTEMS test code
     add_executable(
         t9p_rtems_test
@@ -46,6 +52,7 @@ if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
     target_include_directories(
         t9p_rtems_test PRIVATE
         "src"
+        "${CMAKE_CURRENT_BINARY_DIR}"
     )
 else()
     # Threaded test executable

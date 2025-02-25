@@ -1,4 +1,4 @@
-
+#define _T9P_NO_POSIX_MQ
 #include "t9p_platform.h"
 #include "t9p_rtems.h"
 #include "t9p.h"
@@ -152,6 +152,7 @@ typedef struct t9p_rtems_node {
 typedef struct t9p_rtems_fs_info {
     t9p_context_t* c;
     t9p_rtems_mount_opts_t opts;
+    rtems_recursive_mutex mutex;
 } t9p_rtems_fs_info_t;
 
 /**************************************************************************************
@@ -234,11 +235,18 @@ static int min(int x, int y) {
  * FS ops implementation
  **************************************************************************************/
 
+static t9p_rtems_node_t* t9p_rtems_fs_get_node(const rtems_filesystem_location_info_t* loc) {
+    return loc->node_access;
+}
+
+static t9p_rtems_node_t* t9p_rtems_iop_get_node(const rtems_libio_t* iop) {
+    return iop->data1;
+}
+
 static int t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void *data) {
     /*
 mount -t 9p -o uid=1000,gid=1000,ip=10.0.2.2:10002,port=10002,user=jeremy /home/jeremy/dev/lw9p/tests/fs /test
     */
-    TRACE
     if (!data) {
         errno = EINVAL;
         return -1;
@@ -250,10 +258,33 @@ mount -t 9p -o uid=1000,gid=1000,ip=10.0.2.2:10002,port=10002,user=jeremy /home/
         strncpy(buf, (const char*)data, sizeof(buf)-1);
     buf[sizeof(buf)-1] = 0;
 
+    char* apath = mt_entry->dev;
     char ip[128] = {0};
     char user[128] = {0};
     char path[256] = {0};
     int port = 10002, uid = T9P_NOUID, gid = T9P_NOGID;
+    
+    /** Parse source (in format IP:[PORT:]/path/on/server) */
+    char* sip = strtok(mt_entry->dev, ":");
+    if (sip)
+        strcpy(ip, sip);
+
+    /** Next will be port or apath */
+    char* sportOrPath = strtok(NULL, ":");
+    if (sportOrPath && *sportOrPath != '/') {
+        port = atoi(sportOrPath);
+        apath = strtok(NULL, ":");
+    }
+    else {
+        apath = sportOrPath;
+    }
+    
+    /** No apath is invalid */
+    if (!apath) {
+        printf("No apath provided, mount must be in format IP:[PORT:]/path/on/server\n");
+        errno = EINVAL;
+        return -1;
+    }
 
     for (char* r = strtok(buf, ","); r; r = strtok(NULL, ",")) {
         if (!strncmp(r, "port", strlen("port"))) {
@@ -289,9 +320,10 @@ mount -t 9p -o uid=1000,gid=1000,ip=10.0.2.2:10002,port=10002,user=jeremy /home/
     /** Configure FS info and opts */
     mt_entry->fs_info = calloc(sizeof(t9p_rtems_fs_info_t), 1);
     t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
+    rtems_recursive_mutex_init(&fi->mutex, "9PMUTEX");
     t9p_opts_init(&fi->opts.opts);
     fi->opts.opts.gid = gid;
-    //fi->opts.opts.uid = uid;
+    fi->opts.opts.uid = uid;
     fi->opts.transport = t9p_rtems_trans_tcp;
     fi->opts.opts.log_level = T9P_LOG_TRACE;
     strcpy(fi->opts.ip, ip);
@@ -312,7 +344,7 @@ mount -t 9p -o uid=1000,gid=1000,ip=10.0.2.2:10002,port=10002,user=jeremy /home/
         return -1;
     }
     
-    fi->c = t9p_init(&t, &fi->opts.opts, mt_entry->dev, ip, mt_entry->target);
+    fi->c = t9p_init(&t, &fi->opts.opts, apath, ip, mt_entry->target);
     if (fi->c == NULL)
         return -1;
 
@@ -330,6 +362,7 @@ mount -t 9p -o uid=1000,gid=1000,ip=10.0.2.2:10002,port=10002,user=jeremy /home/
 
 static void t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry) {
     t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
+    rtems_recursive_mutex_destroy(&fi->mutex);
     t9p_shutdown(fi->c);
 }
 
@@ -339,11 +372,13 @@ static bool t9p_rtems_fs_is_dir(rtems_filesystem_eval_path_context_t* ctx, void*
 }
 
 static void t9p_rtems_fs_lock(const rtems_filesystem_mount_table_entry_t* mt_entry) {
-
+    t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
+    rtems_recursive_mutex_lock(&fi->mutex);
 }
 
 static void t9p_rtems_fs_unlock(const rtems_filesystem_mount_table_entry_t* mt_entry) {
-
+    t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
+    rtems_recursive_mutex_unlock(&fi->mutex);
 }
 
 static rtems_filesystem_eval_path_generic_status
@@ -419,6 +454,8 @@ static void t9p_rtems_fs_evalpath(rtems_filesystem_eval_path_context_t *ctx) {
     else {
         current->handlers = &t9p_file_ops;
     }
+    
+    rtems_filesystem_eval_path_clear_path(ctx);
 }
 
 static int t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry) {
@@ -434,7 +471,7 @@ static int t9p_rtems_fs_symlink(const rtems_filesystem_location_info_t *parentlo
     const char *name, size_t namelen, const char *target)
 {
     t9p_rtems_fs_info_t* fi = parentloc->mt_entry->fs_info;
-    t9p_rtems_node_t* n = parentloc->node_access;
+    t9p_rtems_node_t* n = t9p_rtems_fs_get_node(parentloc);
     int r = t9p_symlink(fi->c, n->h, target, name, T9P_NOGID, NULL);
     if (r < 0) {
         errno = -r;
@@ -457,7 +494,7 @@ static int t9p_rtems_fs_mknod(const rtems_filesystem_location_info_t *parentloc,
     const char *name, size_t namelen, mode_t mode, dev_t dev)
 {
     t9p_rtems_fs_info_t* fi = parentloc->mt_entry->fs_info;
-    t9p_rtems_node_t* n = parentloc->node_access;
+    t9p_rtems_node_t* n = t9p_rtems_fs_get_node(parentloc);
     /** This operation will immediately clunk the new fid */
     int r = t9p_create(fi->c, NULL, n->h, name, mode, T9P_NOGID, 0);
     if (r < 0) {
@@ -474,8 +511,9 @@ static bool t9p_rtems_fs_are_nodes_equal(const rtems_filesystem_location_info_t 
 }
 
 static void t9p_rtems_fs_freenode(const rtems_filesystem_location_info_t *loc) {
+    printf("node free\n");
     t9p_rtems_fs_info_t* fi = loc->mt_entry->fs_info;
-    t9p_rtems_node_t* n = loc->node_access;
+    t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
     t9p_close_handle(fi->c, n->h);
     n->h = NULL;
     n->c = NULL;
@@ -484,7 +522,7 @@ static void t9p_rtems_fs_freenode(const rtems_filesystem_location_info_t *loc) {
 
 static int t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t *loc) {
     t9p_rtems_fs_info_t* fi = loc->mt_entry->fs_info;
-    t9p_rtems_node_t* n = loc->node_access;
+    t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
     
     t9p_handle_t nh;
     int r;
@@ -505,7 +543,7 @@ static int t9p_rtems_fs_link(const rtems_filesystem_location_info_t *parentloc,
 
 static long t9p_rtems_fs_readlink(const rtems_filesystem_location_info_t *loc, char *buf, size_t bufsize) {
     t9p_rtems_fs_info_t* fi = loc->mt_entry->fs_info;
-    t9p_rtems_node_t* n = loc->node_access;
+    t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
     
     int r = t9p_readlink(fi->c, n->h, buf, bufsize);
     if (r < 0) {
@@ -518,11 +556,11 @@ static long t9p_rtems_fs_readlink(const rtems_filesystem_location_info_t *loc, c
 static int t9p_rtems_fs_rename(const rtems_filesystem_location_info_t *oldparentloc, const rtems_filesystem_location_info_t *oldloc,
     const rtems_filesystem_location_info_t *newparentloc, const char *name, size_t namelen)
 {
-    
+    return -1;
 }
 
 static int t9p_rtems_fs_chown(const rtems_filesystem_location_info_t* loc, uid_t owner, gid_t group) {
-    t9p_rtems_node_t* n = loc->node_access;
+    t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
     int r = t9p_chown(n->c, n->h, owner, group);
     if (r < 0) {
         errno = -r;
@@ -532,7 +570,7 @@ static int t9p_rtems_fs_chown(const rtems_filesystem_location_info_t* loc, uid_t
 }
 
 static int t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t *loc, mode_t mode) {
-    t9p_rtems_node_t* n = loc->node_access;
+    t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
     int r = t9p_chmod(n->c, n->h, mode);
     if (r < 0) {
         errno = -r;
@@ -546,7 +584,7 @@ static int t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t *loc, mode
  **************************************************************************************/
 
 static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode) {
-    t9p_rtems_node_t* n = iop->data1;
+    t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
     int r = t9p_open(n->c, n->h, rtems_mode_to_t9p(mode));
     if (r < 0) {
         errno = -r;
@@ -564,14 +602,14 @@ static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, int oflag, 
 }
 
 static int t9p_rtems_file_close(rtems_libio_t* iop) {
-    t9p_rtems_node_t* n = iop->data1;
+    t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
     t9p_close(n->h);
     return 0;
 }
 
 static ssize_t t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count) {
     uint8_t* p = buffer;
-    t9p_rtems_node_t* n = iop->data1;
+    t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
     
     /** Break reads into pieces in case iounit is smaller than the requested read size */
     const size_t iounit = t9p_get_iounit(n->h);
@@ -591,7 +629,7 @@ static ssize_t t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t coun
 
 static ssize_t t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count) {
     const uint8_t* p = buffer;
-    t9p_rtems_node_t* n = iop->data1;
+    t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
     
     /** Break writes into pieces in case iounit is smaller than the requested write size */
     const size_t iounit = t9p_get_iounit(n->h);
@@ -610,15 +648,17 @@ static ssize_t t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size
 }
 
 static off_t t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence) {
+    t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
     switch (whence) {
     case SEEK_SET:
     case SEEK_CUR:
     case SEEK_END:
     }
+    return 0;
 }
 
 static int t9p_rtems_file_fstat(const rtems_filesystem_location_info_t* loc, struct stat* buf) {
-    t9p_rtems_node_t* n = loc->node_access;
+    t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
     
     struct t9p_getattr ta;
     int r = t9p_getattr(n->c, n->h, &ta, T9P_GETATTR_ALL);
@@ -647,7 +687,7 @@ static int t9p_rtems_file_fstat(const rtems_filesystem_location_info_t* loc, str
 }
 
 static int t9p_rtems_file_ftruncate(rtems_libio_t* iop, off_t length) {
-    t9p_rtems_node_t* n = iop->data1;
+    t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
 
     int r = t9p_truncate(n->c, n->h, length);
     if (r < 0) {
@@ -658,7 +698,7 @@ static int t9p_rtems_file_ftruncate(rtems_libio_t* iop, off_t length) {
 }
 
 static int t9p_rtems_file_fsync(rtems_libio_t* iop) {
-    t9p_rtems_node_t* n = iop->data1;
+    t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
     int r = t9p_fsync(n->c, n->h);
     if (r < 0) {
         errno = -r;
@@ -669,9 +709,9 @@ static int t9p_rtems_file_fsync(rtems_libio_t* iop) {
 
 
 /** Provide our own posix message queue */
-//#define _T9P_NO_POSIX_MQ
+#define _T9P_NO_POSIX_MQ
 
-#if 0
+#if 1
 struct _msg_queue_s {
     rtems_name name;
     rtems_id queue;

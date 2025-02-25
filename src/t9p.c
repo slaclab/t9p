@@ -65,6 +65,8 @@
 #define LOG(_context, _level, ...) if (_context && _context->opts.log_level <= _level) {    \
     fprintf(stderr, __VA_ARGS__); \
 }
+
+#define TRACE(_context, ...) LOG(_context, T9P_LOG_TRACE, __VA_ARGS__)
 #define INFO(_context, ...) LOG(_context, T9P_LOG_INFO, __VA_ARGS__)
 #define DEBUG(_context, ...) LOG(_context, T9P_LOG_DEBUG, __VA_ARGS__)
 #define WARN(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
@@ -689,6 +691,7 @@ void t9p_shutdown(t9p_context_t* c) {
 }
 
 t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path) {
+    TRACE(c, "t9p_open_handle(p=%p,path=%s)\n", parent, path);
     char p[T9P_PATH_MAX];
     strNcpy(p, path, sizeof(p));
     int status = 0;
@@ -736,7 +739,7 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s(%s): Twalk send/recv failed: %s\n", __FUNCTION__, path, _t9p_strerror(l));
+        ERROR(c, "%s(%s): Twalk: %s\n", __FUNCTION__, path, _t9p_strerror(l));
         goto error;
     }
 
@@ -762,6 +765,7 @@ error:
 }
 
 void t9p_close_handle(t9p_context_t* c, t9p_handle_t h) {
+    TRACE(c, "t9p_close_handle(h=%p)\n", h);
     if (!h)
         return;
 
@@ -778,6 +782,7 @@ t9p_handle_t t9p_get_root(t9p_context_t* c) {
 }
 
 int t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode) {
+    TRACE(c, "t9p_open(h=%p,mode=0x%X)\n", h, mode);
     char packet[PACKET_BUF_SIZE];
 
     struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -824,6 +829,7 @@ void t9p_close(t9p_handle_t handle) {
 }
 
 ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer) {
+    TRACE(c, "t9p_read(h=%p,off=%"PRIu64",num=%u,out=%p)\n", h, offset, num, outbuffer);
     char packet[PACKET_BUF_SIZE];
     int status = 0;
 
@@ -853,7 +859,7 @@ ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        ERROR(c, "%s: Tread: %s\n", __FUNCTION__, _t9p_strerror(l));
         status = l;
         goto error;
     }
@@ -875,6 +881,7 @@ error:
 }
 
 ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer) {
+    TRACE(c, "t9p_write(h=%p,off=%"PRIu64",num=%u,in=%p)\n", h, offset, num, inbuffer);
     char packet[PACKET_BUF_SIZE];
 
     if (!_can_rw_fid(h, 1))
@@ -901,7 +908,7 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: Twrite failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        ERROR(c, "%s: Twrite: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -916,6 +923,7 @@ ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
 
 
 int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t mask) {
+    TRACE(c, "t9p_getattr(h=%p,mask=%"PRIx64")\n", h, mask);
     char packet[PACKET_BUF_SIZE];
 
     if (!t9p_is_valid(h))
@@ -940,7 +948,7 @@ int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: Tgetattr failed\n", __FUNCTION__);
+        ERROR(c, "%s: Tgetattr: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -974,6 +982,7 @@ int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint
 }
 
 int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags) {
+    TRACE(c, "t9p_create(parent=%p,nh=%p,name=%s,mode=0x%X,gid=%d,flags=0x%X)\n", parent, newhandle, name, mode, gid, flags);
     char packet[PACKET_BUF_SIZE];
 
     struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1009,7 +1018,7 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: Tlcreate failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        ERROR(c, "%s: Tlcreate: %s\n", __FUNCTION__, _t9p_strerror(l));
         t9p_close_handle(c, h);
         return l;
     }
@@ -1037,6 +1046,7 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
 }
 
 int t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle) {
+    TRACE(c, "t9p_dup(todup=%p,out=%p)\n", todup, outhandle);
     char packet[PACKET_BUF_SIZE];
 
     *outhandle = NULL;
@@ -1069,7 +1079,7 @@ int t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle) {
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        ERROR(c, "%s: Twalk: %s\n", __FUNCTION__, _t9p_strerror(l));
         _release_handle(c, h);
         return -EIO;
     }
@@ -1088,6 +1098,7 @@ int t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle) {
 }
 
 int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
+    TRACE(c, "t9p_remove(h=%p)\n", h);
     char packet[PACKET_BUF_SIZE];
     if (!t9p_is_valid(h))
         return -EBADF;
@@ -1136,6 +1147,7 @@ int t9p_remove(t9p_context_t* c, t9p_handle_t h) {
 }
 
 int t9p_fsync(t9p_context_t* c, t9p_handle_t file) {
+    TRACE(c, "t9p_fsync(h=%p)\n", file);
     char packet[PACKET_BUF_SIZE];
     if (!t9p_is_open(file))
         return -EBADF;
@@ -1159,7 +1171,7 @@ int t9p_fsync(t9p_context_t* c, t9p_handle_t file) {
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        ERROR(c, "%s: Tfsync: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -1167,6 +1179,7 @@ int t9p_fsync(t9p_context_t* c, t9p_handle_t file) {
 }
 
 int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, qid_t* outqid) {
+    TRACE(c, "t9p_mkdir(p=%p,name=%s,mode=0x%X,gid=%d)\n", parent, name, mode, gid);
     char packet[PACKET_BUF_SIZE];
     if (!t9p_is_valid(parent))
         return -1;
@@ -1194,7 +1207,7 @@ int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t 
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        ERROR(c, "%s: Tmkdir: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -1211,6 +1224,7 @@ int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t 
 }
 
 int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs) {
+    TRACE(c, "t9p_statfs(h=%p,st=%p)\n", h, statfs);
     char packet[PACKET_BUF_SIZE];
     int l;
     if (!t9p_is_valid(h))
@@ -1234,7 +1248,7 @@ int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs) {
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed\n", __FUNCTION__);
+        ERROR(c, "%s: Tstatfs: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -1258,6 +1272,7 @@ int t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs) {
 }
 
 int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize) {
+    TRACE(c, "t9p_readlink(h=%p,op=%p,os=%zu)\n", h, outPath, outPathSize);
     char packet[PACKET_BUF_SIZE];
     int l;
     if (!t9p_is_valid(h))
@@ -1280,7 +1295,7 @@ int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPath
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        ERROR(c, "%s: Treadlink: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -1294,6 +1309,7 @@ int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPath
 }
 
 int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char* src, uint32_t gid, qid_t* oqid) {
+    TRACE(c, "t9p_symlink(d=%p,dst=%s,src=%s,gid=%d,oqid=%p)\n", dir, dst, src, gid, oqid);
     char packet[PACKET_BUF_SIZE];
     int l;
     if (!t9p_is_valid(dir))
@@ -1318,7 +1334,7 @@ int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char*
         .rtype = T9P_TYPE_Rsymlink,
     };
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        ERROR(c, "%s: Tsymlink: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -1406,7 +1422,7 @@ int t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs) {
         };
 
         if ((l = tr_send_recv(c, n, &tr)) < 0) {
-            ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+            ERROR(c, "%s: Treaddir: %s\n", __FUNCTION__, _t9p_strerror(l));
             status = l;
             goto error;
         }
@@ -1466,7 +1482,7 @@ int t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t 
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(-l));
+        ERROR(c, "%s: Tunlinkat: %s\n", __FUNCTION__, _t9p_strerror(-l));
         return l;
     }
 
@@ -1508,7 +1524,7 @@ int t9p_renameat(t9p_context_t* c, t9p_handle_t olddirfid, const char* oldname, 
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        ERROR(c, "%s: Trenameat: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
@@ -1546,7 +1562,7 @@ int t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9
     };
 
     if ((l = tr_send_recv(c, n, &tr)) < 0) {
-        ERROR(c, "%s: send failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+        ERROR(c, "%s: Tsetattr: %s\n", __FUNCTION__, _t9p_strerror(l));
         return l;
     }
 
