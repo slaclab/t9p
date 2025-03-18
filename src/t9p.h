@@ -7,7 +7,8 @@
 #include "t9proto.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /** Default packet queue size */
@@ -20,61 +21,68 @@ extern "C" {
 #define T9P_NOGID (~0U)
 
 /** Flags for Tlopen (these match Linux O_XXX bits)*/
-typedef enum t9p_open_flags {
-    T9P_OREAD       = 00,
-    T9P_OWRITE      = 01,
-    T9P_ORDWR       = 02,
-    T9P_OEXEC       = 3,
-    T9P_OTRUNC      = 0x10,
-    T9P_ORCLOSE     = 0x40,
-    T9P_OEXCL       = 0x1000,
+typedef enum t9p_open_flags
+{
+  T9P_OREAD = 00,
+  T9P_OWRITE = 01,
+  T9P_ORDWR = 02,
+  T9P_OEXEC = 3,
+  T9P_OTRUNC = 0x10,
+  T9P_ORCLOSE = 0x40,
+  T9P_OEXCL = 0x1000,
 } t9p_open_flags_t;
 
 /** QID types */
-typedef enum t9p_qid_type {
-    T9P_QID_DIR     = 0x80,    /**< Directory */
-    T9P_QID_APPEND  = 0x40,    /**< File is append only */
-    T9P_QID_EXCL    = 0x20,    /**< Exclusive; only one handle at a time */
-    T9P_QID_MOUNT   = 0x10,    /**< Mount point */
-    T9P_QID_AUTH    = 0x8,     /**< Auth file */
-    T9P_QID_MP      = 0x4,     /**< Non-backed up file */
-    T9P_QID_SYMLINK = 0x2,     /**< Symbolic link */
-    T9P_QID_LINK    = 0x1,     /**< Hard link */
-    T9P_QID_FILE    = 0x0,     /**< Normal file */
+typedef enum t9p_qid_type
+{
+  T9P_QID_DIR = 0x80,    /**< Directory */
+  T9P_QID_APPEND = 0x40, /**< File is append only */
+  T9P_QID_EXCL = 0x20,   /**< Exclusive; only one handle at a time */
+  T9P_QID_MOUNT = 0x10,  /**< Mount point */
+  T9P_QID_AUTH = 0x8,    /**< Auth file */
+  T9P_QID_MP = 0x4,      /**< Non-backed up file */
+  T9P_QID_SYMLINK = 0x2, /**< Symbolic link */
+  T9P_QID_LINK = 0x1,    /**< Hard link */
+  T9P_QID_FILE = 0x0,    /**< Normal file */
 } t9p_qid_type_t;
 
 /**
  * Transport flags
  */
-#define T9P_RECV_PEEK 0x1           /**< Read a message, but leave it in the queue. See MSG_PEEK. Incompatible with T9P_RECV_READ */
-#define T9P_RECV_READ 0x2           /**< Read part of a message and leave it in the queue. Similar to peek, except that this advances the read position.
-                                         Incompatible with T9P_RECV_PEEK */
+#define T9P_RECV_PEEK                                                                              \
+  0x1 /**< Read a message, but leave it in the queue. See MSG_PEEK. Incompatible with              \
+         T9P_RECV_READ */
+#define T9P_RECV_READ                                                                              \
+  0x2 /**< Read part of a message and leave it in the queue. Similar to peek, except that this     \
+         advances the read position. Incompatible with T9P_RECV_PEEK */
 
 /**
  * Transport methods.
  */
-typedef void*(*t9p_init_t)();
-typedef void(*t9p_shutdown_t)(void* /*context*/);
-typedef int(*t9p_connect_t)(void* /*context*/, const char* /*addr_or_file*/);
+typedef void* (*t9p_init_t)();
+typedef void (*t9p_shutdown_t)(void* /*context*/);
+typedef int (*t9p_connect_t)(void* /*context*/, const char* /*addr_or_file*/);
 /** Disconnect method, return 0 for success */
-typedef int(*t9p_disconnect_t)(void* /*context*/);
-typedef ssize_t(*t9p_send_t)(void* /*context*/, const void* /*data*/, size_t /*len*/, int /*flags*/);
-typedef ssize_t(*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/, int /*flags*/);
+typedef int (*t9p_disconnect_t)(void* /*context*/);
+typedef ssize_t (*t9p_send_t)(
+  void* /*context*/, const void* /*data*/, size_t /*len*/, int /*flags*/
+);
+typedef ssize_t (*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/, int /*flags*/);
 
 /**
  * Transport interface.
- * this abstracts out some platform specific behavior (i.e. socket creation/read/write). This must be provided by
- * users of the library.
- * Method descriptions:
- *   recv: Recv some bytes. Should be non-blocking, i.e. returns immediately if no bytes are available to be read.
+ * this abstracts out some platform specific behavior (i.e. socket creation/read/write). This must
+ * be provided by users of the library. Method descriptions: recv: Recv some bytes. Should be
+ * non-blocking, i.e. returns immediately if no bytes are available to be read.
  */
-typedef struct t9p_transport {
-    t9p_init_t init;
-    t9p_shutdown_t shutdown;
-    t9p_connect_t connect;
-    t9p_disconnect_t disconnect;
-    t9p_send_t send;
-    t9p_recv_t recv;
+typedef struct t9p_transport
+{
+  t9p_init_t init;
+  t9p_shutdown_t shutdown;
+  t9p_connect_t connect;
+  t9p_disconnect_t disconnect;
+  t9p_send_t send;
+  t9p_recv_t recv;
 } t9p_transport_t;
 
 typedef struct t9p_context t9p_context_t;
@@ -83,130 +91,139 @@ typedef struct t9p_context t9p_context_t;
 typedef struct t9p_handle* t9p_handle_t;
 
 /**< Logging levels */
-typedef enum t9p_log {
-    T9P_LOG_TRACE = -2,
-    T9P_LOG_DEBUG,
-    T9P_LOG_INFO = 0,
-    T9P_LOG_WARN,
-    T9P_LOG_ERR,
+typedef enum t9p_log
+{
+  T9P_LOG_TRACE = -2,
+  T9P_LOG_DEBUG,
+  T9P_LOG_INFO = 0,
+  T9P_LOG_WARN,
+  T9P_LOG_ERR,
 } t9p_log_t;
 
-typedef struct t9p_opts {
-    uint32_t max_write_data_size;       /**< Max amount of data that can be transferred in a write packet */
-    uint32_t max_read_data_size;        /**< Max amount of data that can be transferred in a read packet */
-    uint32_t queue_size;                /**< Packet queue size. Must be power of two! */
-    int log_level;                      /**< Logging level (See t9p_log enum) */
-    uint32_t uid;                       /**< UID to use */
-    char user[128];                     /**< Username to use. If provided, it will be used instead of uid */
-    int max_fids;                       /**< Max number of open file IDs (1 will be consumed for root) */
-    int send_timeo;                     /**< Send timeout, in ms */
-    int recv_timeo;                     /**< Recv timeout, in ms */
-    uint32_t gid;                       /**< Default gid, used when NOGID is passed to functions */
+typedef struct t9p_opts
+{
+  uint32_t max_write_data_size; /**< Max amount of data that can be transferred in a write packet */
+  uint32_t max_read_data_size;  /**< Max amount of data that can be transferred in a read packet */
+  uint32_t queue_size;          /**< Packet queue size. Must be power of two! */
+  int log_level;                /**< Logging level (See t9p_log enum) */
+  uint32_t uid;                 /**< UID to use */
+  char user[128];               /**< Username to use. If provided, it will be used instead of uid */
+  int max_fids;                 /**< Max number of open file IDs (1 will be consumed for root) */
+  int send_timeo;               /**< Send timeout, in ms */
+  int recv_timeo;               /**< Recv timeout, in ms */
+  uint32_t gid;                 /**< Default gid, used when NOGID is passed to functions */
 } t9p_opts_t;
 
 /** Flags for t9p_getattr */
-typedef enum t9p_getattr_mask {
-    T9P_GETATTR_MODE         = 0x00000001ULL,
-    T9P_GETATTR_NLINK        = 0x00000002ULL,
-    T9P_GETATTR_UID          = 0x00000004ULL,
-    T9P_GETATTR_GID          = 0x00000008ULL,
-    T9P_GETATTR_RDEV         = 0x00000010ULL,
-    T9P_GETATTR_ATIME        = 0x00000020ULL,
-    T9P_GETATTR_MTIME        = 0x00000040ULL,
-    T9P_GETATTR_CTIME        = 0x00000080ULL,
-    T9P_GETATTR_INO          = 0x00000100ULL,
-    T9P_GETATTR_SIZE         = 0x00000200ULL,
-    T9P_GETATTR_BLOCKS       = 0x00000400ULL,
-    T9P_GETATTR_BTIME        = 0x00000800ULL,
-    T9P_GETATTR_GEN          = 0x00001000ULL,
-    T9P_GETATTR_DATA_VERSION = 0x00002000ULL,
-    T9P_GETATTR_BASIC        = 0x000007ffULL,
-    T9P_GETATTR_ALL          = 0x00003fffULL,
+typedef enum t9p_getattr_mask
+{
+  T9P_GETATTR_MODE = 0x00000001ULL,
+  T9P_GETATTR_NLINK = 0x00000002ULL,
+  T9P_GETATTR_UID = 0x00000004ULL,
+  T9P_GETATTR_GID = 0x00000008ULL,
+  T9P_GETATTR_RDEV = 0x00000010ULL,
+  T9P_GETATTR_ATIME = 0x00000020ULL,
+  T9P_GETATTR_MTIME = 0x00000040ULL,
+  T9P_GETATTR_CTIME = 0x00000080ULL,
+  T9P_GETATTR_INO = 0x00000100ULL,
+  T9P_GETATTR_SIZE = 0x00000200ULL,
+  T9P_GETATTR_BLOCKS = 0x00000400ULL,
+  T9P_GETATTR_BTIME = 0x00000800ULL,
+  T9P_GETATTR_GEN = 0x00001000ULL,
+  T9P_GETATTR_DATA_VERSION = 0x00002000ULL,
+  T9P_GETATTR_BASIC = 0x000007ffULL,
+  T9P_GETATTR_ALL = 0x00003fffULL,
 } t9p_getattr_mask_t;
 
 /**
  * \brief File attributes, used with t9p_getattr
  */
-typedef struct t9p_getattr {
-    uint32_t valid;
-    qid_t qid;
-    uint32_t mode;
-    uint32_t uid;
-    uint32_t gid;
-    uint64_t nlink;
-    uint64_t rdev;
-    uint64_t fsize;
-    uint64_t blksize;
-    uint64_t blocks;
-    uint64_t atime_sec;
-    uint64_t atime_nsec;
-    uint64_t mtime_sec;
-    uint64_t mtime_nsec;
-    uint64_t ctime_sec;
-    uint64_t ctime_nsec;
-    uint64_t btime_sec;
-    uint64_t btime_nsec;
-    uint64_t gen;
-    uint64_t data_version;
+typedef struct t9p_getattr
+{
+  uint32_t valid;
+  qid_t qid;
+  uint32_t mode;
+  uint32_t uid;
+  uint32_t gid;
+  uint64_t nlink;
+  uint64_t rdev;
+  uint64_t fsize;
+  uint64_t blksize;
+  uint64_t blocks;
+  uint64_t atime_sec;
+  uint64_t atime_nsec;
+  uint64_t mtime_sec;
+  uint64_t mtime_nsec;
+  uint64_t ctime_sec;
+  uint64_t ctime_nsec;
+  uint64_t btime_sec;
+  uint64_t btime_nsec;
+  uint64_t gen;
+  uint64_t data_version;
 } t9p_getattr_t;
 
 /**
  * \brief Flags for t9p_setattr
  */
-typedef enum t9p_setattr_mask {
-    T9P_SETATTR_MODE        = 0x1UL,
-    T9P_SETATTR_UID         = 0x2UL,
-    T9P_SETATTR_GID         = 0x4UL,
-    T9P_SETATTR_SIZE        = 0x8UL,
-    T9P_SETATTR_ATIME       = 0x10UL,
-    T9P_SETATTR_MTIME       = 0x20UL,
-    T9P_SETATTR_CTIME       = 0x40UL,
-    T9P_SETATTR_ATIME_SET   = 0x80UL,
-    T9P_SETATTR_MTIME_SET   = 0x100UL,
+typedef enum t9p_setattr_mask
+{
+  T9P_SETATTR_MODE = 0x1UL,
+  T9P_SETATTR_UID = 0x2UL,
+  T9P_SETATTR_GID = 0x4UL,
+  T9P_SETATTR_SIZE = 0x8UL,
+  T9P_SETATTR_ATIME = 0x10UL,
+  T9P_SETATTR_MTIME = 0x20UL,
+  T9P_SETATTR_CTIME = 0x40UL,
+  T9P_SETATTR_ATIME_SET = 0x80UL,
+  T9P_SETATTR_MTIME_SET = 0x100UL,
 } t9p_setattr_mask_t;
 
 /**
  * \brief File attributes for t9p_setattr
  */
-typedef struct t9p_setattr {
-    uint64_t valid;
-    uint32_t mode;
-    uint32_t uid;
-    uint32_t gid;
-    uint64_t size;
-    uint64_t atime_sec;
-    uint64_t atime_nsec;
-    uint64_t mtime_sec;
-    uint64_t mtime_nsec;
+typedef struct t9p_setattr
+{
+  uint64_t valid;
+  uint32_t mode;
+  uint32_t uid;
+  uint32_t gid;
+  uint64_t size;
+  uint64_t atime_sec;
+  uint64_t atime_nsec;
+  uint64_t mtime_sec;
+  uint64_t mtime_nsec;
 } t9p_setattr_t;
 
 /**
  * \brief File system stats, used with t9p_statfs
  */
-typedef struct t9p_statfs {
-    uint32_t type;
-    uint32_t bsize;
-    uint64_t blocks;
-    uint64_t bfree;
-    uint64_t bavail;
-    uint64_t files;
-    uint64_t ffree;
-    uint64_t fsid;
-    uint32_t namelen;
+typedef struct t9p_statfs
+{
+  uint32_t type;
+  uint32_t bsize;
+  uint64_t blocks;
+  uint64_t bfree;
+  uint64_t bavail;
+  uint64_t files;
+  uint64_t ffree;
+  uint64_t fsid;
+  uint32_t namelen;
 } t9p_statfs_t;
 
-typedef struct t9p_dir_info {
-    struct t9p_dir_info* next;
-    qid_t qid;
-    uint8_t type;
-    char name[];
+typedef struct t9p_dir_info
+{
+  struct t9p_dir_info* next;
+  qid_t qid;
+  uint8_t type;
+  char name[];
 } t9p_dir_info_t;
 
 /**
  * Flags for use with t9p_unlinkat.
  */
-enum t9p_unlinkat_flags {
-    T9P_AT_REMOVEDIR = 0x200,
+enum t9p_unlinkat_flags
+{
+  T9P_AT_REMOVEDIR = 0x200,
 };
 
 /**
@@ -223,11 +240,14 @@ void t9p_opts_init(struct t9p_opts* opts);
  * \param mntpoint Mount point
  * \returns Context pointer, or NULL if there was an error during connection
  */
-t9p_context_t* t9p_init(t9p_transport_t* transport, const t9p_opts_t* opts, const char* apath, const char* addr, const char* mntpoint);
+t9p_context_t* t9p_init(
+  t9p_transport_t* transport, const t9p_opts_t* opts, const char* apath, const char* addr,
+  const char* mntpoint
+);
 
 /**
- * Shutdown a t9p context. This will clunk all fids, disconnect and shutdown transport, and free the context pointer.
- * Do not use `context` after this method is called
+ * Shutdown a t9p context. This will clunk all fids, disconnect and shutdown transport, and free the
+ * context pointer. Do not use `context` after this method is called
  * \param context Context pointer
  */
 void t9p_shutdown(t9p_context_t* context);
@@ -236,7 +256,8 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
 
 /**
  * \brief Closes a handle
- * Unlike t9p_close, this will actually clunk the file handle allowing it to be reused for a different file.
+ * Unlike t9p_close, this will actually clunk the file handle allowing it to be reused for a
+ * different file.
  * \param c Context
  * \param h Handle
  */
@@ -276,19 +297,24 @@ ssize_t t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num
  * \param inbuffer Buffer
  * \returns Number of bytes written, or a negative error code
  */
-ssize_t t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer);
+ssize_t
+t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer);
 
 /**
  * Creates a new file under a directory
  * \param c Context
- * \param newhandle Output parameter to hold the new file handle. If NULL, the new fid will be clunked immediately
+ * \param newhandle Output parameter to hold the new file handle. If NULL, the new fid will be
+ * clunked immediately
  * \param parent Parent directory fid. NULL for root
- * \param name Name of the new file 
+ * \param name Name of the new file
  * \param mode Mode of the file (i.e. 0777)
  * \param gid GID of the owner (or T9P_NOGID)
  * \param flags Additional flags
  */
-int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, uint32_t flags);
+int t9p_create(
+  t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, const char* name, uint32_t mode,
+  uint32_t gid, uint32_t flags
+);
 
 /**
  * Creates a new directory under parent
@@ -300,7 +326,10 @@ int t9p_create(t9p_context_t* c, t9p_handle_t* newhandle, t9p_handle_t parent, c
  * \param outqid [Optional] parameter to hold the qid of the new dir
  * \return < 0 on error
  */
-int t9p_mkdir(t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid, qid_t* outqid);
+int t9p_mkdir(
+  t9p_context_t* c, t9p_handle_t parent, const char* name, uint32_t mode, uint32_t gid,
+  qid_t* outqid
+);
 
 /**
  * Perform an fsync operation on the file. The file must be open already, if not, it will error
@@ -356,13 +385,16 @@ int t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPath
  * \param gid GID of the new symlink
  * \param oquid [Optional] output parameter holding the QID of the new symlink
  */
-int t9p_symlink(t9p_context_t* c, t9p_handle_t dir, const char* dst, const char* src, uint32_t gid, qid_t* oqid);
+int t9p_symlink(
+  t9p_context_t* c, t9p_handle_t dir, const char* dst, const char* src, uint32_t gid, qid_t* oqid
+);
 
 /**
  * Gets a list of all files in a directory
  * \param c Context
  * \param dir Handle of the directory. This must be opened with at least O_READ with t9p_open!
- * \param dirs Output pointer holding a linked list of directories. Free with t9p_free_dirs @see t9p_dir_info_t
+ * \param dirs Output pointer holding a linked list of directories. Free with t9p_free_dirs @see
+ * t9p_dir_info_t
  * \return < 0 on error
  */
 int t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** dirs);
@@ -394,7 +426,10 @@ int t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t 
  * \param newname New file's name
  * \returns < 0 on error
  */
-int t9p_renameat(t9p_context_t* c, t9p_handle_t olddirfid, const char* oldname, t9p_handle_t newdirfid, const char* newname);
+int t9p_renameat(
+  t9p_context_t* c, t9p_handle_t olddirfid, const char* oldname, t9p_handle_t newdirfid,
+  const char* newname
+);
 
 /**
  * Returns the file handle associated with the root
@@ -403,12 +438,13 @@ int t9p_renameat(t9p_context_t* c, t9p_handle_t olddirfid, const char* oldname, 
 t9p_handle_t t9p_get_root(t9p_context_t* c);
 
 /**
- * Returns the IO size for an opened handle. If it's not opened, or the handle is invalid, then this will return 0
- * \param h A valid file handle 
+ * Returns the IO size for an opened handle. If it's not opened, or the handle is invalid, then this
+ * will return 0
+ * \param h A valid file handle
  */
 uint32_t t9p_get_iounit(t9p_handle_t h);
 
-/** 
+/**
  * Returns the QID of the opened handle
  * \param h A valid file handle
  */
@@ -486,18 +522,24 @@ int t9p_is_valid(t9p_handle_t h);
 int t9p_is_dir(t9p_handle_t h);
 
 /** Returns TRUE if the handle is a file, FALSE otherwise */
-static inline int t9p_is_file(t9p_handle_t h) {
-    return !t9p_is_dir(h);
+static inline int
+t9p_is_file(t9p_handle_t h)
+{
+  return !t9p_is_dir(h);
 }
 
 /** Returns TRUE if the handle is a symlink, FALSE otherwise */
-static inline int t9p_is_symlink(t9p_handle_t h) {
-    return !!(t9p_get_qid(h).type == T9P_QID_SYMLINK);
+static inline int
+t9p_is_symlink(t9p_handle_t h)
+{
+  return !!(t9p_get_qid(h).type == T9P_QID_SYMLINK);
 }
 
 /** Returns TRUE if the handle is a hard link, FALSE otherwise */
-static inline int t9p_is_link(t9p_handle_t h) {
-    return !!(t9p_get_qid(h).type == T9P_QID_LINK);
+static inline int
+t9p_is_link(t9p_handle_t h)
+{
+  return !!(t9p_get_qid(h).type == T9P_QID_LINK);
 }
 
 /**
