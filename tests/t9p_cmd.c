@@ -60,7 +60,7 @@ ls(int argc, const char* const* argv)
     return;
   }
 
-  if (t9p_open(ctx, h, T9P_OREAD) < 0) {
+  if (t9p_open(ctx, h, T9P_OREADONLY) < 0) {
     printf("unable to open!\n");
     return;
   }
@@ -118,7 +118,7 @@ cat_cmd(int argc, const char* const* argv)
     return;
   }
 
-  if (t9p_open(ctx, h, T9P_OREAD) < 0) {
+  if (t9p_open(ctx, h, T9P_OREADONLY) < 0) {
     printf("unable to open %s\n", argv[1]);
   } else {
     char buf[128];
@@ -317,7 +317,7 @@ put_cmd(int argc, const char* const* argv)
     return;
   }
 
-  if (t9p_open(ctx, h, T9P_OWRITE | T9P_OTRUNC) < 0) {
+  if (t9p_open(ctx, h, T9P_ORDWR | T9P_OTRUNC) < 0) {
     printf("unable to open %s for write\n", argv[1]);
   } else {
     ssize_t c;

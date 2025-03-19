@@ -90,6 +90,7 @@ struct t9p_context
   char apath[PATH_MAX];
   t9p_opts_t opts;
   struct t9p_handle_node* root;
+  uint32_t msize;
 
   /** file handle list */
   mutex_t* fhl_mutex;
@@ -491,6 +492,8 @@ _version_handshake(struct t9p_context* c)
     free(rv);
     return -1;
   }
+
+  c->msize = rv->msize;
 
   DEBUG(c, "Rversion handshake complete for version %s\n", version);
   free(rv);
@@ -898,9 +901,11 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
   h->qid = rl.qid;
   h->valid_mask |= T9P_HANDLE_QID_VALID;
   h->iounit = rl.iounit;
-  /** If the server is telling us 'whatever', provide our own length */
-  if (h->iounit == 0)
-    h->iounit = UINT32_MAX;
+  /** If the server is telling us 'whatever', iounit becomes a derivative of msize.
+    * We cannot exceed msize even if iounit is 0. */
+  if (h->iounit == 0) {
+    h->iounit = MIN(c->msize - sizeof(struct Twrite), c->msize - sizeof(struct Rread));
+  }
 
   return 0;
 }
@@ -1145,6 +1150,16 @@ t9p_create(
   }
 
   return 0;
+}
+
+ssize_t
+t9p_stat_size(t9p_context_t* c, t9p_handle_t h)
+{
+  struct t9p_getattr ga = {0};
+  ssize_t l = t9p_getattr(c, h, &ga, T9P_GETATTR_SIZE);
+  if (l < 0)
+    return l;
+  return ga.fsize;
 }
 
 int
@@ -1833,6 +1848,18 @@ t9p_get_basename(const char* file_or_dir, char* outbuf, size_t outsize)
     strNcpy(outbuf, file_or_dir, outsize);
   else
     strNcpy(outbuf, last + 1, outsize);
+}
+
+void
+t9p_set_log_level(t9p_context_t* c, t9p_log_t level)
+{
+  c->opts.log_level = level;
+}
+
+int
+t9p_get_log_level(t9p_context_t* c)
+{
+  return c->opts.log_level;
 }
 
 /********************************************************************/

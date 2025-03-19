@@ -20,4 +20,4 @@ if [ $DAEMON -eq 0 ]; then
     ARGS="$ARGS -f"
 fi
 
-~/.local/sbin/diod $ARGS -L stderr -e "$PWD/fs" -l 0.0.0.0:10002 -n
+~/.local/sbin/diod $ARGS -L stderr -d5 -e "$PWD/fs" -l 0.0.0.0:10002 -n

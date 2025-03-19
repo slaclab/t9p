@@ -34,4 +34,4 @@ BSP_ARGS="--console=/dev/com1 -u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
 qemu-system-$ARCH $QEMU_ARGS -no-reboot -serial mon:stdio -nographic \
     -device e1000,netdev=em0 -netdev user,id=em0,hostfwd=tcp::10003-:10003,hostfwd=tcp::1234-:1234 \
-    -append "$BSP_ARGS" -kernel $PWD/../build-$TARGET/t9p_rtems_test
+    -append "$BSP_ARGS" -kernel $PWD/../build-cmake/build-$TARGET/t9p_rtems_test

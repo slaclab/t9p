@@ -154,7 +154,7 @@ thread_proc(void* p)
       abort();
     }
 
-    if ((n = t9p_open(c, h, T9P_OREAD)) < 0) {
+    if ((n = t9p_open(c, h, T9P_OREADONLY)) < 0) {
       printf("Failed to open: %s\n", strerror(n));
       t9p_close_handle(c, h);
       abort();

@@ -23,13 +23,25 @@ extern "C"
 /** Flags for Tlopen (these match Linux O_XXX bits)*/
 typedef enum t9p_open_flags
 {
-  T9P_OREAD = 00,
-  T9P_OWRITE = 01,
-  T9P_ORDWR = 02,
-  T9P_OEXEC = 3,
-  T9P_OTRUNC = 0x10,
-  T9P_ORCLOSE = 0x40,
-  T9P_OEXCL = 0x1000,
+  T9P_OREADONLY = 00000000,
+  T9P_OWRITEONLY = 00000001,
+  T9P_ORDWR = 00000002,
+  T9P_ONOACCESS = 00000003,
+  T9P_OCREATE = 00000100,
+  T9P_OEXCL = 00000200,
+  T9P_ONOCTTY = 00000400,
+  T9P_OTRUNC = 00001000,
+  T9P_OAPPEND = 00002000,
+  T9P_ONONBLOCK = 00004000,
+  T9P_ODSYNC = 00010000,
+  T9P_OFASYNC = 00020000,
+  T9P_ODIRECT = 00040000,
+  T9P_OLARGEFILE = 00100000,
+  T9P_ODIRECTORY = 00200000,
+  T9P_ONOFOLLOW = 00400000,
+  T9P_ONOATIME = 01000000,
+  T9P_OCLOEXEC = 02000000,
+  T9P_OSYNC = 04000000,
 } t9p_open_flags_t;
 
 /** QID types */
@@ -358,6 +370,14 @@ int t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle);
 int t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t mask);
 
 /**
+ * Performs a getattr on the specified file, returning the size. Shorthand for a getattr call.
+ * \param c Context
+ * \param h File handle
+ * \returns File size, or < 0 on error
+ */
+ssize_t t9p_stat_size(t9p_context_t* c, t9p_handle_t h);
+
+/**
  * Performs a statfs operation with Tstatfs/Rstatfs. Much like statfs(2) on Linux
  * \param c context
  * \param h Handle to a file on the filesystem that we want to query
@@ -549,8 +569,15 @@ int t9p_init_tcp_transport(t9p_transport_t* tp);
 
 /**
  * \brief Sets the current log level of the context
+ * \param c Context
+ * \param level Logging level
  */
 void t9p_set_log_level(t9p_context_t* c, t9p_log_t level);
+
+/**
+ * \brief Gets the current log level of the conext
+ */
+int t9p_get_log_level(t9p_context_t* c);
 
 /**
  * \brief Utility function to return the parent of the directory.
