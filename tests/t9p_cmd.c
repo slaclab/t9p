@@ -15,10 +15,9 @@
 #define PATH_MAX 256
 #endif
 
-#ifndef __rtems__
+#ifdef HAVE_READLINE
 #include <readline/history.h>
 #include <readline/readline.h>
-#define HAVE_READLINE 1
 #endif
 
 struct t9p_context* ctx;

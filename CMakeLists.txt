@@ -24,6 +24,8 @@ add_library(
     ${T9P_SOURCES}
 )
 
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g2")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g2")
 
@@ -86,7 +88,15 @@ else()
         "src"
     )
 
+    if ("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
+        target_link_libraries(t9p_cmd PRIVATE readline)
+        target_compile_definitions(t9p_cmd PRIVATE HAVE_READLINE)
+    else()
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -static")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
+    endif()
+
     target_link_libraries(
-        t9p_cmd PRIVATE t9p readline
+        t9p_cmd PRIVATE t9p
     )
 endif()

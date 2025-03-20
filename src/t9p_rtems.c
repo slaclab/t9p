@@ -299,10 +299,7 @@ t9p_rtems_iop_get_ctx(const rtems_libio_t* iop)
 static int
 t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void* data)
 {
-  /*
-mount -t 9p -o uid=1000,gid=1000,ip=10.0.2.2:10002,port=10002,user=jeremy
-/home/jeremy/dev/lw9p/tests/fs /test
-  */
+  TRACE("mt_entry=%p, data=%p", mt_entry, data);
   if (!data) {
     errno = EINVAL;
     return -1;
@@ -414,6 +411,7 @@ mount -t 9p -o uid=1000,gid=1000,ip=10.0.2.2:10002,port=10002,user=jeremy
 static void
 t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry)
 {
+  TRACE("mt_entry=%p", mt_entry);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
   rtems_recursive_mutex_destroy(&fi->mutex);
   t9p_shutdown(fi->c);
