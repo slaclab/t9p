@@ -184,25 +184,20 @@ void tr_release(struct trans_pool* q, struct trans_node* tn);
 
 #define TR_FLAGS_NONE 0x0
 
-struct trans
-{
-  uint32_t flags; /**< Flags */
-
-  const void* data; /**< Outgoing data */
-  size_t size;      /**< Outgoing data size */
-
-  void* rdata;  /**< Buffer to hold incoming data */
-  size_t rsize; /**< Incoming data buffer size */
-
-  const void* hdata; /**< Optional; header data pointer. If not NULL, this is ent before
-                          this->data is. This is used to avoid unnecessary copies */
+struct trans {
+  uint32_t flags;    /**< Flags */
+  const void *data;  /**< Outgoing data */
+  size_t size;       /**< Outgoing data size */
+  void *rdata;       /**< Buffer to hold incoming data */
+  size_t rsize;      /**< Incoming data buffer size */
+  const void *hdata; /**< Optional; header data pointer. If not NULL,
+                          this is ent before this->data is.
+                          This is used to avoid unnecessary copies */
   size_t hsize;      /**< Optional; header data size */
-
-  int32_t status; /**< Combined status/length variable. If < 0, this represents an
-                       error condition. If >= 0, it's the number of bytes written to rdata. */
-
-  /** 9p meta info */
-  uint32_t rtype; /**< Result message type. Set to 0 to accept any. */
+  int32_t status; /**< Combined status/length variable. If < 0, this represents
+                     an error condition. If >= 0, it's the number of bytes
+                     written to rdata. */
+  uint32_t rtype; /**< 9p meta; result message type. Set to 0 to accept any. */
 };
 
 struct trans_node
@@ -1572,7 +1567,11 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
     }
 
     /** NOTE: offset and prev will be set by _t9p_parse_dir_callback */
-    struct _t9p_parse_dir_param dp = {.prev = &prev, .head = &head, .offset = &offset};
+    struct _t9p_parse_dir_param dp = {
+      .prev = &prev,
+      .head = &head,
+      .offset = &offset
+    };
 
     struct Rreaddir rd;
     if ((decode_Rreaddir(&rd, packet, l, _t9p_parse_dir_callback, &dp)) < 0) {

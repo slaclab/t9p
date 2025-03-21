@@ -4,6 +4,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 FILES="a.txt b.txt c jkjgdjsdkgsdjg.c aaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+rm -rf fs
 mkdir -p fs
 cd fs
 

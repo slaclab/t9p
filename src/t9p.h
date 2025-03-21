@@ -84,8 +84,7 @@ typedef ssize_t (*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/,
 /**
  * Transport interface.
  * this abstracts out some platform specific behavior (i.e. socket creation/read/write). This must
- * be provided by users of the library. Method descriptions: recv: Recv some bytes. Should be
- * non-blocking, i.e. returns immediately if no bytes are available to be read.
+ * be provided by users of the library.
  */
 typedef struct t9p_transport
 {
@@ -233,10 +232,10 @@ typedef struct t9p_dir_info
 /**
  * Flags for use with t9p_unlinkat.
  */
-enum t9p_unlinkat_flags
+typedef enum t9p_unlinkat_flags
 {
   T9P_AT_REMOVEDIR = 0x200,
-};
+} t9p_unlinkat_flags_t;
 
 /**
  * \brief Init the options table with sensible defaults

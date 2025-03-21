@@ -773,16 +773,15 @@ decode_Rreaddir(
   rd->size = BSWAP32(rd->size);
   rd->tag = BSWAP16(rd->tag);
 
-  //*outdirs = calloc(sizeof(struct Rreaddir_dir*), rd->count);
-
   while (off < rd->count) {
     if (off + sizeof(hdr) >= rd->count)
       return -1;
-
-    hdr = *(const struct Rreaddir_dir*)(bp + off + sizeof(*rd)
-    ); /** off is relative to start of data (after hdr *rd) */
+  
+    /** off is relative to start of data (after hdr *rd) */
+    hdr = *(const struct Rreaddir_dir*)(bp + off + sizeof(*rd));
+  
     hdr.namelen = BSWAP16(hdr.namelen);
-    hdr.offset = BSWAP32(hdr.offset);
+    hdr.offset = BSWAP64(hdr.offset);
     hdr.qid = swapqid(hdr.qid);
 
     off += sizeof(hdr);
@@ -795,7 +794,6 @@ decode_Rreaddir(
   return 0;
 
 error:
-  // free(*outdirs);
   return -1;
 }
 

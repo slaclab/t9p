@@ -120,15 +120,21 @@ cat_cmd(int argc, const char* const* argv)
   if (t9p_open(ctx, h, T9P_OREADONLY) < 0) {
     printf("unable to open %s\n", argv[1]);
   } else {
-    char buf[128];
-    if (t9p_read(ctx, h, 0, 128, buf) < 0) {
-      printf("unable to read %s\n", argv[1]);
-    } else {
-      buf[sizeof(buf) - 1] = 0;
-      puts(buf);
+    ssize_t sz = t9p_stat_size(ctx, h);
+    off_t off = 0;
+    while (sz > 0) {
+      char buf[128];
+      ssize_t l;
+      if ((l = t9p_read(ctx, h, off, sizeof(buf)-1, buf)) < 0) {
+        printf("unable to read %s\n", argv[1]);
+        goto end;
+      }
+      buf[sizeof(buf)-1] = 0;
+      fputs(buf, stdout);
+      sz -= l, off += l;
     }
   }
-
+end:
   t9p_close_handle(ctx, h);
 }
 
