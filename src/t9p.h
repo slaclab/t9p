@@ -418,6 +418,25 @@ int t9p_symlink(
  */
 int t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** dirs);
 
+typedef struct t9p_scandir_ctx {
+  uint64_t offset;
+} t9p_scandir_ctx_t;
+
+/**
+ * Lower-level call that reads directory entries into an array of dirents structures.
+ * This is designed to more closely match filesystem backend code, to make using t9p easier.
+ * \param c Context
+ * \param dir Handle to the directory
+ * \param ctx Scandir context. Should be memset to 0 initially.
+ * \param buffer Buffer pointing to the array of dirent structures
+ * \param bufSize The number of BYTES in the buffer. This will be floored to the nearest multiple
+ *   of sizeof(dirent).
+ * \returns < 0 on error, on success returns the number of bytes written into buffer
+ */
+ssize_t t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
+  void* buffer, size_t bufsize);
+
+
 /**
  * \brief Frees a list of directories returned by t9p_readdir
  */

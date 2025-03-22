@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #ifdef __linux__
 #include <linux/limits.h>
@@ -494,6 +495,36 @@ readlink_cmd(int argc, const char* const* argv)
 }
 
 static void
+lsdirent_cmd(int argc, const char* const* argv)
+{
+  if (!check_connection())
+    return;
+
+  if (argc < 2) {
+    printf("usage: lsdirent <path>\n");
+    return;
+  }
+
+  t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
+  if (!h) {
+    printf("hopen failed for %s\n", argv[1]);
+    return;
+  }
+
+  t9p_open(ctx, h, T9P_OREADONLY);
+
+  struct dirent buf[64];
+
+  t9p_scandir_ctx_t sc = {0};
+  ssize_t bread = t9p_readdir_dirents(ctx, h, &sc, buf, sizeof(buf));
+  for (int i = 0; i < bread; i += sizeof(struct dirent)) {
+    printf("  %s\n", buf[i/sizeof(struct dirent)].d_name);
+  }
+
+  t9p_close_handle(ctx, h);
+}
+
+static void
 symlink_cmd(int argc, const char* const* argv)
 {
   if (!check_connection())
@@ -579,6 +610,7 @@ struct command COMMANDS[] = {
   {"mv", mv_cmd},
   {"touch", touch_cmd},
   {"truncate", truncate_cmd},
+  {"lsdir", lsdirent_cmd},
   {"help", help_cmd},
   {0, 0}
 };

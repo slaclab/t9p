@@ -11,7 +11,7 @@
 
 #include "t9p_posix.c"
 
-#define DO_TRACE
+//#define DO_TRACE
 #ifdef DO_TRACE
 #define TRACE(...) do { \
   printf("%s(", __FUNCTION__); \
@@ -183,6 +183,7 @@ typedef struct t9p_rtems_fs_info
   t9p_context_t* c;
   t9p_rtems_mount_opts_t opts;
   rtems_recursive_mutex mutex;
+  char mntpt[PATH_MAX];
 } t9p_rtems_fs_info_t;
 
 /**************************************************************************************
@@ -210,31 +211,35 @@ static rtems_filesystem_file_handlers_r t9p_file_ops = {
   .ftruncate_h = t9p_rtems_file_ftruncate, /*rtems_filesystem_ftruncate_t */
   .fsync_h = t9p_rtems_file_fsync,         /*rtems_filesystem_fsync_t */
   .fdatasync_h = t9p_rtems_file_fsync,     /*rtems_filesystem_fdatasync_t */
-  .fcntl_h = NULL,                         /*rtems_filesystem_fcntl_t */
-  .poll_h = NULL,                          /*rtems_filesystem_poll_t */
-  .kqfilter_h = NULL,                      /*rtems_filesystem_kqfilter_t */
-  .readv_h = NULL,                         /*rtems_filesystem_readv_t */
-  .writev_h = NULL,                        /*rtems_filesystem_writev_t */
-  .mmap_h = NULL,                          /*rtems_filesystem_mmap_t */
+  .fcntl_h = rtems_filesystem_default_fcntl,
+  .poll_h = rtems_filesystem_default_poll,
+  .kqfilter_h = rtems_filesystem_default_kqfilter,
+  .readv_h = rtems_filesystem_default_readv,
+  .writev_h = rtems_filesystem_default_writev,
+  .mmap_h = rtems_filesystem_default_mmap,
 };
 
-static rtems_filesystem_file_handlers_r t9p_dir_ops = {
-  .open_h = NULL,      /*rtems_filesystem_open_t */
-  .close_h = NULL,     /*rtems_filesystem_close_t */
-  .read_h = NULL,      /*rtems_filesystem_read_t */
-  .write_h = NULL,     /*rtems_filesystem_write_t */
-  .ioctl_h = t9p_rtems_file_ioctl,     /*rtems_filesystem_ioctl_t */
-  .lseek_h = NULL,     /*rtems_filesystem_lseek_t */
-  .fstat_h = NULL,     /*rtems_filesystem_fstat_t */
-  .ftruncate_h = NULL, /*rtems_filesystem_ftruncate_t */
-  .fsync_h = NULL,     /*rtems_filesystem_fsync_t */
-  .fdatasync_h = NULL, /*rtems_filesystem_fdatasync_t */
-  .fcntl_h = NULL,     /*rtems_filesystem_fcntl_t */
-  .poll_h = NULL,      /*rtems_filesystem_poll_t */
-  .kqfilter_h = NULL,  /*rtems_filesystem_kqfilter_t */
-  .readv_h = NULL,     /*rtems_filesystem_readv_t */
-  .writev_h = NULL,    /*rtems_filesystem_writev_t */
-  .mmap_h = NULL,      /*rtems_filesystem_mmap_t */
+static ssize_t t9p_rtems_dir_read(rtems_libio_t* iop, void* buffer, size_t count);
+static int t9p_rtems_dir_fstat(const rtems_filesystem_location_info_t* loc, struct stat* buf);
+static int t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode);
+
+static const rtems_filesystem_file_handlers_r t9p_dir_ops = {
+  .open_h = t9p_rtems_dir_open,
+  .close_h = rtems_filesystem_default_close,
+  .read_h = t9p_rtems_dir_read,
+  .write_h = rtems_filesystem_default_write,
+  .ioctl_h = t9p_rtems_file_ioctl,
+  .lseek_h = rtems_filesystem_default_lseek_directory,
+  .fstat_h = t9p_rtems_file_fstat,
+  .ftruncate_h = rtems_filesystem_default_ftruncate_directory,
+  .fsync_h = rtems_filesystem_default_fsync_or_fdatasync_success,
+  .fdatasync_h = rtems_filesystem_default_fsync_or_fdatasync_success,
+  .fcntl_h = rtems_filesystem_default_fcntl,
+  .poll_h = rtems_filesystem_default_poll,
+  .kqfilter_h = rtems_filesystem_default_kqfilter,
+  .readv_h = rtems_filesystem_default_readv,
+  .writev_h = rtems_filesystem_default_writev,
+  .mmap_h = rtems_filesystem_default_mmap,
 };
 
 /**************************************************************************************
@@ -494,19 +499,19 @@ t9p_rtems_fs_evalpath(rtems_filesystem_eval_path_context_t* ctx)
 
   t9p_rtems_node_t* n = current->node_access;
 
+  /** Attempt the open the new location with the current as parent */
   t9p_handle_t h = t9p_open_handle(n->c, n->h, ctx->path);
   if (h == NULL) {
     rtems_filesystem_eval_path_error(ctx, -1);
     return;
   }
 
-  current->node_access = calloc(sizeof(t9p_rtems_node_t), 1);
-  t9p_rtems_node_t* nn = current->node_access;
-  if (nn->h)
-    t9p_close_handle(nn->c, nn->h);
-  nn->c = n->c;
-  nn->h = h;
-  nn->size = -1;
+  /** Create a new node for the new location. We're supposed to reuse currentloc here. */
+  t9p_rtems_node_t* e = calloc(sizeof(t9p_rtems_node_t*), 1);
+  current->node_access = e;
+  e->c = n->c;
+  e->h = h;
+  e->size = -1;
 
   /** Configure handlers */
   if (t9p_is_dir(h)) {
@@ -610,17 +615,23 @@ static int
 t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t* loc)
 {
   TRACE("loc=%p", loc);
-  t9p_rtems_fs_info_t* fi = loc->mt_entry->fs_info;
+
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
+
+  /** Duplicate the existing node to avoid double frees.
+    * FIXME: We could use ref counting here instead!! */
+  t9p_rtems_node_t* nn = calloc(sizeof(t9p_rtems_node_t), 1);
+  *nn = *n;
+  loc->node_access = nn;
 
   t9p_handle_t nh;
   int r;
-  if ((r = t9p_dup(n->c, n->h, &nh)) < 0) {
+  if ((r = t9p_dup(n->c, nn->h, &nh)) < 0) {
     errno = -r;
     return -1;
   }
-  n->h = nh;
-  n->size = -1;
+  nn->h = nh;
+  nn->size = -1;
   return 0;
 }
 
@@ -684,6 +695,38 @@ t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t* loc, mode_t mode)
     errno = -r;
     return -1;
   }
+  return 0;
+}
+
+static ssize_t
+t9p_rtems_dir_read(rtems_libio_t* iop, void* buffer, size_t count)
+{
+  TRACE("iop=%p, buffer=%p, count=%zu", iop, buffer, count);
+  t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
+
+  t9p_scandir_ctx_t sc = {.offset = iop->offset};
+  ssize_t bytesTrans = t9p_readdir_dirents(n->c, n->h, &sc, buffer, count);
+  if (bytesTrans < 0)
+    rtems_set_errno_and_return_minus_one(-bytesTrans);
+  iop->offset = sc.offset;
+  return bytesTrans;
+}
+
+static int
+t9p_rtems_dir_fstat(const rtems_filesystem_location_info_t* loc, struct stat* buf)
+{
+  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
+  return -1;
+}
+
+static int
+t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode)
+{
+  TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, oflag, mode);
+  t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
+
+  if (t9p_open(n->c, n->h, T9P_OREADONLY) < 0)
+    return -1;
   return 0;
 }
 

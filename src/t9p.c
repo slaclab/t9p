@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <time.h>
+#include <dirent.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -1160,6 +1161,7 @@ t9p_stat_size(t9p_context_t* c, t9p_handle_t h)
 int
 t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
 {
+  assert(c);
   TRACE(c, "t9p_dup(todup=%p,out=%p)\n", todup, outhandle);
   char packet[PACKET_BUF_SIZE];
 
@@ -1206,7 +1208,10 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
     return -EPROTO;
   }
 
-  h->h.qid = qid[rw.nwqid - 1];
+  if (rw.nwqid > 0)
+    h->h.qid = qid[rw.nwqid - 1];
+  else
+    h->h.qid = todup->qid;
   h->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
   *outhandle = &h->h;
   return 0;
@@ -1593,6 +1598,120 @@ error:
     free(d);
     d = dn;
   }
+  return status;
+}
+
+struct _t9p_parse_dir_dirents_param
+{
+  ssize_t* i;
+  ssize_t totalWanted;
+  uint64_t* offset;
+  void* buffer;
+};
+
+/**
+ * Used with decode_Rreaddir in t9p_scandir
+ */
+static void
+_t9p_parse_dir_callback_dirents(void* param, struct Rreaddir_dir dir, const char* name)
+{
+  struct _t9p_parse_dir_dirents_param* dp = param;
+
+  /** Skip if we're out of dirents */
+  if (*dp->i >= dp->totalWanted)
+    return;
+
+  struct dirent* de = ((struct dirent*)dp->buffer) + *dp->i;
+  de->d_fileno = *dp->i;
+  de->d_reclen = sizeof(*de);
+  de->d_type = dir.type;
+  de->d_off = sizeof(struct dirent) * *dp->i;
+  size_t nl = MIN(dir.namelen, sizeof(de->d_name)-1);
+#ifdef __rtems__
+  de->d_namlen = nl;
+#endif
+  memcpy(de->d_name, name, nl);
+  de->d_name[nl] = 0;
+
+  /** Record offset for subsequent calls */
+  *dp->offset = dir.offset;
+
+  ++(*dp->i);
+}
+
+ssize_t 
+t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
+  void* buffer, size_t bufsize)
+{
+  char packet[PACKET_BUF_SIZE];
+  int l, status = 0;
+  t9p_dir_info_t *prev = NULL, *head = NULL;
+
+  if (bufsize < sizeof(struct dirent))
+    return -1;
+
+  /** fid must be valid AND open */
+  if (!t9p_is_valid(dir) || !t9p_is_open(dir))
+    return -EBADF;
+
+  /** Only work on dirs.. */
+  if (!(dir->qid.type & T9P_QID_DIR))
+    return -ENOTDIR;
+
+  struct trans_node* n = tr_get_node(&c->trans_pool);
+  if (!n)
+    return -ENOMEM;
+
+  const ssize_t numEnts = bufsize / sizeof(struct dirent);
+
+  /** Number of entries read per transaction is fixed */
+  const uint32_t count = sizeof(packet) - sizeof(struct Rreaddir);
+
+  ssize_t i;
+  for (i = 0; i < numEnts;) {
+
+    if ((l = encode_Treaddir(packet, sizeof(packet), n->tag, dir->fid, ctx->offset, count)) < 0) {
+      ERROR(c, "%s: Unable to encode Treaddir\n", __FUNCTION__);
+      status = -EINVAL;
+      goto error;
+    }
+
+    struct trans tr = {
+      .data = packet,
+      .size = l,
+      .rdata = packet,
+      .rsize = sizeof(packet),
+      .rtype = T9P_TYPE_Rreaddir
+    };
+
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
+      ERROR(c, "%s: Treaddir: %s\n", __FUNCTION__, _t9p_strerror(l));
+      status = l;
+      goto error;
+    }
+
+    /** NOTE: offset and prev will be set by _t9p_parse_dir_callback */
+    struct _t9p_parse_dir_dirents_param dp = {
+      .i = &i,
+      .totalWanted = numEnts,
+      .offset = &ctx->offset,
+      .buffer = buffer,
+    };
+
+    struct Rreaddir rd;
+    if ((decode_Rreaddir(&rd, packet, l, _t9p_parse_dir_callback_dirents, &dp)) < 0) {
+      ERROR(c, "%s: Failed to decode Rreaddir\n", __FUNCTION__);
+      status = -EPROTO;
+      goto error;
+    }
+
+    /** Rreaddir returns count = 0 or offset = -1 when no more data is available to be read */
+    if (rd.count == 0 || ctx->offset == (uint64_t)-1)
+      break;
+  }
+
+  return i * sizeof(struct dirent);
+error:
   return status;
 }
 
