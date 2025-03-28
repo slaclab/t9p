@@ -12,10 +12,16 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
-#ifdef RTEMS_LIBBSD_STACK
+#if __RTEMS_MAJOR__ < 6
+#include <rtems/error.h>
+#endif
+#ifdef RTEMS_BSD_STACK
 #include <rtems/rtems-debugger-remote-tcp.h>
 #include <rtems/rtems-debugger.h>
+#else
+#include  <rtems/rtems_bsdnet.h>
 #endif
 
 #include "rtems_test_cfg.h"
@@ -23,14 +29,18 @@
 
 #define BSP_CMDLINE "-u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
+#ifdef RTEMS_LEGACY_STACK
+struct rtems_bsdnet_config rtems_bsdnet_config;
+#endif
+
 /** From t9p_cmd.c */
 extern int main(int, char**);
 
 /** Configure network using libbsd */
 static void
-configure_network()
+configure_network(void)
 {
-#if defined(__i386__)
+#if defined(__i386__) && __RTEMS_MAJOR__ > 5
   // From EPICS base:
   // glorious hack to stub out useless EEPROM check
   // which takes sooooo longggg w/ QEMU
@@ -39,6 +49,7 @@ configure_network()
   *(char*)&_bsd_e1000_validate_nvm_checksum = 0xc3;
 #endif
 
+#ifndef RTEMS_LEGACY_STACK
   rtems_bsd_setlogpriority("debug");
   if (rtems_bsd_initialize() != RTEMS_SUCCESSFUL) {
     printf("rtems_bsd_initialize() failed\n");
@@ -56,12 +67,36 @@ configure_network()
   /** Display current network configuration */
   char* cmd[] = {"ifconfig", NULL};
   rtems_bsd_command_ifconfig(1, cmd);
+#endif
 
 #if __RTEMS_MAJOR__ >= 6 && __i386__
   rtems_debugger_register_tcp_remote();
   rtems_printer printer;
   rtems_print_printer_printf(&printer);
   rtems_debugger_start("tcp", "1234", RTEMS_DEBUGGER_TIMEOUT, 1, &printer);
+#endif
+
+#ifdef RTEMS_LEGACY_STACK
+  static struct rtems_bsdnet_ifconfig ifc;
+  static struct rtems_bsdnet_ifconfig lo;
+  ifc.next = &lo;
+
+  memset(&rtems_bsdnet_config, 0, sizeof(rtems_bsdnet_config));
+  rtems_bsdnet_config.ifconfig = &ifc;
+
+  ifc.ip_address = "10.0.2.15";
+  ifc.ip_netmask = "255.255.255.0";
+  ifc.name = "em0";
+  ifc.attach = RTEMS_BSP_NETWORK_DRIVER_ATTACH;
+
+  lo.ip_address = "127.0.0.1";
+  lo.ip_netmask = "255.0.0.0";
+  lo.name = "lo0";
+  lo.attach = RTEMS_BSP_NETWORK_DRIVER_ATTACH;
+
+  rtems_bsdnet_initialize_network();
+
+  rtems_bsdnet_show_if_stats();
 #endif
 
   /** Register 9P fs backend */
@@ -100,7 +135,9 @@ POSIX_Init(void* arg)
     printf("stdin is not a chardev, you will not have any input!\n");
   }
 
+#if __RTEMS_MAJOR__ >= 6
   rtems_shell_init_environment();
+#endif
 
   /** Configure network */
   configure_network();
@@ -135,7 +172,7 @@ POSIX_Init(void* arg)
     }
   }
 
-  const int MAX_ARGS = 32;
+  #define MAX_ARGS 32
   char* args[MAX_ARGS] = {};
 
   /** Tokenize the BSP command line into something that can be consumed by t9p */
@@ -197,8 +234,6 @@ bsp_predriver_hook(void)
 /* MINIMUM_STACK_SIZE == 8K */
 #define CONFIGURE_EXTRA_TASK_STACKS (8000 * RTEMS_MINIMUM_STACK_SIZE)
 
-#define CONFIGURE_MAXIMUM_MESSAGE_QUEUES 10
-
 #define CONFIGURE_FILESYSTEM_DEVFS
 #define CONFIGURE_FILESYSTEM_NFS
 #define CONFIGURE_FILESYSTEM_IMFS
@@ -218,6 +253,9 @@ bsp_predriver_hook(void)
 #define CONFIGURE_APPLICATION_NEEDS_STUB_DRIVER
 #define CONFIGURE_APPLICATION_NEEDS_ZERO_DRIVER
 
+#define CONFIGURE_UNIFIED_WORK_AREAS
+
+#define CONFIGURE_LIBIO_MAXIMUM_FILE_DESCRIPTORS 150
 #define CONFIGURE_MAXIMUM_FILE_DESCRIPTORS 64
 #define CONFIGURE_IMFS_ENABLE_MKFIFO 2
 
@@ -235,18 +273,32 @@ bsp_predriver_hook(void)
 #define CONFIGURE_BDBUF_MAX_READ_AHEAD_BLOCKS 4
 #define CONFIGURE_BDBUF_CACHE_MEMORY_SIZE (1 * 1024 * 1024)
 
+#if __RTEMS_MAJOR__ < 5
+#define CONFIGURE_MAXIMUM_TASKS             rtems_resource_unlimited(30)
+#define CONFIGURE_MAXIMUM_BARRIERS          rtems_resource_unlimited(30)
+#define CONFIGURE_MAXIMUM_SEMAPHORES        rtems_resource_unlimited(500)
+#define CONFIGURE_MAXIMUM_TIMERS            rtems_resource_unlimited(20)
+#define CONFIGURE_MAXIMUM_MESSAGE_QUEUES    rtems_resource_unlimited(5)
+#else
+#define CONFIGURE_MAXIMUM_MESSAGE_QUEUES 10
+#endif
+
 #define CONFIGURE_SHELL_COMMANDS_INIT
 
 #include <bsp/irq-info.h>
 
+#if __RTEMS_MAJOR__ >= 6
 #include <rtems/netcmds-config.h>
+#endif
 
+#ifndef RTEMS_LEGACY_STACK
 /** Add the BSD commands we want */
 #define CONFIGURE_SHELL_USER_COMMANDS                                                              \
   &bsp_interrupt_shell_command, &rtems_shell_HOSTNAME_Command, &rtems_shell_PING_Command,          \
     &rtems_shell_ROUTE_Command, &rtems_shell_NETSTAT_Command, &rtems_shell_IFCONFIG_Command,       \
     &rtems_shell_TCPDUMP_Command, &rtems_shell_PFCTL_Command, &rtems_shell_SYSCTL_Command,         \
     &rtems_shell_ARP_Command, &rtems_shell_VMSTAT_Command
+#endif
 
 #define CONFIGURE_SHELL_COMMANDS_ALL_NETWORKING
 #define CONFIGURE_SHELL_COMMANDS_ALL

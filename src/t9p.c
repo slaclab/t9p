@@ -23,8 +23,10 @@
 #ifdef __linux__
 #include <linux/limits.h>
 #elif defined(__rtems__)
-#include <rtems/version.h>
+#include <rtems/score/cpuopts.h>
+#if __RTEMS_MAJOR__ >= 6
 #include <sys/limits.h>
+#endif
 #else
 #define PATH_MAX 256
 #endif
@@ -764,7 +766,6 @@ t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
   TRACE(c, "t9p_open_handle(p=%p,path=%s)\n", parent, path);
   char p[T9P_PATH_MAX];
   strNcpy(p, path, sizeof(p));
-  int status = 0;
 
   /** Default parent is the root handle */
   if (!parent)
@@ -1622,9 +1623,11 @@ _t9p_parse_dir_callback_dirents(void* param, struct Rreaddir_dir dir, const char
     return;
 
   struct dirent* de = ((struct dirent*)dp->buffer) + *dp->i;
-  de->d_fileno = *dp->i;
   de->d_reclen = sizeof(*de);
+#if __RTEMS_MAJOR__ >= 6
   de->d_type = dir.type;
+  de->d_fileno = *dp->i;
+#endif
   de->d_off = sizeof(struct dirent) * *dp->i;
   size_t nl = MIN(dir.namelen, sizeof(de->d_name)-1);
 #ifdef __rtems__
@@ -2082,14 +2085,14 @@ _t9p_thread_proc(void* param)
       if (c->opts.log_level <= T9P_LOG_TRACE) {
         if (node->tr.hdata)
           printf(
-            "send: (header) type=%d, len=%d, tag=%d\n",
+            "send: (header) type=%d, len=%u, tag=%d\n",
             ((struct TRcommon*)node->tr.hdata)->type,
             ((struct TRcommon*)node->tr.hdata)->size,
             ((struct TRcommon*)node->tr.hdata)->tag
           );
         if (node->tr.data)
           printf(
-            "send: type=%d, len=%d, tag=%d\n",
+            "send: type=%d, len=%u, tag=%d\n",
             ((struct TRcommon*)node->tr.data)->type,
             ((struct TRcommon*)node->tr.data)->size,
             ((struct TRcommon*)node->tr.data)->tag
@@ -2128,7 +2131,7 @@ _t9p_thread_proc(void* param)
       }
 
       if (c->opts.log_level <= T9P_LOG_TRACE) {
-        printf("recv: type=%d, tag=%d, size=%d\n", com.type, com.tag, com.size);
+        printf("recv: type=%d, tag=%d, size=%u\n", com.type, com.tag, com.size);
       }
 
       if (com.tag >= MAX_TAGS) {
@@ -2162,7 +2165,7 @@ _t9p_thread_proc(void* param)
 
       /** Check for type mismatch and discard if there is one */
       if (n->tr.rtype != 0 && com.type != n->tr.rtype) {
-        ERROR(c, "recv: Expected msg type '%d' but got '%d'; discarding!\n", n->tr.rtype, com.type);
+        ERROR(c, "recv: Expected msg type '%u' but got '%d'; discarding!\n", n->tr.rtype, com.type);
         _discard(c, &com);
         n->tr.status = -1;
         event_signal(n->event);
@@ -2225,11 +2228,12 @@ struct tcp_context
 };
 
 void*
-t9p_tcp_init()
+t9p_tcp_init(void)
 {
   struct tcp_context* ctx = calloc(1, sizeof(struct tcp_context));
   ctx->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (ctx->sock < 0) {
+    perror("t9p_tcp_init: failed to create socket");
     free(ctx);
     return NULL;
   }

@@ -6,12 +6,19 @@
 #include <rtems.h>
 #include <rtems/libio.h>
 #include <rtems/libio_.h>
-#include <rtems/thread.h>
 #include <stdlib.h>
+#include <inttypes.h>
+#if __RTEMS_MAJOR__ < 5
+#include <rtems/posix/mutex.h>
+#endif
+
+#if __RTEMS_MAJOR__ >= 6
+#include <rtems/thread.h>
+#endif
 
 #include "t9p_posix.c"
 
-//#define DO_TRACE
+#define DO_TRACE
 #ifdef DO_TRACE
 #define TRACE(...) do { \
   printf("%s(", __FUNCTION__); \
@@ -87,69 +94,174 @@ struct _rtems_filesystem_file_handlers_r nfs_link_file_handlers = {
  **************************************************************************************/
 
 static int t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void* data);
+
+/** RTEMS 6+ Prototypes */
+#if __RTEMS_MAJOR__ >= 6
+
 static void t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry);
 
+static void t9p_rtems_fs_freenode(const rtems_filesystem_location_info_t* loc);
+
 static void t9p_rtems_fs_evalpath(rtems_filesystem_eval_path_context_t* ctx);
-static int t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry);
-static int t9p_rtems_fs_unmount(rtems_filesystem_mount_table_entry_t* mt_entry);
+
 static int t9p_rtems_fs_symlink(
-  const rtems_filesystem_location_info_t* parentloc, const char* name, size_t namelen,
+  const rtems_filesystem_location_info_t* parentloc,
+  const char* name,
+  size_t namelen,
   const char* target
 );
-static int
-t9p_rtems_fs_utimenfs(const rtems_filesystem_location_info_t* loc, struct timespec times[2]);
+
+static long t9p_rtems_fs_readlink(
+  const rtems_filesystem_location_info_t* loc,
+  char* buf,
+  size_t bufsize
+);
+
+static void t9p_rtems_fs_lock(const rtems_filesystem_mount_table_entry_t* mt_entry);
+static void t9p_rtems_fs_unlock(const rtems_filesystem_mount_table_entry_t* mt_entry);
+
+static int t9p_rtems_fs_rename(
+  const rtems_filesystem_location_info_t*,
+  const rtems_filesystem_location_info_t*,
+  const rtems_filesystem_location_info_t*,
+  const char*,
+  size_t
+);
+
+static int t9p_rtems_fs_link(
+  const rtems_filesystem_location_info_t*,
+  const rtems_filesystem_location_info_t*,
+  const char*,
+  size_t
+);
+
+static int t9p_rtems_fs_mknod(
+  const rtems_filesystem_location_info_t* parentloc,
+  const char* name,
+  size_t namelen,
+  mode_t mode,
+  dev_t dev
+);
+
+static int t9p_rtems_fs_chown(
+  const rtems_filesystem_location_info_t* loc,
+  uid_t owner,
+  gid_t group
+);
+
+static int t9p_rtems_fs_utimens(
+  const rtems_filesystem_location_info_t* loc,
+  struct timespec times[2]
+);
+
+#else
+
+static int t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry);
+
+static int t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc);
+
+static int t9p_rtems_fs_symlink(
+  rtems_filesystem_location_info_t* parentloc,
+  const char *link_name,
+  const char *node_name
+);
+
+static int t9p_rtems_fs_readlink(
+  rtems_filesystem_location_info_t* loc,
+  char* buf,
+  size_t bufsize
+);
+
+static void t9p_rtems_fs_lock(const rtems_filesystem_mount_table_entry_t* mt_entry);
+static void t9p_rtems_fs_unlock(const rtems_filesystem_mount_table_entry_t* mt_entry);
+
+static int t9p_rtems_fs_rename(
+  rtems_filesystem_location_info_t *old_parent_loc,
+  rtems_filesystem_location_info_t *old_loc,
+  rtems_filesystem_location_info_t *new_parent_loc, const char *name
+);
+
+static int t9p_rtems_fs_link(
+  rtems_filesystem_location_info_t *to_loc,
+  rtems_filesystem_location_info_t *parent_loc,
+  const char *name
+);
+
+static int t9p_rtems_fs_mknod(
+  const char *path,
+  mode_t mode,
+  dev_t dev,
+  rtems_filesystem_location_info_t* pathloc
+);
+
+static int t9p_rtems_fs_chown(
+  rtems_filesystem_location_info_t* loc,
+  uid_t owner,
+  gid_t group
+);
+
+static int t9p_rtems_fs_utimens(
+  rtems_filesystem_location_info_t* loc,
+  time_t atime,
+  time_t mtime
+);
+
+static int t9p_rtems_fs_eval_link(
+  rtems_filesystem_location_info_t *pathloc,
+  int flags
+);
+
+static int t9p_rtems_fs_evalpath(
+  const char *pathname,
+  size_t pathnamelen,
+  int flags,
+  rtems_filesystem_location_info_t *pathloc
+);
+
+static int t9p_rtems_fs_eval_for_make(
+  const char                       *path,
+  rtems_filesystem_location_info_t *pathloc,
+  const char                      **name
+);
+
+#endif // RTEMS_MAJOR >= 6
+
+static int t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry);
+static int t9p_rtems_fs_unmount(rtems_filesystem_mount_table_entry_t* mt_entry);
 static int t9p_rtems_fs_rmnod(
   const rtems_filesystem_location_info_t* parentloc, const rtems_filesystem_location_info_t* loc
-);
-static int t9p_rtems_fs_mknod(
-  const rtems_filesystem_location_info_t* parentloc, const char* name, size_t namelen, mode_t mode,
-  dev_t dev
 );
 static bool t9p_rtems_fs_are_nodes_equal(
   const rtems_filesystem_location_info_t* a, const rtems_filesystem_location_info_t* b
 );
-static void t9p_rtems_fs_freenode(const rtems_filesystem_location_info_t* loc);
 static int t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t* loc);
-static int t9p_rtems_fs_link(
-  const rtems_filesystem_location_info_t*, const rtems_filesystem_location_info_t*, const char*,
-  size_t
-);
-static long
-t9p_rtems_fs_readlink(const rtems_filesystem_location_info_t* loc, char* buf, size_t bufsize);
-static int t9p_rtems_fs_rename(
-  const rtems_filesystem_location_info_t*, const rtems_filesystem_location_info_t*,
-  const rtems_filesystem_location_info_t*, const char*, size_t
-);
-static int
-t9p_rtems_fs_chown(const rtems_filesystem_location_info_t* loc, uid_t owner, gid_t group);
 static int t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t* loc, mode_t mode);
-static bool t9p_rtems_fs_is_dir(rtems_filesystem_eval_path_context_t* ctx, void* data);
-static rtems_filesystem_eval_path_generic_status t9p_rtems_eval_path_token(
-  rtems_filesystem_eval_path_context_t* ctx, void* arg, const char* token, size_t tokenlen
-);
-static void t9p_rtems_fs_lock(const rtems_filesystem_mount_table_entry_t* mt_entry);
-static void t9p_rtems_fs_unlock(const rtems_filesystem_mount_table_entry_t* mt_entry);
 
 static const struct _rtems_filesystem_operations_table t9p_fs_ops = {
-  .lock_h = t9p_rtems_fs_lock,                       /*rtems_filesystem_mt_entry_lock_t*/
-  .unlock_h = t9p_rtems_fs_unlock,                   /*rtems_filesystem_mt_entry_unlock_t*/
-  .eval_path_h = t9p_rtems_fs_evalpath,              /*rtems_filesystem_eval_path_t*/
   .link_h = t9p_rtems_fs_link,                       /*rtems_filesystem_link_t*/
-  .are_nodes_equal_h = t9p_rtems_fs_are_nodes_equal, /*rtems_filesystem_are_nodes_equal_t*/
   .mknod_h = t9p_rtems_fs_mknod,                     /*rtems_filesystem_mknod_t*/
-  .rmnod_h = t9p_rtems_fs_rmnod,                     /*rtems_filesystem_rmnod_t*/
-  .fchmod_h = t9p_rtems_fs_fchmod,                   /*rtems_filesystem_fchmod_t*/
   .chown_h = t9p_rtems_fs_chown,                     /*rtems_filesystem_chown_t*/
-  .clonenod_h = t9p_rtems_fs_clonenode,              /*rtems_filesystem_clonenode_t*/
   .freenod_h = t9p_rtems_fs_freenode,                /*rtems_filesystem_freenode_t*/
   .mount_h = t9p_rtems_fs_mount,                     /*rtems_filesystem_mount_t*/
   .unmount_h = t9p_rtems_fs_unmount,                 /*rtems_filesystem_unmount_t*/
   .fsunmount_me_h = t9p_rtems_fs_unmountme,          /*rtems_filesystem_fsunmount_me_t*/
-  .utimens_h = t9p_rtems_fs_utimenfs,                /*rtems_filesystem_utimens_t*/
   .symlink_h = t9p_rtems_fs_symlink,                 /*rtems_filesystem_symlink_t*/
   .readlink_h = t9p_rtems_fs_readlink,               /*rtems_filesystem_readlink_t*/
   .rename_h = t9p_rtems_fs_rename,                   /*rtems_filesystem_rename_t*/
   .statvfs_h = NULL,                                 /*rtems_filesystem_statvfs_t*/
+#if __RTEMS_MAJOR__ >= 6
+  .are_nodes_equal_h = t9p_rtems_fs_are_nodes_equal, /*rtems_filesystem_are_nodes_equal_t*/
+  .fchmod_h = t9p_rtems_fs_fchmod,                   /*rtems_filesystem_fchmod_t*/
+  .clonenod_h = t9p_rtems_fs_clonenode,              /*rtems_filesystem_clonenode_t*/
+  .rmnod_h = t9p_rtems_fs_rmnod,                     /*rtems_filesystem_rmnod_t*/
+  .lock_h = t9p_rtems_fs_lock,                       /*rtems_filesystem_mt_entry_lock_t*/
+  .unlock_h = t9p_rtems_fs_unlock,                   /*rtems_filesystem_mt_entry_unlock_t*/
+  .eval_path_h = t9p_rtems_fs_evalpath,              /*rtems_filesystem_eval_path_t*/
+  .utimens_h = t9p_rtems_fs_utimens,                /*rtems_filesystem_utimens_t*/
+#else
+  .evalpath_h = t9p_rtems_fs_evalpath,              /*rtems_filesystem_eval_path_t*/
+  .utime_h = t9p_rtems_fs_utimens,
+#endif
 };
 
 static const rtems_filesystem_limits_and_options_t t9p_fs_opts = {
@@ -167,10 +279,6 @@ static const rtems_filesystem_limits_and_options_t t9p_fs_opts = {
   .posix_vdisable = 0,           /* special char processing, 0=no, 1=yes */
 };
 
-static const rtems_filesystem_eval_path_generic_config t9p_eval_path_cfg = {
-  .is_directory = t9p_rtems_fs_is_dir,
-};
-
 typedef struct t9p_rtems_node
 {
   t9p_context_t* c;
@@ -182,7 +290,8 @@ typedef struct t9p_rtems_fs_info
 {
   t9p_context_t* c;
   t9p_rtems_mount_opts_t opts;
-  rtems_recursive_mutex mutex;
+  pthread_mutex_t mutex;
+  pthread_mutexattr_t mutattr;
   char mntpt[PATH_MAX];
 } t9p_rtems_fs_info_t;
 
@@ -190,12 +299,17 @@ typedef struct t9p_rtems_fs_info
  * File Operations
  *************************************************************************************/
 
-static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode);
 static int t9p_rtems_file_close(rtems_libio_t* iop);
 static ssize_t t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count);
 static ssize_t t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count);
 static off_t t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence);
+#if __RTEMS_MAJOR__ >= 6
 static int t9p_rtems_file_fstat(const rtems_filesystem_location_info_t* loc, struct stat* buf);
+static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode);
+#else
+static int t9p_rtems_file_fstat(rtems_filesystem_location_info_t* loc, struct stat* buf);
+static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode);
+#endif
 static int t9p_rtems_file_ftruncate(rtems_libio_t* iop, off_t length);
 static int t9p_rtems_file_fsync(rtems_libio_t* iop);
 static int t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer);
@@ -211,26 +325,35 @@ static rtems_filesystem_file_handlers_r t9p_file_ops = {
   .ftruncate_h = t9p_rtems_file_ftruncate, /*rtems_filesystem_ftruncate_t */
   .fsync_h = t9p_rtems_file_fsync,         /*rtems_filesystem_fsync_t */
   .fdatasync_h = t9p_rtems_file_fsync,     /*rtems_filesystem_fdatasync_t */
+#if __RTEMS_MAJOR__ >= 6
   .fcntl_h = rtems_filesystem_default_fcntl,
   .poll_h = rtems_filesystem_default_poll,
   .kqfilter_h = rtems_filesystem_default_kqfilter,
   .readv_h = rtems_filesystem_default_readv,
   .writev_h = rtems_filesystem_default_writev,
   .mmap_h = rtems_filesystem_default_mmap,
+#else
+  .fcntl_h = NULL,
+#endif
 };
 
 static ssize_t t9p_rtems_dir_read(rtems_libio_t* iop, void* buffer, size_t count);
 static int t9p_rtems_dir_fstat(const rtems_filesystem_location_info_t* loc, struct stat* buf);
+#if __RTEMS_MAJOR__ >= 6
 static int t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode);
+#else
+static int t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode);
+#endif
 
 static const rtems_filesystem_file_handlers_r t9p_dir_ops = {
   .open_h = t9p_rtems_dir_open,
-  .close_h = rtems_filesystem_default_close,
   .read_h = t9p_rtems_dir_read,
-  .write_h = rtems_filesystem_default_write,
   .ioctl_h = t9p_rtems_file_ioctl,
-  .lseek_h = rtems_filesystem_default_lseek_directory,
   .fstat_h = t9p_rtems_file_fstat,
+#if __RTEMS_MAJOR__ >= 6
+  .write_h = rtems_filesystem_default_write,
+  .lseek_h = rtems_filesystem_default_lseek_directory,
+  .close_h = rtems_filesystem_default_close,
   .ftruncate_h = rtems_filesystem_default_ftruncate_directory,
   .fsync_h = rtems_filesystem_default_fsync_or_fdatasync_success,
   .fdatasync_h = rtems_filesystem_default_fsync_or_fdatasync_success,
@@ -240,6 +363,9 @@ static const rtems_filesystem_file_handlers_r t9p_dir_ops = {
   .readv_h = rtems_filesystem_default_readv,
   .writev_h = rtems_filesystem_default_writev,
   .mmap_h = rtems_filesystem_default_mmap,
+#else
+  /** Default the rest to NULL */
+#endif
 };
 
 /**************************************************************************************
@@ -247,9 +373,8 @@ static const rtems_filesystem_file_handlers_r t9p_dir_ops = {
  **************************************************************************************/
 
 int
-t9p_rtems_register()
+t9p_rtems_register(void)
 {
-  rtems_filesystem_fsmount_me_t mnt;
   return rtems_filesystem_register(RTEMS_FILESYSTEM_TYPE_9P, t9p_rtems_fsmount_me);
 }
 
@@ -299,6 +424,23 @@ static t9p_context_t*
 t9p_rtems_iop_get_ctx(const rtems_libio_t* iop)
 {
   return ((t9p_rtems_fs_info_t*)iop->pathinfo.mt_entry->fs_info)->c;
+}
+
+static t9p_rtems_node_t*
+t9p_rtems_iop_clone_node(const t9p_rtems_node_t* old, int dupFid)
+{
+  t9p_rtems_node_t* n = calloc(sizeof(t9p_rtems_node_t), 1);
+  *n = *old;
+
+  /** Duplicate fid too */
+  if (dupFid) {
+    if (t9p_dup(n->c, old->h, &n->h) < 0) {
+      free(n);
+      return NULL;
+    }
+  }
+
+  return n;
 }
 
 static int
@@ -367,13 +509,21 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     }
   }
 
+#if __RTEMS_MAJOR__ >= 6
   mt_entry->ops = &t9p_fs_ops;
   mt_entry->pathconf_limits_and_options = &t9p_fs_opts;
-
+#else
+  mt_entry->mt_fs_root.ops = &t9p_fs_ops;
+  mt_entry->pathconf_limits_and_options = t9p_fs_opts;
+#endif
   /** Configure FS info and opts */
   mt_entry->fs_info = calloc(sizeof(t9p_rtems_fs_info_t), 1);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
-  rtems_recursive_mutex_init(&fi->mutex, "9PMUTEX");
+
+  pthread_mutexattr_init(&fi->mutattr);
+  pthread_mutexattr_settype(&fi->mutattr, PTHREAD_MUTEX_RECURSIVE);
+  pthread_mutex_init(&fi->mutex, &fi->mutattr);
+  
   t9p_opts_init(&fi->opts.opts);
   fi->opts.opts.gid = gid;
   fi->opts.opts.uid = uid;
@@ -406,27 +556,32 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   root->c = fi->c;
   root->size = -1;
   root->h = t9p_get_root(fi->c);
+#if __RTEMS_MAJOR__ >= 6
   mt_entry->mt_fs_root->location.node_access = root;
   mt_entry->mt_fs_root->location.handlers = &t9p_dir_ops;
   mt_entry->mt_fs_root->reference_count++;
-
+#else
+  mt_entry->mt_fs_root.node_access = root;
+  mt_entry->mt_fs_root.handlers = &t9p_dir_ops;
+  mt_entry->mt_fs_root.ops = &t9p_fs_ops;
+  //mt_entry->mt_fs_root->reference_count++; // FIXME:???
+#endif
   return 0;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static void
 t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry)
+#else
+static int
+t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry)
+#endif
 {
   TRACE("mt_entry=%p", mt_entry);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
-  rtems_recursive_mutex_destroy(&fi->mutex);
+  pthread_mutex_destroy(&fi->mutex);
+  pthread_mutexattr_destroy(&fi->mutattr);
   t9p_shutdown(fi->c);
-}
-
-static bool
-t9p_rtems_fs_is_dir(rtems_filesystem_eval_path_context_t* ctx, void* data)
-{
-  TRACE("ctx=%p,data=%p", ctx, data);
-  return false;
 }
 
 static void
@@ -434,7 +589,7 @@ t9p_rtems_fs_lock(const rtems_filesystem_mount_table_entry_t* mt_entry)
 {
   TRACE("mt_entry=%p", mt_entry);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
-  rtems_recursive_mutex_lock(&fi->mutex);
+  pthread_mutex_lock(&fi->mutex);
 }
 
 static void
@@ -442,50 +597,10 @@ t9p_rtems_fs_unlock(const rtems_filesystem_mount_table_entry_t* mt_entry)
 {
   TRACE("mt_entry=%p", mt_entry);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
-  rtems_recursive_mutex_unlock(&fi->mutex);
+  pthread_mutex_unlock(&fi->mutex);
 }
 
-static rtems_filesystem_eval_path_generic_status
-t9p_rtems_eval_path_token(
-  rtems_filesystem_eval_path_context_t* ctx, void* arg, const char* token, size_t tokenlen
-)
-{
-  TRACE("ctx=%p, arg=%p, token=%s, tokenlen=%zu", ctx, arg, token, tokenlen);
-  t9p_rtems_node_t* node = arg;
-  rtems_filesystem_location_info_t* currloc = rtems_filesystem_eval_path_get_currentloc(ctx);
-
-  if (rtems_filesystem_is_current_directory(token, tokenlen)) {
-    rtems_filesystem_eval_path_clear_token(ctx);
-    return RTEMS_FILESYSTEM_EVAL_PATH_GENERIC_DONE;
-  }
-
-  t9p_handle_t nh = t9p_open_handle(node->c, node->h, token);
-  if (nh == NULL) {
-    return RTEMS_FILESYSTEM_EVAL_PATH_GENERIC_NO_ENTRY;
-  }
-
-  /** Follow symlinks if request */
-  if (t9p_is_symlink(nh) && ctx->flags & RTEMS_FS_FOLLOW_SYM_LINK) {
-  }
-
-  /** Configure handlers */
-  if (t9p_is_dir(nh)) {
-    currloc->handlers = &t9p_dir_ops;
-  } else {
-    currloc->handlers = &t9p_file_ops;
-  }
-
-  currloc->node_access = calloc(sizeof(t9p_rtems_node_t), 1);
-  t9p_rtems_node_t* nn = currloc->node_access;
-  nn->c = node->c;
-  nn->h = nh;
-  nn->size = -1;
-
-  t9p_close_handle(node->c, node->h);
-
-  return RTEMS_FILESYSTEM_EVAL_PATH_GENERIC_CONTINUE;
-}
-
+#if __RTEMS_MAJOR__ >= 6
 /**
  * Transform a path into its final form based on the root node, starting node and a path string
  * describing the new location.
@@ -507,7 +622,7 @@ t9p_rtems_fs_evalpath(rtems_filesystem_eval_path_context_t* ctx)
   }
 
   /** Create a new node for the new location. We're supposed to reuse currentloc here. */
-  t9p_rtems_node_t* e = calloc(sizeof(t9p_rtems_node_t*), 1);
+  t9p_rtems_node_t* e = calloc(sizeof(t9p_rtems_node_t), 1);
   current->node_access = e;
   e->c = n->c;
   e->h = h;
@@ -522,6 +637,96 @@ t9p_rtems_fs_evalpath(rtems_filesystem_eval_path_context_t* ctx)
 
   rtems_filesystem_eval_path_clear_path(ctx);
 }
+#endif
+
+#if __RTEMS_MAJOR__ <= 4
+
+static int
+t9p_rtems_fs_eval_link(
+  rtems_filesystem_location_info_t *pathloc,
+  int flags
+)
+{
+  
+}
+
+/**
+ * TODO: RTEMS4:
+ *  - Handle special case where RTEMS may do path/to/file.xyz/.. to get the parent dir
+ */
+
+/**
+ * Evalpath notes
+ * - When entering eval path, clone the node
+ */
+
+static int
+t9p_rtems_fs_evalpath(
+  const char *pathname,
+  size_t pathnamelen,
+  int flags,
+  rtems_filesystem_location_info_t *pathloc
+)
+{
+  TRACE("pathname=%s,pathnamelen=%zu,flags=%d,pathloc=%p", pathname, pathnamelen,
+    flags, pathloc);
+
+  if (!rtems_libio_is_valid_perms(flags)) {
+    errno = EIO;
+    return -1;
+  }
+
+  t9p_rtems_node_t* p = t9p_rtems_iop_clone_node(pathloc->node_access, 0);
+  pathloc->node_access = p;
+
+  t9p_handle_t nh = t9p_open_handle(p->c, p->h, pathname);
+  if (nh == NULL) {
+    errno = ENOENT;
+    return -1;
+  }
+
+  p->h = nh;
+  p->size = -1;
+
+  pathloc->ops = &t9p_fs_ops;
+  if (t9p_is_dir(p->h)) {
+    pathloc->handlers = &t9p_dir_ops;
+  }
+  else {
+    pathloc->handlers = &t9p_file_ops;
+  }
+
+  return 0;
+}
+
+static int
+t9p_rtems_fs_eval_for_make(
+  const char                       *path,
+  rtems_filesystem_location_info_t *pathloc,
+  const char                      **name
+)
+{
+  *name = strrchr(path, '/');
+  if (!*name)
+    *name = path;
+
+  t9p_rtems_node_t* nn = t9p_rtems_iop_clone_node(pathloc->node_access, 0);
+  pathloc->node_access = nn;
+
+  t9p_handle_t h = t9p_open_handle(nn->c, nn->h, path);
+  if (h == NULL) {
+    errno = ENOENT;
+    free(nn);
+    return -1;
+  }
+
+  nn->h = h;
+  nn->size = -1;
+
+  return 0;
+}
+
+#endif
 
 static int
 t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry)
@@ -537,13 +742,22 @@ t9p_rtems_fs_unmount(rtems_filesystem_mount_table_entry_t* mt_entry)
   return -1;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_fs_symlink(
   const rtems_filesystem_location_info_t* parentloc, const char* name, size_t namelen,
   const char* target
 )
+#else
+static int
+t9p_rtems_fs_symlink(
+  rtems_filesystem_location_info_t* parentloc,
+  const char *name,
+  const char *target
+)
+#endif
 {
-  TRACE("parentloc=%p, name=%s, nl=%zu, target=%s", parentloc, name, namelen, target);
+  TRACE("parentloc=%p, name=%s, target=%s", parentloc, name, target);
   t9p_rtems_fs_info_t* fi = parentloc->mt_entry->fs_info;
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(parentloc);
   int r = t9p_symlink(fi->c, n->h, target, name, T9P_NOGID, NULL);
@@ -554,8 +768,13 @@ t9p_rtems_fs_symlink(
   return 0;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static int
-t9p_rtems_fs_utimenfs(const rtems_filesystem_location_info_t* loc, struct timespec times[2])
+t9p_rtems_fs_utimens(const rtems_filesystem_location_info_t* loc, struct timespec times[2])
+#else
+static int
+t9p_rtems_fs_utimens(rtems_filesystem_location_info_t* loc, time_t atime, time_t mtime)
+#endif
 {
   TRACE("loc=%p", loc);
   return -1;
@@ -570,13 +789,25 @@ t9p_rtems_fs_rmnod(
   return -1;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_fs_mknod(
-  const rtems_filesystem_location_info_t* parentloc, const char* name, size_t namelen, mode_t mode,
+  const rtems_filesystem_location_info_t* parentloc,
+  const char* name,
+  size_t namelen,
+  mode_t mode,
   dev_t dev
 )
+#else
+static int t9p_rtems_fs_mknod(
+  const char *name,
+  mode_t mode,
+  dev_t dev,
+  rtems_filesystem_location_info_t* parentloc
+)
+#endif
 {
-  TRACE("parentloc=%p, name=%s, nl=%zu, mode=%u, dev=%llu", parentloc, name, namelen, mode, dev);
+  TRACE("parentloc=%p, name=%s, mode=%u, dev=%llu", parentloc, name, (uint32_t)mode, dev);
   t9p_rtems_fs_info_t* fi = parentloc->mt_entry->fs_info;
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(parentloc);
   /** This operation will immediately clunk the new fid */
@@ -599,8 +830,13 @@ t9p_rtems_fs_are_nodes_equal(
   return !memcmp(&qa, &qb, sizeof(qb));
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static void
 t9p_rtems_fs_freenode(const rtems_filesystem_location_info_t* loc)
+#else
+static int
+t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
+#endif
 {
   TRACE("loc=%p", loc);
   t9p_rtems_fs_info_t* fi = loc->mt_entry->fs_info;
@@ -635,18 +871,33 @@ t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t* loc)
   return 0;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_fs_link(
   const rtems_filesystem_location_info_t* parentloc,
-  const rtems_filesystem_location_info_t* targetloc, const char* name, size_t namelen
+  const rtems_filesystem_location_info_t* targetloc,
+  const char* name,
+  size_t namelen
 )
+#else
+static int t9p_rtems_fs_link(
+  rtems_filesystem_location_info_t  *targetloc,
+  rtems_filesystem_location_info_t  *parentloc,
+  const char                        *name
+)
+#endif
 {
-  TRACE("parentloc=%p, targetloc=%p, name=%s, namelen=%zu", parentloc, targetloc, name, namelen);
+  TRACE("parentloc=%p, targetloc=%p, name=%s", parentloc, targetloc, name);
   return -1;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static long
 t9p_rtems_fs_readlink(const rtems_filesystem_location_info_t* loc, char* buf, size_t bufsize)
+#else
+static int
+t9p_rtems_fs_readlink(rtems_filesystem_location_info_t* loc, char* buf, size_t bufsize)
+#endif
 {
   TRACE("loc=%p, buf=%p, bufsz=%zu", loc, buf, bufsize);
   t9p_rtems_fs_info_t* fi = loc->mt_entry->fs_info;
@@ -660,20 +911,34 @@ t9p_rtems_fs_readlink(const rtems_filesystem_location_info_t* loc, char* buf, si
   return 0;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_fs_rename(
   const rtems_filesystem_location_info_t* oldparentloc,
   const rtems_filesystem_location_info_t* oldloc,
   const rtems_filesystem_location_info_t* newparentloc, const char* name, size_t namelen
 )
+#else
+static int
+t9p_rtems_fs_rename(
+  rtems_filesystem_location_info_t *oldparentloc,
+  rtems_filesystem_location_info_t *oldloc,
+  rtems_filesystem_location_info_t *newparentloc, const char *name
+)
+#endif
 {
-  TRACE("oldparentloc=%p, oldloc=%p, newparentloc=%p, name=%s, namelen=%zu", oldparentloc,
-    oldloc, newparentloc, name, namelen);
+  TRACE("oldparentloc=%p, oldloc=%p, newparentloc=%p, name=%s", oldparentloc,
+    oldloc, newparentloc, name);
   return -1;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_fs_chown(const rtems_filesystem_location_info_t* loc, uid_t owner, gid_t group)
+#else
+static int
+t9p_rtems_fs_chown(rtems_filesystem_location_info_t* loc, uid_t owner, gid_t group)
+#endif
 {
   TRACE("loc=%p, owner=%d, group=%d", loc, owner, group);
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
@@ -688,7 +953,7 @@ t9p_rtems_fs_chown(const rtems_filesystem_location_info_t* loc, uid_t owner, gid
 static int
 t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t* loc, mode_t mode)
 {
-  TRACE("loc=%p, mode=%d", loc, mode);
+  TRACE("loc=%p, mode=%d", loc, (uint32_t)mode);
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
   int r = t9p_chmod(n->c, n->h, mode);
   if (r < 0) {
@@ -706,8 +971,10 @@ t9p_rtems_dir_read(rtems_libio_t* iop, void* buffer, size_t count)
 
   t9p_scandir_ctx_t sc = {.offset = iop->offset};
   ssize_t bytesTrans = t9p_readdir_dirents(n->c, n->h, &sc, buffer, count);
-  if (bytesTrans < 0)
-    rtems_set_errno_and_return_minus_one(-bytesTrans);
+  if (bytesTrans < 0) {
+    errno = -bytesTrans;
+    return -1;
+  }
   iop->offset = sc.offset;
   return bytesTrans;
 }
@@ -719,8 +986,13 @@ t9p_rtems_dir_fstat(const rtems_filesystem_location_info_t* loc, struct stat* bu
   return -1;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode)
+#else
+static int
+t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode)
+#endif
 {
   TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, oflag, mode);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
@@ -734,8 +1006,13 @@ t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode)
  * File handlers
  **************************************************************************************/
 
+#if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_file_open(rtems_libio_t* iop, const char* path, int oflag, mode_t mode)
+#else
+static int
+t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode)
+#endif
 {
   TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, oflag, mode);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
@@ -846,8 +1123,13 @@ t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence)
   return iop->offset;
 }
 
+#if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_file_fstat(const rtems_filesystem_location_info_t* loc, struct stat* buf)
+#else
+static int
+t9p_rtems_file_fstat(rtems_filesystem_location_info_t* loc, struct stat* buf)
+#endif
 {
   TRACE("loc=%p, buf=%p", loc, buf);
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
@@ -912,7 +1194,8 @@ t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer)
   TRACE("iop=%p, req=%lu, buf=%p", iop, req, buffer);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   if (!buffer) {
-    rtems_set_errno_and_return_minus_one(EINVAL);
+    errno = EINVAL;
+    return -1;
   }
 
   int* ll = buffer;
