@@ -2174,7 +2174,14 @@ _t9p_thread_proc(void* param)
             ((struct TRcommon*)node->tr.data)->tag
           );
       }
-      
+
+      /** FIXME: This is pretty ugly and may cause issues in the future */
+      if (node->tr.hdata)
+        atomic_add32(&c->stats.msg_counts[((struct TRcommon*)node->tr.hdata)->type], 1);
+
+      if (node->tr.data)
+        atomic_add32(&c->stats.msg_counts[((struct TRcommon*)node->tr.data)->type], 1);
+
       atomic_add64(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
       atomic_add32(&c->stats.send_cnt, 1);
 

@@ -32,6 +32,13 @@ done
 # diod running on host port 10002
 BSP_ARGS="--console=/dev/com1 -u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
-qemu-system-$ARCH $QEMU_ARGS -no-reboot -serial mon:stdio -nographic \
-    -device e1000,netdev=em0 -netdev user,id=em0,hostfwd=tcp::10003-:10003,hostfwd=tcp::1234-:1234 \
+if [[ "$(echo $TARGET | cut -d '-' -f1)"=="rtems4" ]]; then
+    NETDEV=ne2k_pci
+else
+    NETDEV=e1000
+fi
+echo "NETDEV=$NETDEV"
+
+qemu-system-$ARCH $QEMU_ARGS -no-reboot -m 128 -serial mon:stdio -nographic \
+    -device $NETDEV,netdev=em0 -netdev user,id=em0,hostfwd=tcp::10003-:10003,hostfwd=tcp::1234-:1234 \
     -append "$BSP_ARGS" -kernel $PWD/../build-cmake/build-$TARGET/t9p_rtems_test

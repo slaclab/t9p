@@ -1,12 +1,6 @@
 
 #include <rtems.h>
 #include <sys/types.h>
-#ifndef RTEMS_LEGACY_STACK
-#include <machine/rtems-bsd-commands.h>
-#include <rtems/bsd.h>
-#include <rtems/bsd/bsd.h>
-#include <rtems/bsd/iface.h>
-#endif
 #include <bsp.h>
 #include <rtems/shell.h>
 #include <stdbool.h>
@@ -14,14 +8,22 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+
+#ifdef RTEMS_BSD_STACK
+#include <machine/rtems-bsd-commands.h>
+#include <rtems/bsd.h>
+#include <rtems/bsd/bsd.h>
+#include <rtems/bsd/iface.h>
+#else // Legacy stack includes
+#include  <rtems/rtems_bsdnet.h>
+#endif
+
 #if __RTEMS_MAJOR__ < 6
 #include <rtems/error.h>
-#endif
-#ifdef RTEMS_BSD_STACK
+#include <rtems/pci.h>
+#elif __RTEMS_MAJOR__ >= 6
 #include <rtems/rtems-debugger-remote-tcp.h>
 #include <rtems/rtems-debugger.h>
-#else
-#include  <rtems/rtems_bsdnet.h>
 #endif
 
 #include "rtems_test_cfg.h"
@@ -29,27 +31,80 @@
 
 #define BSP_CMDLINE "-u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
-#ifdef RTEMS_LEGACY_STACK
-struct rtems_bsdnet_config rtems_bsdnet_config;
-#endif
-
 /** From t9p_cmd.c */
 extern int main(int, char**);
+
+#ifdef RTEMS_LEGACY_STACK
+/** From EPICS base: */
+int
+rtems_ne2kpci_driver_attach (struct rtems_bsdnet_ifconfig *config, int attach)
+{
+    uint8_t  irq;
+    uint32_t bar0;
+    int B, D, F, ret;
+    printk("Probing for NE2000 on PCI (aka. Realtek 8029)\n");
+
+    if(pci_find_device(PCI_VENDOR_ID_REALTEK, PCI_DEVICE_ID_REALTEK_8029, 0, &B, &D, &F))
+    {
+        printk("Not found\n");
+        return 0;
+    }
+
+    printk("Found %d:%d.%d\n", B, D, F);
+
+    ret = pci_read_config_dword(B, D, F, PCI_BASE_ADDRESS_0, &bar0);
+    ret|= pci_read_config_byte(B, D, F, PCI_INTERRUPT_LINE, &irq);
+
+    if(ret || (bar0&PCI_BASE_ADDRESS_SPACE)!=PCI_BASE_ADDRESS_SPACE_IO)
+    {
+        printk("Failed reading card config\n");
+        return 0;
+    }
+
+    config->irno = irq;
+    config->port = bar0&PCI_BASE_ADDRESS_IO_MASK;
+
+    printk("Using port=0x%x irq=%u\n", (unsigned)config->port, config->irno);
+
+    return rtems_ne_driver_attach(config, attach);
+}
+
+extern int rtems_bsdnet_loopattach(struct rtems_bsdnet_ifconfig*, int);
+static struct rtems_bsdnet_ifconfig loopback_config = {
+    "lo0",
+    rtems_bsdnet_loopattach,
+    NULL,
+    "127.0.0.1",
+    "255.0.0.0",
+};
+
+static struct rtems_bsdnet_ifconfig ne2k_driver_config = {
+  "ne1",
+  (void*)&rtems_ne2kpci_driver_attach,
+  &loopback_config,
+  "10.0.2.15",
+  "255.255.255.0",
+};
+
+struct rtems_bsdnet_config rtems_bsdnet_config = {
+  .ifconfig = &ne2k_driver_config,
+};
+
+#endif
 
 /** Configure network using libbsd */
 static void
 configure_network(void)
 {
+  /** Hack for stubbing out EEPROM verification in e1000 driver.
+    * Only needed on RTEMS 6+ w/e1000 support. Pulled in from EPICS base */
 #if defined(__i386__) && __RTEMS_MAJOR__ > 5
-  // From EPICS base:
-  // glorious hack to stub out useless EEPROM check
-  // which takes sooooo longggg w/ QEMU
-  // Writes a 'ret' instruction to immediatly return to the caller
   extern void _bsd_e1000_validate_nvm_checksum(void);
   *(char*)&_bsd_e1000_validate_nvm_checksum = 0xc3;
 #endif
 
-#ifndef RTEMS_LEGACY_STACK
+  /** BSD stack init */
+#ifdef RTEMS_BSD_STACK
   rtems_bsd_setlogpriority("debug");
   if (rtems_bsd_initialize() != RTEMS_SUCCESSFUL) {
     printf("rtems_bsd_initialize() failed\n");
@@ -69,6 +124,7 @@ configure_network(void)
   rtems_bsd_command_ifconfig(1, cmd);
 #endif
 
+  /** Configure remote debugger, if available */
 #if __RTEMS_MAJOR__ >= 6 && __i386__
   rtems_debugger_register_tcp_remote();
   rtems_printer printer;
@@ -76,26 +132,9 @@ configure_network(void)
   rtems_debugger_start("tcp", "1234", RTEMS_DEBUGGER_TIMEOUT, 1, &printer);
 #endif
 
+  /** Legacy network stack init */
 #ifdef RTEMS_LEGACY_STACK
-  static struct rtems_bsdnet_ifconfig ifc;
-  static struct rtems_bsdnet_ifconfig lo;
-  ifc.next = &lo;
-
-  memset(&rtems_bsdnet_config, 0, sizeof(rtems_bsdnet_config));
-  rtems_bsdnet_config.ifconfig = &ifc;
-
-  ifc.ip_address = "10.0.2.15";
-  ifc.ip_netmask = "255.255.255.0";
-  ifc.name = "em0";
-  ifc.attach = RTEMS_BSP_NETWORK_DRIVER_ATTACH;
-
-  lo.ip_address = "127.0.0.1";
-  lo.ip_netmask = "255.0.0.0";
-  lo.name = "lo0";
-  lo.attach = RTEMS_BSP_NETWORK_DRIVER_ATTACH;
-
   rtems_bsdnet_initialize_network();
-
   rtems_bsdnet_show_if_stats();
 #endif
 
@@ -274,11 +313,21 @@ bsp_predriver_hook(void)
 #define CONFIGURE_BDBUF_CACHE_MEMORY_SIZE (1 * 1024 * 1024)
 
 #if __RTEMS_MAJOR__ < 5
+
 #define CONFIGURE_MAXIMUM_TASKS             rtems_resource_unlimited(30)
 #define CONFIGURE_MAXIMUM_BARRIERS          rtems_resource_unlimited(30)
 #define CONFIGURE_MAXIMUM_SEMAPHORES        rtems_resource_unlimited(500)
 #define CONFIGURE_MAXIMUM_TIMERS            rtems_resource_unlimited(20)
 #define CONFIGURE_MAXIMUM_MESSAGE_QUEUES    rtems_resource_unlimited(5)
+
+#define CONFIGURE_MAXIMUM_POSIX_MUTEXES			rtems_resource_unlimited(200)
+#define CONFIGURE_MAXIMUM_POSIX_CONDITION_VARIABLES	rtems_resource_unlimited(80)
+#define CONFIGURE_MAXIMUM_POSIX_KEYS			rtems_resource_unlimited(20)
+#define CONFIGURE_MAXIMUM_POSIX_TIMERS			rtems_resource_unlimited(20)
+#define CONFIGURE_MAXIMUM_POSIX_QUEUED_SIGNALS	20 /* cannot be unlimited */
+#define CONFIGURE_MAXIMUM_POSIX_MESSAGE_QUEUES	rtems_resource_unlimited(20)
+//#define CONFIGURE_MAXIMUM_POSIX_SEMAPHORES		rtems_resource_unlimited(30)
+
 #else
 #define CONFIGURE_MAXIMUM_MESSAGE_QUEUES 10
 #endif
