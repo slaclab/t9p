@@ -25,7 +25,7 @@ struct _mutex_s
 };
 
 thread_t*
-thread_create(thread_proc_t proc, void* param)
+thread_create(thread_proc_t proc, void* param, uint32_t prio)
 {
   thread_t* p = malloc(sizeof(struct _thread_s));
   if (!p)
@@ -35,7 +35,11 @@ thread_create(thread_proc_t proc, void* param)
     free(p);
     return NULL;
   }
-  // TODO: set priority properly
+
+  struct sched_param sp = {
+    .sched_priority = prio
+  };
+  pthread_attr_setschedparam(&p->attr, &sp);
 
   assert(proc);
 

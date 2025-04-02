@@ -29,10 +29,11 @@
 #include "rtems_test_cfg.h"
 #include "t9p_rtems.h"
 
-#define BSP_CMDLINE "-u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
-
 /** From t9p_cmd.c */
 extern int main(int, char**);
+
+/** From t9p_automatest_test.c */
+extern int run_auto_test(int);
 
 #ifdef RTEMS_LEGACY_STACK
 /** From EPICS base: */
@@ -190,15 +191,24 @@ POSIX_Init(void* arg)
   rtems_shell_write_file("/etc/group", "rtems:x:1:rtems\n");
   chmod("/etc/group", 0644);
 
-  printf("Press s to open shell, any other key to continue\n");
+  printf("Press s to open shell, a to run auto test, any other key to continue\n");
   char b;
   b = getchar();
-  if (b == 's') {
+  if (b == 's' || b == 'a') {
     mkdir("/test", 0777);
     const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID "";
     mount(
       "10.0.2.2:10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
+
+    if (b == 'a') {
+      if (run_auto_test(10) < 0) {
+        printf("auto test fail\n");
+      }
+      else {
+        printf("auto test passed\n");
+      }
+    }
 
     rtems_status_code status =
       rtems_shell_init("shell", 8192, 100, "/dev/console", false, true, NULL);
@@ -206,6 +216,7 @@ POSIX_Init(void* arg)
       printf("** Error starting RTEMS shell: %s\n", rtems_status_text(status));
       exit(1);
     }
+
     while (1) {
       rtems_task_wake_after(rtems_clock_get_ticks_per_second());
     }

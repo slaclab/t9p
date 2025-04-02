@@ -119,7 +119,7 @@ main(int argc, char** argv)
 
   thread_t** threads = calloc(thread_cnt, sizeof(thread_t*));
   for (int i = 0; i < thread_cnt; ++i) {
-    threads[i] = thread_create(thread_proc, ctx);
+    threads[i] = thread_create(thread_proc, ctx, 90);
   }
 
   usleep(time * 1e6);

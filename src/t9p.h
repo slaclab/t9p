@@ -142,6 +142,7 @@ typedef struct t9p_opts
   int send_timeo;               /**< Send timeout, in ms */
   int recv_timeo;               /**< Recv timeout, in ms */
   uint32_t gid;                 /**< Default gid, used when NOGID is passed to functions */
+  uint32_t prio;                /**< I/O thread priority. This is passed to a POSIX function (usually) */
 } t9p_opts_t;
 
 /** Flags for t9p_getattr */

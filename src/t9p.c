@@ -622,6 +622,7 @@ t9p_opts_init(struct t9p_opts* opts)
   opts->max_fids = DEFAULT_MAX_FILES;
   opts->send_timeo = DEFAULT_SEND_TIMEO;
   opts->recv_timeo = DEFAULT_RECV_TIMEO;
+  opts->prio = 20;
 }
 
 t9p_context_t*
@@ -719,7 +720,7 @@ t9p_init(
   c->thr_run = 1;
 
   /** Kick off thread */
-  if (!(c->io_thread = thread_create(_t9p_thread_proc, c))) {
+  if (!(c->io_thread = thread_create(_t9p_thread_proc, c, opts->prio))) {
     t9p_shutdown(c);
     return NULL;
   }

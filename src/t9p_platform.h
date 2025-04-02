@@ -52,7 +52,7 @@ atomic_add64(uint64_t* p, uint64_t v)
 typedef void* (*thread_proc_t)(void*);
 typedef struct _thread_s thread_t;
 
-extern thread_t* thread_create(thread_proc_t proc, void* param);
+extern thread_t* thread_create(thread_proc_t proc, void* param, uint32_t prio);
 extern void thread_join(thread_t* thr);
 extern void thread_destroy(thread_t* thread);
 
