@@ -647,7 +647,7 @@ t9p_rtems_fs_eval_link(
   int flags
 )
 {
-  
+  TRACE("pathloc=%p, flags=%d", pathloc, flags);
 }
 
 /**
@@ -672,6 +672,7 @@ t9p_rtems_fs_evalpath(
     flags, pathloc);
 
   if (!rtems_libio_is_valid_perms(flags)) {
+    TRACE("E: EIO");
     errno = EIO;
     return -1;
   }
@@ -681,6 +682,7 @@ t9p_rtems_fs_evalpath(
 
   t9p_handle_t nh = t9p_open_handle(p->c, p->h, pathname);
   if (nh == NULL) {
+    TRACE("E: ENOENT");
     errno = ENOENT;
     return -1;
   }
@@ -706,6 +708,7 @@ t9p_rtems_fs_eval_for_make(
   const char                      **name
 )
 {
+  TRACE("path=%s, pathlob=%p, name=%p", path, pathloc, name);
   *name = strrchr(path, '/');
   if (!*name)
     *name = path;

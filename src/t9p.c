@@ -2344,6 +2344,15 @@ t9p_tcp_init(void)
     free(ctx);
     return NULL;
   }
+
+#ifdef __RTEMS_MAJOR__
+  int wake = 1;
+  if (0 != setsockopt(ctx->sock, SOL_SOCKET, SO_RCVWAKEUP, &wake, sizeof(wake))) {
+    perror("t9p_tcp_init: failed to set SO_RCVWAKEUP on socket");
+    printf("Non-fatal error, continuing anyway...\n");
+  }
+#endif
+
   return ctx;
 }
 
