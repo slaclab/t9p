@@ -110,6 +110,8 @@ struct t9p_context
 
   struct t9p_handle_node* fhl; /**< Flat array of file handles, allocated in a contiguous block */
   struct t9p_handle_node* fhl_free; /**< LL of free file handles */
+  
+  struct t9p_stats stats;
 };
 
 #define T9P_HANDLE_ACTIVE 0x1
@@ -1967,6 +1969,12 @@ t9p_chmod(t9p_context_t* c, t9p_handle_t h, mode_t mode)
   return t9p_setattr(c, h, T9P_SETATTR_MODE, &sa);
 }
 
+struct t9p_stats
+t9p_get_stats(t9p_context_t* c)
+{
+  return c->stats;
+}
+
 uint32_t
 t9p_get_iounit(t9p_handle_t h)
 {
@@ -2166,9 +2174,13 @@ _t9p_thread_proc(void* param)
             ((struct TRcommon*)node->tr.data)->tag
           );
       }
+      
+      atomic_add64(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
+      atomic_add32(&c->stats.send_cnt, 1);
 
       /** Send any header data first */
       if (node->tr.hdata && (l = c->trans.send(c->conn, node->tr.hdata, node->tr.hsize, 0)) < 0) {
+        atomic_add32(&c->stats.send_errs, 1);
         if (errno == EAGAIN) {
           continue; /** Just try again next iteration */
         }
@@ -2178,6 +2190,7 @@ _t9p_thread_proc(void* param)
 
       /** Send "body" data */
       if ((l = c->trans.send(c->conn, node->tr.data, node->tr.size, 0)) < 0) {
+        atomic_add32(&c->stats.send_errs, 1);
         ERROR(c, "send: Failed to send data: %s\n", _t9p_strerror(errno));
         continue;
       }
@@ -2191,10 +2204,13 @@ _t9p_thread_proc(void* param)
 
     /** Recv pending transactions */
     while ((l = c->trans.recv(c->conn, buf, sizeof(buf), T9P_RECV_PEEK)) > 0) {
+      atomic_add32(&c->stats.recv_cnt, 1);
+
       struct TRcommon com = {0};
       if (decode_TRcommon(&com, buf, l) < 0) {
         ERROR(c, "recv: Unable to decode common header; discarding!\n");
         c->trans.recv(c->conn, buf, sizeof(buf), 0); /** Discard */
+        atomic_add32(&c->stats.recv_errs, 1);
         continue;
       }
 
@@ -2202,9 +2218,19 @@ _t9p_thread_proc(void* param)
         printf("recv: type=%d, tag=%d, size=%u\n", com.type, com.tag, com.size);
       }
 
+      atomic_add64(&c->stats.total_bytes_recv, com.size);
+
       if (com.tag >= MAX_TAGS) {
         ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", com.tag);
         _discard(c, &com);
+        atomic_add32(&c->stats.recv_errs, 1);
+        continue;
+      }
+      
+      if (com.type >= T9P_TYPE_Tmax) {
+        ERROR(c, "recv: Out of range type (%d); discarding!\n", com.type);
+        _discard(c, &com);
+        atomic_add32(&c->stats.recv_errs, 1);
         continue;
       }
 
@@ -2212,8 +2238,12 @@ _t9p_thread_proc(void* param)
       if (!n) {
         ERROR(c, "recv: Tag '%d' not found in request list; discarding!\n", com.tag);
         _discard(c, &com);
+        atomic_add32(&c->stats.recv_errs, 1);
         continue;
       }
+      
+      /** Track count of messages recv'ed */
+      atomic_add32(&c->stats.msg_counts[com.type], 1);
 
       /** Handle error responses */
       if (com.type == T9P_TYPE_Rlerror) {
@@ -2221,6 +2251,7 @@ _t9p_thread_proc(void* param)
         if (decode_Rlerror(&err, buf, l) < 0)
           err.ecode = -1;
 
+        atomic_add32(&c->stats.recv_errs, 1);
         n->tr.status = err.ecode < 0 ? err.ecode : -err.ecode;
 
         if (n->tr.rdata)
@@ -2238,6 +2269,7 @@ _t9p_thread_proc(void* param)
         n->tr.status = -1;
         event_signal(n->event);
         requests[n->tag] = NULL;
+        atomic_add32(&c->stats.recv_errs, 1);
         continue;
       }
 

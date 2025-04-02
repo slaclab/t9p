@@ -657,6 +657,27 @@ connect_cmd(int argc, const char* const* argv)
   snprintf(prompt, sizeof(prompt), "%s> ", ipAddr);
 }
 
+static void
+stats_cmd(int argc, const char* const* argv)
+{
+  if (!check_connection())
+    return;
+  
+  struct t9p_stats st = t9p_get_stats(ctx);
+  printf("send_cnt: %d\n", st.send_cnt);
+  printf("send_errs: %d\n", st.send_errs);
+  printf("recv_cnt: %d\n", st.recv_cnt);
+  printf("recv_errs: %d\n", st.recv_errs);
+  printf("total_bytes_sent: %llu\n", st.total_bytes_send);
+  printf("total_bytes_recv: %llu\n", st.total_bytes_recv);
+  printf("message counts:\n");
+  for (int i = 0; i < T9P_TYPE_Tmax; ++i) {
+    const char* n = t9p_type_string(i);
+    if (n)
+      printf(" %s: %d\n", n, st.msg_counts[i]);
+  }
+}
+
 struct command
 {
   const char* name;
@@ -684,6 +705,7 @@ struct command COMMANDS[] = {
   {"lsdir", lsdirent_cmd},
   {"link", link_cmd},
   {"rename", rename_cmd},
+  {"stats", stats_cmd},
   {"help", help_cmd},
   {0, 0}
 };

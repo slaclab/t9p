@@ -85,6 +85,12 @@ typedef ssize_t (*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/,
  * Transport interface.
  * this abstracts out some platform specific behavior (i.e. socket creation/read/write). This must
  * be provided by users of the library.
+ * @init:       Inits the transport backend. This usually involves creating a socket or something like that.
+ * @shutdown:   Shuts down the transport backend
+ * @connect:    Connects the transport backend, can do nothing if it's not connection oriented (i.e. UDP)
+ * @disconnect: Disconnects the transport backend.
+ * @send:       Send some bytes
+ * @recv:       Recv some bytes
  */
 typedef struct t9p_transport
 {
@@ -95,6 +101,19 @@ typedef struct t9p_transport
   t9p_send_t send;
   t9p_recv_t recv;
 } t9p_transport_t;
+
+/**
+ * Stats about the context
+ */
+typedef struct t9p_stats {
+  uint32_t send_cnt;
+  uint32_t send_errs;
+  uint32_t recv_cnt;
+  uint32_t recv_errs;
+  uint64_t total_bytes_send;
+  uint64_t total_bytes_recv;
+  uint32_t msg_counts[128]; /** 128 must match Tmax in t9proto.h */
+} t9p_stats_t;
 
 typedef struct t9p_context t9p_context_t;
 
@@ -570,6 +589,13 @@ int t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* n
  */
 int t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* dest);
 
+/**
+ * Returns the context's I/O stats
+ * \param c Context
+ * \returns A struct of the stats
+ */
+struct t9p_stats t9p_get_stats(t9p_context_t* c);
+
 /** Returns TRUE if open for I/O, FALSE otherwise */
 int t9p_is_open(t9p_handle_t h);
 
@@ -623,6 +649,11 @@ int t9p_get_log_level(t9p_context_t* c);
  */
 void t9p_get_parent_dir(const char* file_or_dir, char* outbuf, size_t outsize);
 
+/**
+ * \brief Returns the basename of the path. This is everything after the final path separator.
+ * If the file_or_dir has no path seps, this will behave the same as a safe null-terminating
+ * strcpy.
+ */
 void t9p_get_basename(const char* file_or_dir, char* outbuf, size_t outsize);
 
 #ifdef __cplusplus

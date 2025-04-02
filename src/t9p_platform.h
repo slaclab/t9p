@@ -14,25 +14,37 @@
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
-typedef uint32_t atomic_uint32_t;
 
-inline uint32_t
-atomic_load32(atomic_uint32_t* p)
+static inline uint32_t
+atomic_load32(uint32_t* p)
 {
   return __atomic_load_n(p, __ATOMIC_SEQ_CST);
 }
 
-inline void
-atomic_store32(atomic_uint32_t* p, uint32_t val)
+static inline void
+atomic_store32(uint32_t* p, uint32_t val)
 {
   __atomic_store_n(p, val, __ATOMIC_SEQ_CST);
 }
 
-inline int
-atomic_compare_exchange32(atomic_uint32_t* p, uint32_t expected, uint32_t newval)
+static inline int
+atomic_compare_exchange32(uint32_t* p, uint32_t expected, uint32_t newval)
 {
   return __atomic_compare_exchange(p, &expected, &newval, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);
 }
+
+static inline uint32_t
+atomic_add32(uint32_t* p, uint32_t v)
+{
+  return __atomic_add_fetch(p, v, __ATOMIC_SEQ_CST);
+}
+
+static inline uint64_t
+atomic_add64(uint64_t* p, uint64_t v)
+{
+  return __atomic_add_fetch(p, v, __ATOMIC_SEQ_CST);
+}
+
 #endif
 
 /** Generic thread API */

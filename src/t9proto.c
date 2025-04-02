@@ -157,8 +157,20 @@ t9p_type_string(int type)
     return "Rreaddir";
   case T9P_TYPE_Treaddir:
     return "Treaddir";
+  case T9P_TYPE_Tmknod:
+    return "Tmknod";
+  case T9P_TYPE_Rmknod:
+    return "Rmknod";
+  case T9P_TYPE_Trename:
+    return "Trename";
+  case T9P_TYPE_Rrename:
+    return "Rrename";
+  case T9P_TYPE_Tlink:
+    return "Tlink";
+  case T9P_TYPE_Rlink:
+    return "Rlink";
   default:
-    return "Tunknown";
+    return NULL;
   }
 }
 
