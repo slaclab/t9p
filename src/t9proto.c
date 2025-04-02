@@ -921,3 +921,71 @@ decode_Rsetattr(struct Rsetattr* rs, const void* buf, size_t buflen)
   rs->tag = BSWAP16(rs->tag);
   return sizeof(*rs);
 }
+
+int
+encode_Tlink(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, uint32_t fid, const char* name)
+{
+  const size_t nl = strlen(name);
+  const size_t totalSize = sizeof(struct Tlink) + nl;
+  if (buflen < totalSize)
+    return -1;
+  
+  struct Tlink* tl = buf;
+  tl->dfid = BSWAP32(dfid);
+  tl->fid = BSWAP32(fid);
+  tl->size = BSWAP32(totalSize);
+  tl->tag = BSWAP16(tag);
+  tl->type = T9P_TYPE_Tlink;
+  uint8_t* pos = buf;
+  pos += offsetof(struct Tlink, namelen);
+  wrstr(&pos, name, nl);
+
+  return totalSize;
+}
+
+int
+decode_Rlink(struct Rlink* rl, const void* buf, size_t buflen)
+{
+  if (buflen < sizeof(*rl))
+    return -1;
+  
+  const struct Rlink* rrl = buf;
+  rl->size = BSWAP32(rrl->size);
+  rl->tag = BSWAP16(rrl->tag);
+  rl->type = rrl->type;
+  return sizeof(*rl);
+}
+
+int
+encode_Trename(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t dfid,
+  const char* name)
+{
+  const size_t nl = strlen(name);
+  const size_t totalSize = sizeof(struct Trename) + nl;
+  if (buflen < totalSize)
+    return -1;
+  
+  struct Trename* tr = buf;
+  tr->dfid = BSWAP32(dfid);
+  tr->fid = BSWAP32(fid);
+  tr->size = BSWAP32(totalSize);
+  tr->type = T9P_TYPE_Trename;
+  tr->tag = BSWAP16(tag);
+  uint8_t* pos = buf;
+  pos += offsetof(struct Trename, namelen);
+  wrstr(&pos, name, nl);
+  
+  return totalSize;
+}
+
+int
+decode_Rrename(struct Rrename* rn, const void* buf, size_t buflen)
+{
+  if (buflen < sizeof(*rn))
+    return -1;
+
+  *rn = *(struct Rrename*)buf;
+  rn->size = BSWAP32(rn->size);
+  rn->tag = BSWAP16(rn->tag);
+  return sizeof(*rn);
+}

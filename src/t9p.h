@@ -550,6 +550,26 @@ int t9p_touch(t9p_context_t* c, t9p_handle_t h, int mtime, int atime, int ctime)
  */
 int t9p_chmod(t9p_context_t* c, t9p_handle_t h, mode_t mode);
 
+/**
+ * Performs a rename operation on the handle, moving it to directory specified by dir
+ * \param c Context
+ * \param dir Handle to the directory to move the file into
+ * \param h Handle of the file to rename
+ * \param newname New name of the file
+ * \returns < 0 on error 
+ */
+int t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newname);
+
+/**
+ * Creates a hard link to the file specified by h, in the directory specified by dir.
+ * \param c Context
+ * \param dir Handle of the directory that holds the link
+ * \param h Handle of the file to create a link to
+ * \param dest Name of the link itself
+ * \returns < 0 on error
+ */
+int t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* dest);
+
 /** Returns TRUE if open for I/O, FALSE otherwise */
 int t9p_is_open(t9p_handle_t h);
 

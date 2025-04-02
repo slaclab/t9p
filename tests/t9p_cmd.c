@@ -9,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <sys/stat.h>
 
 #ifdef __linux__
 #include <linux/limits.h>
@@ -70,7 +71,7 @@ ls(int argc, const char* const* argv)
     printf("ls failed\n");
   } else {
     for (t9p_dir_info_t* d = dirs; d; d = d->next) {
-      printf(" %s\n", d->name);
+      printf(" %s%s\n", d->name, d->qid.type == T9P_QID_DIR ? "/" : "");
     }
   }
 
@@ -540,6 +541,76 @@ symlink_cmd(int argc, const char* const* argv)
   }
 }
 
+static void
+link_cmd(int argc, const char* const* argv)
+{
+  if (!check_connection())
+    return;
+  
+  if (argc < 3) {
+    printf("usage: link <to> <from>\n");
+    return;
+  }
+  
+  char tod[256];
+  t9p_get_parent_dir(argv[1], tod, sizeof(tod));
+  char base[256];
+  t9p_get_basename(argv[1], base, sizeof(base));
+  
+  t9p_handle_t dh = t9p_open_handle(ctx, NULL, tod);
+  if (!dh) {
+    printf("%s not exist!\n", tod);
+    return;
+  }
+  
+  t9p_handle_t target = t9p_open_handle(ctx, NULL, argv[2]);
+  if (!target) {
+    printf("%s not exist!\n", argv[2]);
+    t9p_close_handle(ctx, dh);
+    return;
+  }
+  
+  t9p_link(ctx, dh, target, base);
+  
+  t9p_close_handle(ctx, target);
+  t9p_close_handle(ctx, dh);
+}
+
+static void
+rename_cmd(int argc, const char* const* argv)
+{
+  if (!check_connection())
+    return;
+  
+  if (argc < 3) {
+    printf("usage: rename <old> <new>\n");
+    return;
+  }
+  
+  char tod[256];
+  t9p_get_parent_dir(argv[2], tod, sizeof(tod));
+  char base[256];
+  t9p_get_basename(argv[2], base, sizeof(base));
+  
+  t9p_handle_t dh = t9p_open_handle(ctx, NULL, tod);
+  if (!dh) {
+    printf("%s not exist!\n", tod);
+    return;
+  }
+  
+  t9p_handle_t src = t9p_open_handle(ctx, NULL, argv[1]);
+  if (!src) {
+    printf("%s not exist!\n", argv[1]);
+    t9p_close_handle(ctx, dh);
+    return;
+  }
+  
+  t9p_rename(ctx, dh, src, base);
+  
+  t9p_close_handle(ctx, src);
+  t9p_close_handle(ctx, dh);
+}
+
 void help_cmd(int argc, const char* const* argv);
 
 static int
@@ -611,6 +682,8 @@ struct command COMMANDS[] = {
   {"touch", touch_cmd},
   {"truncate", truncate_cmd},
   {"lsdir", lsdirent_cmd},
+  {"link", link_cmd},
+  {"rename", rename_cmd},
   {"help", help_cmd},
   {0, 0}
 };

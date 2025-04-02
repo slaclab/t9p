@@ -20,7 +20,7 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | lcreate       | Y |   |
 | symlink       | Y |   |
 | mknod         |   |   |
-| rename        |   |   |
+| rename        | Y |   |
 | readlink      | Y |   |
 | getattr       | Y |   |
 | setattr       | Y | trunc, chmod, chown, etc. wrappers too  |
@@ -30,13 +30,13 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | fsync         | Y |   |
 | lock          |   |   |
 | getlock       |   |   |
-| link          |   |   |
+| link          | Y |   |
 | mkdir         | Y |   |
 | renameat      | Y |   |
 | unlinkat      | Y |   |
 
 
-Implementation percentage: 19/28 (67%)
+Implementation percentage: 19/28 (75%)
 
 ## Building
 

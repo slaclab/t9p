@@ -1850,6 +1850,74 @@ t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_se
 }
 
 int
+t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newname)
+{
+  char packet[PACKET_BUF_SIZE];
+  ssize_t l;
+
+  if (!t9p_is_valid(dir) || !t9p_is_valid(h))
+    return -EBADF;
+
+  struct trans_node* n = tr_get_node(&c->trans_pool);
+  if (!n)
+    return -ENOMEM;
+
+  if ((l = encode_Trename(packet, sizeof(packet), n->tag, h->fid, dir->fid, newname)) < 0) {
+    ERROR(c, "%s: unable to encode Trename\n", __FUNCTION__);
+    tr_release(&c->trans_pool, n);
+    return -1;
+  }
+  
+  struct trans tr = {
+    .data = packet,
+    .size = l,
+    .rdata = packet,
+    .rsize = sizeof(packet),
+    .rtype = T9P_TYPE_Rrename
+  };
+
+  if ((l = tr_send_recv(c, n, &tr)) < 0) {
+    ERROR(c, "%s: Trename: %s\n", __FUNCTION__, _t9p_strerror(l));
+    return l;
+  }
+
+  return 0;
+}
+
+int
+t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
+{
+  char packet[PACKET_BUF_SIZE];
+  ssize_t l = 0;
+
+  if (!t9p_is_valid(dir) || !t9p_is_valid(h))
+    return -EBADF;
+  
+  struct trans_node* n = tr_get_node(&c->trans_pool);
+  if (!n)
+    return -ENOMEM;
+  
+  if ((l = encode_Tlink(packet, sizeof(packet), n->tag, dir->fid, h->fid, target)) < 0) {
+    ERROR(c, "%s: unable to encode Tlink\n", __FUNCTION__);
+    return -1;
+  }
+  
+  struct trans tr = {
+    .data = packet,
+    .size = l,
+    .rdata = packet,
+    .rsize = sizeof(packet),
+    .rtype = T9P_TYPE_Rlink
+  };
+  
+  if ((l = tr_send_recv(c, n, &tr)) < 0) {
+    ERROR(c, "%s: Tlink: %s\n", __FUNCTION__, _t9p_strerror(l));
+    return l;
+  }
+  return 0;
+}
+
+int
 t9p_truncate(t9p_context_t* c, t9p_handle_t h, uint64_t size)
 {
   if (!t9p_is_file(h))

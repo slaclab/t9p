@@ -28,6 +28,10 @@ enum
   T9P_TYPE_Rlcreate,
   T9P_TYPE_Tsymlink = 16,
   T9P_TYPE_Rsymlink,
+	T9P_TYPE_Tmknod = 18,
+	T9P_TYPE_Rmknod,
+	T9P_TYPE_Trename = 20,
+	T9P_TYPE_Rrename,
   T9P_TYPE_Treadlink = 22,
   T9P_TYPE_Rreadlink,
   T9P_TYPE_Tgetattr = 24,
@@ -596,3 +600,41 @@ int encode_Tsetattr(
 struct T9P_PACKED Rsetattr{T9P_COMMON_FIELDS};
 
 int decode_Rsetattr(struct Rsetattr* rs, const void* buf, size_t buflen);
+
+struct T9P_PACKED Tlink
+{
+  T9P_COMMON_FIELDS
+  uint32_t dfid;
+  uint32_t fid;
+  uint16_t namelen;
+  char name[];
+};
+
+int encode_Tlink(void* buf, size_t buflen, uint16_t tag, uint32_t dfid,
+  uint32_t fid, const char* name);
+
+struct Rlink
+{
+  T9P_COMMON_FIELDS
+};
+
+int decode_Rlink(struct Rlink* rl, const void* buf, size_t buflen);
+
+struct T9P_PACKED Trename
+{
+  T9P_COMMON_FIELDS
+  uint32_t fid;
+  uint32_t dfid;
+  uint16_t namelen;
+  char name[];
+};
+
+int encode_Trename(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t dfid,
+  const char* name);
+
+struct Rrename
+{
+  T9P_COMMON_FIELDS
+};
+
+int decode_Rrename(struct Rrename* rn, const void* buf, size_t buflen);
