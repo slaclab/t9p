@@ -47,7 +47,6 @@ if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
     target_link_libraries(
         t9p_rtems_test PRIVATE
         t9p
-        nfs
         rtemsbsp
         rtemscpu
         m
