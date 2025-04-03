@@ -203,6 +203,9 @@ struct trans {
                      an error condition. If >= 0, it's the number of bytes
                      written to rdata. */
   uint32_t rtype; /**< 9p meta; result message type. Set to 0 to accept any. */
+  void *rheader;     /**< Optional; pointer to 'header' recv data */
+  size_t rheadersz;  /**< Optional; size of the the recv 'header' buf. This should be the number
+                          of bytes *expected* for the header. i.e. sizeof(Rread) */
 };
 
 struct trans_node
@@ -921,6 +924,7 @@ t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* 
 {
   TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, num, outbuffer);
   char packet[PACKET_BUF_SIZE];
+  char rheader[sizeof(struct Rread)];
   int status = 0;
 
   if (!_can_rw_fid(h, 0))
@@ -937,16 +941,14 @@ t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* 
     return -EINVAL;
   }
 
-  /** TODO: This needs a refactor */
-  size_t recvSize = sizeof(struct Rread) + num;
-  void* recvData = malloc(recvSize);
-
   struct trans tr = {
     .data = packet,
     .size = l,
-    .rdata = recvData,
-    .rsize = recvSize,
+    .rdata = outbuffer,
+    .rsize = num,
     .rtype = T9P_TYPE_Rread,
+    .rheader = rheader,
+    .rheadersz = sizeof(struct Rread)
   };
 
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
@@ -956,18 +958,15 @@ t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* 
   }
 
   struct Rread rr;
-  if (decode_Rread(&rr, recvData, l) < 0) {
+  if (decode_Rread(&rr, rheader, l) < 0) {
     ERROR(c, "%s: unable to decode Rread\n", __FUNCTION__);
     status = -EPROTO;
     goto error;
   }
 
-  memcpy(outbuffer, ((uint8_t*)recvData) + sizeof(struct Rread), MIN(num, rr.count));
-  free(recvData);
   return MIN(num, rr.count);
 
 error:
-  free(recvData);
   return status;
 }
 
@@ -2147,7 +2146,7 @@ _t9p_thread_proc(void* param)
   while (c->thr_run) {
     struct trans_node* node = NULL;
     size_t size = sizeof(node);
-    ssize_t l;
+    ssize_t l, nread;
 
     mutex_lock(c->socket_lock);
 
@@ -2228,13 +2227,15 @@ _t9p_thread_proc(void* param)
 
       atomic_add64(&c->stats.total_bytes_recv, com.size);
 
+      /** Check if tag is out of range */
       if (com.tag >= MAX_TAGS) {
         ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", com.tag);
         _discard(c, &com);
         atomic_add32(&c->stats.recv_errs, 1);
         continue;
       }
-      
+
+      /** Check if the type is invalid */
       if (com.type >= T9P_TYPE_Tmax) {
         ERROR(c, "recv: Out of range type (%d); discarding!\n", com.type);
         _discard(c, &com);
@@ -2242,6 +2243,7 @@ _t9p_thread_proc(void* param)
         continue;
       }
 
+      /** Lookup the node in the request list */
       struct trans_node* n = requests[com.tag];
       if (!n) {
         ERROR(c, "recv: Tag '%d' not found in request list; discarding!\n", com.tag);
@@ -2281,6 +2283,22 @@ _t9p_thread_proc(void* param)
         continue;
       }
 
+      nread = 0;
+
+      /** Read into header space if there is any */
+      if (n->tr.rheader) {
+        l = c->trans.recv(c->conn, n->tr.rheader, MIN(n->tr.rheadersz, com.size), 0);
+        /** Check if any data was recieved, substract from the remaining packet size */
+        if (l > 0) {
+          com.size -= l;
+          nread += l;
+        }
+        else {
+          ERROR(c, "recv: failed to read\n");
+          goto recv_done;
+        }
+      }
+
       /** No result data space? well, discard... */
       if (!n->tr.rdata || n->tr.rsize == 0)
         _discard(c, &com);
@@ -2289,6 +2307,7 @@ _t9p_thread_proc(void* param)
         l = c->trans.recv(c->conn, n->tr.rdata, MIN(n->tr.rsize, com.size), 0);
         if (l > 0) {
           ssize_t rem = com.size - l;
+          nread += l;
 
           /** Discard the rest */
           while (rem > 0) {
@@ -2303,8 +2322,9 @@ _t9p_thread_proc(void* param)
         }
       }
 
+    recv_done:
       /** Set status accordingly */
-      n->tr.status = l < 0 ? -errno : l;
+      n->tr.status = l < 0 ? -errno : nread;
 
       event_signal(n->event);
       requests[n->tag] = NULL;
@@ -2346,7 +2366,8 @@ t9p_tcp_init(void)
     return NULL;
   }
 
-#ifdef __RTEMS_MAJOR__
+#ifdef RTEMS_LEGACY_STACK
+  /** This probably doesn't change anything */
   int wake = 1;
   if (0 != setsockopt(ctx->sock, SOL_SOCKET, SO_RCVWAKEUP, &wake, sizeof(wake))) {
     perror("t9p_tcp_init: failed to set SO_RCVWAKEUP on socket");

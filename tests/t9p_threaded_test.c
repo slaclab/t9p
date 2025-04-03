@@ -10,7 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define FILE_SIZE 4096
+#define FILE_SIZE (65536)
 
 t9p_context_t* ctx;
 int thr_run = 0;
@@ -136,6 +136,8 @@ main(int argc, char** argv)
 static void*
 thread_proc(void* p)
 {
+  uint64_t totalBytes = 0;
+  double totTime = 0;
   t9p_context_t* c = p;
 
   static int thread_num = 1;
@@ -161,6 +163,9 @@ thread_proc(void* p)
       continue;
     }
 
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
     char buf[FILE_SIZE];
     if ((n = t9p_read(c, h, 0, sizeof(buf), buf)) != sizeof(buf)) {
       printf("Failed to read!! got %ld\n", n);
@@ -169,12 +174,22 @@ thread_proc(void* p)
       abort();
       continue;
     }
+    totalBytes += n;
+
+    struct timespec end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
+    totTime += ((double)end.tv_sec + end.tv_nsec / 1e9) - 
+      ((double)start.tv_sec + start.tv_nsec / 1e9);
 
     t9p_close(h);
     t9p_close_handle(c, h);
 
     usleep(1000);
   }
+
+  printf("Transferred %.2f MiB in %.2f seconds (%.2f MiB/s)\n", 
+      totalBytes / (1024*1024.0), totTime, (totalBytes/(1024*1024.0) / totTime));
 
   return NULL;
 }
