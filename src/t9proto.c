@@ -774,7 +774,6 @@ decode_Rreaddir(
 {
   const uint8_t* bp = buf;
   struct Rreaddir_dir hdr;
-  int n = 0;
   uint32_t off = 0;
 
   if (buflen < sizeof(*rd))
@@ -804,9 +803,6 @@ decode_Rreaddir(
     off += hdr.namelen;
   }
   return 0;
-
-error:
-  return -1;
 }
 
 /**

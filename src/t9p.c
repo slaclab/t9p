@@ -1082,16 +1082,8 @@ t9p_create(
   uint32_t gid, uint32_t flags
 )
 {
-  TRACE(
-    c,
-    "t9p_create(parent=%p,nh=%p,name=%s,mode=0x%X,gid=%d,flags=0x%X)\n",
-    parent,
-    newhandle,
-    name,
-    mode,
-    gid,
-    flags
-  );
+  TRACE(c, "t9p_create(parent=%p,nh=%p,name=%s,mode=0x%X,gid=%d,flags=0x%X)\n", parent, newhandle,
+    name, mode, gid, flags);
   char packet[PACKET_BUF_SIZE];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);

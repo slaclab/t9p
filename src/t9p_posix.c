@@ -69,7 +69,7 @@ thread_destroy(thread_t* thread)
 }
 
 mutex_t*
-mutex_create()
+mutex_create(void)
 {
   mutex_t* m = malloc(sizeof(mutex_t));
 
@@ -116,7 +116,7 @@ struct _event_s
 };
 
 event_t*
-event_create()
+event_create(void)
 {
   event_t* ev = malloc(sizeof(event_t));
   memset(ev, 0, sizeof *ev);

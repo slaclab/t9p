@@ -80,7 +80,7 @@ main(int argc, char** argv)
 
   t9p_opts_t opts;
   t9p_opts_init(&opts);
-  opts.log_level = T9P_LOG_DEBUG;
+  opts.log_level = T9P_LOG_TRACE;
   opts.uid = uid;
   strcpy(opts.user, user);
 
