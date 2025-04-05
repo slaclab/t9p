@@ -1,11 +1,13 @@
 
 ifeq ($(RTEMS_TOP),)
-$(error RTEMS_TOP must be defined before configuring)
+$(warning RTEMS_TOP was not defined when configuring; no RTEMS targets will be enabled)
 endif
 
+ifneq ($(RTEMS_TOP),)
 TARGETS?=$(shell ls $(RTEMS_TOP)/target/rtems/lib/pkgconfig/ | grep -Po "(?<=(powerpc|arm|i386|m68k)-).*" | cut -d '.' -f 1 | tr '\n' ' ')
 
 TARGETS+=rtems6-pc686-qemu
+endif
 
 $(info TARGETS=$(TARGETS))
 

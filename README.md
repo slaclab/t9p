@@ -36,7 +36,7 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | unlinkat      | Y |   |
 
 
-Implementation percentage: 19/28 (75%)
+Implementation percentage: 21/28 (75%)
 
 ## Building
 
