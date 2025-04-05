@@ -260,6 +260,7 @@ static const struct _rtems_filesystem_operations_table t9p_fs_ops = {
   .utimens_h = t9p_rtems_fs_utimens,                /*rtems_filesystem_utimens_t*/
 #else
   .evalpath_h = t9p_rtems_fs_evalpath,              /*rtems_filesystem_eval_path_t*/
+  .evalformake_h = t9p_rtems_fs_eval_for_make,
   .utime_h = t9p_rtems_fs_utimens,
 #endif
 };
@@ -309,6 +310,11 @@ static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, int oflag, 
 #else
 static int t9p_rtems_file_fstat(rtems_filesystem_location_info_t* loc, struct stat* buf);
 static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode);
+static int t9p_rtems_file_fcntl(int p, rtems_libio_t* iop);
+static int t9p_rtems_file_rmnod(rtems_filesystem_location_info_t *parent_loc,
+  rtems_filesystem_location_info_t *pathloc);
+static int t9p_rtems_file_fchmod(rtems_filesystem_location_info_t *pathloc, mode_t mode);
+static int t9p_rtems_file_fpathconf(rtems_libio_t *pathloc, int mode);
 #endif
 static int t9p_rtems_file_ftruncate(rtems_libio_t* iop, off_t length);
 static int t9p_rtems_file_fsync(rtems_libio_t* iop);
@@ -333,7 +339,10 @@ static rtems_filesystem_file_handlers_r t9p_file_ops = {
   .writev_h = rtems_filesystem_default_writev,
   .mmap_h = rtems_filesystem_default_mmap,
 #else
-  .fcntl_h = NULL,
+  .fcntl_h = t9p_rtems_file_fcntl,
+  .rmnod_h = t9p_rtems_file_rmnod,
+  .fchmod_h = t9p_rtems_file_fchmod,
+  .fpathconf_h = t9p_rtems_file_fpathconf,
 #endif
 };
 
@@ -438,6 +447,7 @@ t9p_rtems_iop_clone_node(const t9p_rtems_node_t* old, int dupFid)
       free(n);
       return NULL;
     }
+    n->size = -1;
   }
 
   return n;
@@ -698,7 +708,7 @@ t9p_rtems_fs_evalpath(
     pathloc->handlers = &t9p_file_ops;
   }
 
-  return 0;
+  return 1;
 }
 
 static int
@@ -708,7 +718,8 @@ t9p_rtems_fs_eval_for_make(
   const char                      **name
 )
 {
-  TRACE("path=%s, pathlob=%p, name=%p", path, pathloc, name);
+  TRACE("path=%s, pathloc=%p, name=%p", path, pathloc, name);
+  int r;
   *name = strrchr(path, '/');
   if (!*name)
     *name = path;
@@ -718,9 +729,12 @@ t9p_rtems_fs_eval_for_make(
 
   t9p_handle_t h = t9p_open_handle(nn->c, nn->h, path);
   if (h == NULL) {
-    errno = ENOENT;
-    free(nn);
-    return -1;
+    /** Create a new file if one does not exist (plus inherit gid) */
+    if ((r = t9p_create(nn->c, &h, nn->h, path, 0644, T9P_NOGID, 0)) < 0) {
+      errno = -r;
+      free(nn);
+      return -1;
+    }
   }
 
   nn->h = h;
@@ -729,7 +743,43 @@ t9p_rtems_fs_eval_for_make(
   return 0;
 }
 
-#endif
+static int
+t9p_rtems_file_rmnod(rtems_filesystem_location_info_t *parent_loc,
+  rtems_filesystem_location_info_t *pathloc)
+{
+  TRACE("parentloc=%p,pathloc=%p", parent_loc, pathloc);
+  /** TODO: Im lazy */
+  return -1;
+}
+
+static int
+t9p_rtems_file_fchmod(rtems_filesystem_location_info_t *pathloc, mode_t mode)
+{
+  TRACE("pathloc=%p,mode=%u", pathloc, mode);
+  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(pathloc);
+  int r;
+  if ((r = t9p_chmod(n->c, n->h, mode)) < 0) {
+    errno = -r;
+    return -1;
+  }
+  return 0;
+}
+
+static int
+t9p_rtems_file_fpathconf(rtems_libio_t *pathloc, int name)
+{
+  TRACE("pathloc=%p,name=%d", pathloc, name);
+  return -1;
+}
+
+static int
+t9p_rtems_file_fcntl(int p, rtems_libio_t* iop)
+{
+  TRACE("p=%d,iop=%p", p, iop);
+  return -1;
+}
+
+#endif // __RTEMS_MAJOR__ < 6
 
 static int
 t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry)
@@ -1017,10 +1067,11 @@ static int
 t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode)
 #endif
 {
-  TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, oflag, mode);
+  TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, (unsigned)oflag, (unsigned)mode);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   int r = t9p_open(n->c, n->h, rtems_mode_to_t9p(mode));
   if (r < 0) {
+    TRACE("E: %d (%s)\n", -r, strerror(-r));
     errno = -r;
     return -1;
   }
@@ -1028,6 +1079,7 @@ t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t
   struct t9p_getattr ta;
   if ((r = t9p_getattr(n->c, n->h, &ta, T9P_GETATTR_ALL)) < 0) {
     t9p_close(n->h);
+    TRACE("E: %d (%s)\n", -r, strerror(-r));
     errno = -r;
     return -1;
   }
@@ -1047,11 +1099,14 @@ t9p_rtems_file_close(rtems_libio_t* iop)
 static ssize_t
 t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
 {
-  TRACE("iop=%p, buffer=%p, count=%zu", iop, buffer, count);
+  TRACE("iop=%p,buffer=%p,count=%zu,iop->off=%llu", iop, buffer, count, iop->offset);
+  ssize_t off = iop->offset;
   uint8_t* p = buffer;
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
 
   n->size = t9p_stat_size(n->c, n->h);
+  /** Need to truncate this because 9p will give us nothing if we ask for too much 
+    *... I think. TODO: verify */
   if (count > n->size)
     count = n->size;
 
@@ -1060,13 +1115,18 @@ t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
   ssize_t rem = count, ret = 0;
   while (rem > 0) {
     const ssize_t toRead = min(iounit, rem < count ? rem : count);
-    ret = t9p_read(n->c, n->h, iop->offset, toRead, p);
+    ret = t9p_read(n->c, n->h, off, toRead, p);
     if (ret < 0) {
       errno = -ret;
       return -1;
     }
     rem -= ret;
-    p += ret, iop->offset += ret;
+    p += ret;
+    /** RTEMS 4.X is funny about this; it handles the offset itself. */
+  #if __RTEMS_MAJOR__ >= 6
+    iop->offset += ret;
+  #endif
+    off += ret;
 
     /** Likely end of file */
     if (ret != toRead)

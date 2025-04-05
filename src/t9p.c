@@ -1642,7 +1642,6 @@ t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
 {
   char packet[PACKET_BUF_SIZE];
   int l, status = 0;
-  t9p_dir_info_t *prev = NULL, *head = NULL;
 
   if (bufsize < sizeof(struct dirent))
     return -1;
