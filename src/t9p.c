@@ -75,6 +75,10 @@
 #define WARN(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
 #define ERROR(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
 
+#ifdef __rtems__
+#define T9P_WAKE_EVENT RTEMS_EVENT_1
+#endif
+
 struct trans_pool
 {
   struct trans_node* freehead;
@@ -113,6 +117,10 @@ struct t9p_context
   struct t9p_handle_node* fhl_free; /**< LL of free file handles */
   
   struct t9p_stats stats;
+
+#ifdef __rtems__
+  rtems_id rtems_thr_ident;
+#endif
 };
 
 #define T9P_HANDLE_ACTIVE 0x1
@@ -185,7 +193,8 @@ struct trans;
 struct trans_pool;
 struct trans_node;
 
-struct trans_node* tr_enqueue(struct trans_pool* q, struct trans_node* tr);
+struct trans_node* tr_enqueue(struct t9p_context* ctx, struct trans_pool* q,
+  struct trans_node* tr);
 void tr_release(struct trans_pool* q, struct trans_node* tn);
 
 #define TR_FLAGS_NONE 0x0
@@ -319,7 +328,7 @@ tr_get_node(struct trans_pool* q)
  *  2. No remaining space in the message queue
  */
 struct trans_node*
-tr_enqueue(struct trans_pool* q, struct trans_node* us)
+tr_enqueue(struct t9p_context* c, struct trans_pool* q, struct trans_node* us)
 {
   /** Send it to the I/O thread */
   if (msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
@@ -328,8 +337,12 @@ tr_enqueue(struct trans_pool* q, struct trans_node* us)
     return NULL;
   }
 
+#ifdef __rtems__
+  rtems_event_send(c->rtems_thr_ident, T9P_WAKE_EVENT);
+#else
   /** Wake worker thread */
   event_signal(q->recv_ev);
+#endif
   return us;
 }
 
@@ -361,7 +374,7 @@ tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr)
   int r = 0;
   n->tr = *tr;
 
-  n = tr_enqueue(&c->trans_pool, n);
+  n = tr_enqueue(c, &c->trans_pool, n);
   if (n == NULL) {
     // tr_release(&c->trans_pool, n);
     return -ENOMEM;
@@ -646,6 +659,7 @@ t9p_init(
   assert(transport->send);
   assert(transport->init);
   assert(transport->shutdown);
+  assert(transport->getsock);
   assert(opts);
 
   t9p_context_t* c = calloc(1, sizeof(t9p_context_t));
@@ -1240,7 +1254,7 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
   };
   n->tr = tr;
 
-  n = tr_enqueue(&c->trans_pool, n);
+  n = tr_enqueue(c, &c->trans_pool, n);
   if (!n) {
     ERROR(c, "%s: unable to queue\n", __FUNCTION__);
     return -EIO;
@@ -2132,12 +2146,72 @@ _discard(struct t9p_context* c, struct TRcommon* com)
   }
 }
 
+#ifdef __rtems__
+
+struct rtems_wake_io_arg
+{
+  rtems_id task;
+};
+
+static void
+_rtems_wake_io(struct socket* sock, void* a)
+{
+  struct rtems_wake_io_arg* arg = a;
+  rtems_event_send(arg->task, T9P_WAKE_EVENT);
+}
+
+static void*
+_config_rtems_socket(int sock)
+{
+#ifdef RTEMS_LEGACY_STACK
+  struct rtems_wake_io_arg* arg = calloc(sizeof(struct rtems_wake_io_arg), 1);
+  arg->task = rtems_task_self();
+
+  struct sockwakeup sow = {
+    .sw_pfn = _rtems_wake_io,
+    .sw_arg = arg
+  };
+
+  if (0 != setsockopt(sock, SOL_SOCKET, SO_RCVWAKEUP, &sow, sizeof(sow))) {
+    perror("t9p_tcp_init: failed to set SO_RCVWAKEUP on socket");
+    printf("Non-fatal error, continuing anyway...\n");
+    free(arg);
+    return NULL;
+  }
+
+  return arg;
+#endif
+}
+
+static rtems_interval
+_get_wait_duration(void)
+{
+  static rtems_interval rti = 0; 
+  if (rti == 0)
+    rti = rtems_clock_get_ticks_per_second() / 1000;
+  if (rti == 0)
+    rti = 1;
+  return rti;
+}
+
+#endif
+
 static void*
 _t9p_thread_proc(void* param)
 {
   t9p_context_t* c = param;
 
   struct trans_node** requests = calloc(MAX_TAGS, sizeof(struct trans_node*));
+
+#ifdef __rtems__
+  c->rtems_thr_ident = rtems_task_self();
+
+  int leSock = c->trans.getsock(c->conn);
+  void* rarg = NULL;
+  if (leSock >= 0) {
+    rarg = _config_rtems_socket(leSock);
+  }
+#endif
 
   while (c->thr_run) {
     struct trans_node* node = NULL;
@@ -2342,10 +2416,21 @@ _t9p_thread_proc(void* param)
     }
     mutex_unlock(c->trans_pool.guard);
 
+    //usleep(1000);
+
+  #ifdef __rtems__
+    rtems_event_set es;
+    rtems_event_receive(T9P_WAKE_EVENT, RTEMS_EVENT_ANY | RTEMS_WAIT, _get_wait_duration(), &es);
+  #else
     /** Interruptible sleep */
     event_wait(c->trans_pool.recv_ev, 1);
-    // usleep(1000);
+  #endif
   }
+
+#if __rtems__
+  if (rarg)
+    free(rarg);
+#endif
 
   free(requests);
   return NULL;
@@ -2374,16 +2459,6 @@ t9p_tcp_init(void)
     free(ctx);
     return NULL;
   }
-
-#ifdef RTEMS_LEGACY_STACK
-  /** This probably doesn't change anything */
-  int wake = 1;
-  if (0 != setsockopt(ctx->sock, SOL_SOCKET, SO_RCVWAKEUP, &wake, sizeof(wake))) {
-    perror("t9p_tcp_init: failed to set SO_RCVWAKEUP on socket");
-    printf("Non-fatal error, continuing anyway...\n");
-  }
-#endif
-
   return ctx;
 }
 
@@ -2476,6 +2551,13 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
   return recv(pc->sock, data, len, rflags);
 }
 
+int
+t9p_tcp_getsock(void* context)
+{
+  struct tcp_context* c = context;
+  return c->sock;
+}
+
 #endif
 
 int
@@ -2488,6 +2570,7 @@ t9p_init_tcp_transport(t9p_transport_t* tp)
   tp->recv = t9p_tcp_recv;
   tp->send = t9p_tcp_send;
   tp->disconnect = t9p_tcp_disconnect;
+  tp->getsock = t9p_tcp_getsock;
   return 0;
 #else
   return -1;

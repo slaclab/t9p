@@ -80,6 +80,7 @@ typedef ssize_t (*t9p_send_t)(
   void* /*context*/, const void* /*data*/, size_t /*len*/, int /*flags*/
 );
 typedef ssize_t (*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/, int /*flags*/);
+typedef int (*t9p_get_sock_t)(void* /*context*/);
 
 /**
  * Transport interface.
@@ -91,6 +92,7 @@ typedef ssize_t (*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/,
  * @disconnect: Disconnects the transport backend.
  * @send:       Send some bytes
  * @recv:       Recv some bytes
+ * @getsock:    Returns the socket fd, if supported by this transport. Otherwise returns -1
  */
 typedef struct t9p_transport
 {
@@ -100,6 +102,7 @@ typedef struct t9p_transport
   t9p_disconnect_t disconnect;
   t9p_send_t send;
   t9p_recv_t recv;
+  t9p_get_sock_t getsock;
 } t9p_transport_t;
 
 /**

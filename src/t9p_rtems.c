@@ -18,7 +18,7 @@
 
 #include "t9p_posix.c"
 
-#define DO_TRACE
+//#define DO_TRACE
 #ifdef DO_TRACE
 #define TRACE(...) do { \
   printf("%s(", __FUNCTION__); \

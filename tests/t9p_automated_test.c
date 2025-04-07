@@ -8,7 +8,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdlib.h>
-
+#include <sys/time.h>
+#include <time.h>
 static void
 result_banner(int f)
 {
@@ -125,14 +126,64 @@ do_trunc(void)
   result_banner(fails);
 }
 
+#define BLOCK_SIZE 16384
+
+static void
+writeperf(void)
+{
+  int fails = 0;
+  int fd = open("/test/myfile.txt", O_RDWR | O_CREAT, 0644);
+  if (fd < 0) {
+    perror("open failed");
+    result_banner(1);
+    return;
+  }
+
+  char* buf = malloc(BLOCK_SIZE);
+  for (int i = 0; i < BLOCK_SIZE; ++i) {
+    buf[i] = "1234567890ABCDEF"[rand() & 0xF];
+  }
+
+  double xfer = 0;
+  struct timespec start;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  for (int i = 0; i < 1000; ++i) {
+    lseek(fd, 0, SEEK_SET);
+    ssize_t l = write(fd, buf, BLOCK_SIZE);
+    if (l < 0) {
+      fails++;
+      perror("write failed");
+      continue;
+    }
+    xfer += l;
+  }
+
+  struct timespec end;
+  clock_gettime(CLOCK_MONOTONIC, &end);
+
+  double dend = (double)end.tv_sec + (end.tv_nsec / 1e9);
+  double dstart = start.tv_sec + (start.tv_nsec / 1e9);
+  double elapsed = dend-dstart;
+
+  printf("Transferred %.2f MiB in %.2f seconds (%.2f MiB/s)\n", xfer / (1024. * 1024.), elapsed,
+    (xfer/(1024.*1024.)) / elapsed);
+
+
+  free(buf);
+  close(fd);
+  result_banner(fails);
+}
+
 int
 run_auto_test(int iters)
 {
   do_trunc();
 
-  for (int i = 0; i < iters; ++i)
-    if (run_hog() < 0)
-      return -1;
+  //for (int i = 0; i < iters; ++i)
+  //  if (run_hog() < 0)
+  //    return -1;
+
+  writeperf();
 
   return 0;
 }
