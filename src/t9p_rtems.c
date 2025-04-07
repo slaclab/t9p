@@ -224,6 +224,10 @@ static int t9p_rtems_fs_eval_for_make(
   const char                      **name
 );
 
+static int t9p_rtems_fs_node_type(
+  rtems_filesystem_location_info_t *pathloc
+);
+
 #endif // RTEMS_MAJOR >= 6
 
 static int t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry);
@@ -262,6 +266,7 @@ static const struct _rtems_filesystem_operations_table t9p_fs_ops = {
   .evalpath_h = t9p_rtems_fs_evalpath,              /*rtems_filesystem_eval_path_t*/
   .evalformake_h = t9p_rtems_fs_eval_for_make,
   .utime_h = t9p_rtems_fs_utimens,
+  .node_type_h = t9p_rtems_fs_node_type,
 #endif
 };
 
@@ -320,7 +325,7 @@ static int t9p_rtems_file_ftruncate(rtems_libio_t* iop, off_t length);
 static int t9p_rtems_file_fsync(rtems_libio_t* iop);
 static int t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer);
 
-static rtems_filesystem_file_handlers_r t9p_file_ops = {
+static const rtems_filesystem_file_handlers_r t9p_file_ops = {
   .open_h = t9p_rtems_file_open,           /*rtems_filesystem_open_t */
   .close_h = t9p_rtems_file_close,         /*rtems_filesystem_close_t */
   .read_h = t9p_rtems_file_read,           /*rtems_filesystem_read_t */
@@ -690,6 +695,14 @@ t9p_rtems_fs_evalpath(
   t9p_rtems_node_t* p = t9p_rtems_iop_clone_node(pathloc->node_access, 0);
   pathloc->node_access = p;
 
+  /** Strip mount point from the start of the path... */
+  const size_t tl = strlen(pathloc->mt_entry->target);
+  if (!strncmp(pathloc->mt_entry->target, pathname, tl)) {
+    pathname += tl;
+    if (*pathname == '/')
+      pathname++;
+  }
+
   t9p_handle_t nh = t9p_open_handle(p->c, p->h, pathname);
   if (nh == NULL) {
     TRACE("E: ENOENT");
@@ -703,12 +716,14 @@ t9p_rtems_fs_evalpath(
   pathloc->ops = &t9p_fs_ops;
   if (t9p_is_dir(p->h)) {
     pathloc->handlers = &t9p_dir_ops;
+    TRACE("handlers=dir_ops");
   }
   else {
     pathloc->handlers = &t9p_file_ops;
+    TRACE("handlers=file_ops");
   }
 
-  return 1;
+  return 0;
 }
 
 static int
@@ -739,6 +754,9 @@ t9p_rtems_fs_eval_for_make(
 
   nn->h = h;
   nn->size = -1;
+
+  pathloc->handlers = &t9p_file_ops;
+  pathloc->ops = &t9p_fs_ops;
 
   return 0;
 }
@@ -777,6 +795,19 @@ t9p_rtems_file_fcntl(int p, rtems_libio_t* iop)
 {
   TRACE("p=%d,iop=%p", p, iop);
   return -1;
+}
+
+static int
+t9p_rtems_fs_node_type(rtems_filesystem_location_info_t *pathloc)
+{
+  TRACE("pathloc=%p", pathloc);
+  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(pathloc);
+  if (t9p_is_dir(n->h)) {
+    return RTEMS_FILESYSTEM_DIRECTORY;
+  }
+  else {
+    return 0; /** ??? this means regular??? */
+  }
 }
 
 #endif // __RTEMS_MAJOR__ < 6
@@ -1067,7 +1098,7 @@ static int
 t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode)
 #endif
 {
-  TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, (unsigned)oflag, (unsigned)mode);
+  TRACE("iop=%p, path=%s, oflag=0x%X, mode=0%o", iop, path, (unsigned)oflag, (unsigned)mode);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   int r = t9p_open(n->c, n->h, rtems_mode_to_t9p(mode));
   if (r < 0) {
@@ -1084,6 +1115,16 @@ t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t
     return -1;
   }
   n->size = ta.fsize;
+
+  #if 0
+  if (S_ISDIR(ta.mode)) {
+    iop->handlers = &t9p_dir_ops;
+  }
+  else {
+    iop->handlers = &t9p_file_ops;
+  }
+  #endif
+
   return 0;
 }
 
@@ -1153,7 +1194,11 @@ t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count)
       return -1;
     }
     rem -= ret;
-    p += ret, iop->offset += ret;
+    p += ret;
+    /** RTEMS 4.X tracks the offset for us */
+  #if __RTEMS_MAJOR__ >= 6
+    iop->offset += ret;
+  #endif
 
     /** Should we update size from the server? */
     if (iop->offset >= n->size)

@@ -32,7 +32,7 @@ done
 # diod running on host port 10002
 BSP_ARGS="--console=/dev/com1 -u jeremy -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
-if [[ "$(echo $TARGET | cut -d '-' -f1)"=="rtems4" ]]; then
+if [[ "$(echo $TARGET | cut -d '-' -f1)" == "rtems4" ]]; then
     NETDEV=ne2k_pci
 else
     NETDEV=e1000
