@@ -755,7 +755,7 @@ t9p_rtems_file_rmnod(rtems_filesystem_location_info_t *parent_loc,
 static int
 t9p_rtems_file_fchmod(rtems_filesystem_location_info_t *pathloc, mode_t mode)
 {
-  TRACE("pathloc=%p,mode=%u", pathloc, mode);
+  TRACE("pathloc=%p,mode=%u", pathloc, (unsigned)mode);
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(pathloc);
   int r;
   if ((r = t9p_chmod(n->c, n->h, mode)) < 0) {
@@ -860,7 +860,7 @@ static int t9p_rtems_fs_mknod(
 )
 #endif
 {
-  TRACE("parentloc=%p, name=%s, mode=%u, dev=%llu", parentloc, name, (uint32_t)mode, dev);
+  TRACE("parentloc=%p, name=%s, mode=%u, dev=%llu", parentloc, name, (unsigned)mode, dev);
   t9p_rtems_fs_info_t* fi = parentloc->mt_entry->fs_info;
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(parentloc);
   /** This operation will immediately clunk the new fid */
@@ -1006,7 +1006,7 @@ t9p_rtems_fs_chown(rtems_filesystem_location_info_t* loc, uid_t owner, gid_t gro
 static int
 t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t* loc, mode_t mode)
 {
-  TRACE("loc=%p, mode=%d", loc, (uint32_t)mode);
+  TRACE("loc=%p, mode=%d", loc, (unsigned)mode);
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
   int r = t9p_chmod(n->c, n->h, mode);
   if (r < 0) {
@@ -1047,7 +1047,7 @@ static int
 t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode)
 #endif
 {
-  TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, oflag, mode);
+  TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, (unsigned)oflag, (unsigned)mode);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
 
   if (t9p_open(n->c, n->h, T9P_OREADONLY) < 0)

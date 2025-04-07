@@ -78,6 +78,7 @@
 struct trans_pool
 {
   struct trans_node* freehead;
+  struct trans_node* deadhead;
   mutex_t* guard;
   uint32_t total;
   msg_queue_t* queue;
@@ -368,10 +369,13 @@ tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr)
 
   /** Wait until serviced (or timeout) */
   if ((r = event_wait(n->event, c->opts.recv_timeo)) != 0) {
-    /** FIXME: If we release this node (as we should...), the thread may still have it queued up,
-     * leading to a use-after-free scenario. Maybe I need to add a flag to trans_node to indicate
-     * that it should be automatically released by the thread? */
-    // tr_release(&c->trans_pool, n);
+    /** Add the timed out node to the dead list. It is now the I/O thread's responsibility to
+      * release the node */
+    mutex_lock(c->trans_pool.guard);
+    n->next = c->trans_pool.deadhead;
+    c->trans_pool.deadhead = n;
+    mutex_unlock(c->trans_pool.guard);
+
     printf("event_wait: %s\n", _t9p_strerror(r));
     return -1;
   }
@@ -868,7 +872,7 @@ t9p_get_root(t9p_context_t* c)
 int
 t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
 {
-  TRACE(c, "t9p_open(h=%p,mode=0x%X)\n", h, mode);
+  TRACE(c, "t9p_open(h=%p,mode=0x%X)\n", h, (unsigned)mode);
   char packet[PACKET_BUF_SIZE];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -922,7 +926,7 @@ t9p_close(t9p_handle_t handle)
 ssize_t
 t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
 {
-  TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, num, outbuffer);
+  TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, (unsigned)num, outbuffer);
   char packet[PACKET_BUF_SIZE];
   char rheader[sizeof(struct Rread)];
   int status = 0;
@@ -973,7 +977,7 @@ error:
 ssize_t
 t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
 {
-  TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, num, inbuffer);
+  TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, (unsigned)num, inbuffer);
   char packet[PACKET_BUF_SIZE];
 
   if (!_can_rw_fid(h, 1))
@@ -1083,7 +1087,7 @@ t9p_create(
 )
 {
   TRACE(c, "t9p_create(parent=%p,nh=%p,name=%s,mode=0x%X,gid=%d,flags=0x%X)\n", parent, newhandle,
-    name, mode, gid, flags);
+    name, (unsigned)mode, (unsigned)gid, (unsigned)flags);
   char packet[PACKET_BUF_SIZE];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1299,7 +1303,8 @@ t9p_mkdir(
   qid_t* outqid
 )
 {
-  TRACE(c, "t9p_mkdir(p=%p,name=%s,mode=0x%X,gid=%d)\n", parent, name, mode, gid);
+  TRACE(c, "t9p_mkdir(p=%p,name=%s,mode=0x%X,gid=%d)\n", parent, name, (unsigned)mode, 
+    (unsigned)gid);
   char packet[PACKET_BUF_SIZE];
   if (!t9p_is_valid(parent))
     return -1;
@@ -1440,7 +1445,7 @@ t9p_symlink(
   t9p_context_t* c, t9p_handle_t dir, const char* dst, const char* src, uint32_t gid, qid_t* oqid
 )
 {
-  TRACE(c, "t9p_symlink(d=%p,dst=%s,src=%s,gid=%d,oqid=%p)\n", dir, dst, src, gid, oqid);
+  TRACE(c, "t9p_symlink(d=%p,dst=%s,src=%s,gid=%d,oqid=%p)\n", dir, dst, src, (unsigned)gid, oqid);
   char packet[PACKET_BUF_SIZE];
   int l;
   if (!t9p_is_valid(dir))
@@ -2154,14 +2159,14 @@ _t9p_thread_proc(void* param)
           printf(
             "send: (header) type=%d, len=%u, tag=%d\n",
             ((struct TRcommon*)node->tr.hdata)->type,
-            ((struct TRcommon*)node->tr.hdata)->size,
+            (unsigned)((struct TRcommon*)node->tr.hdata)->size,
             ((struct TRcommon*)node->tr.hdata)->tag
           );
         if (node->tr.data)
           printf(
             "send: type=%d, len=%u, tag=%d\n",
             ((struct TRcommon*)node->tr.data)->type,
-            ((struct TRcommon*)node->tr.data)->size,
+            (unsigned)((struct TRcommon*)node->tr.data)->size,
             ((struct TRcommon*)node->tr.data)->tag
           );
       }
@@ -2213,7 +2218,7 @@ _t9p_thread_proc(void* param)
       }
 
       if (c->opts.log_level <= T9P_LOG_TRACE) {
-        printf("recv: type=%d, tag=%d, size=%u\n", com.type, com.tag, com.size);
+        printf("recv: type=%d, tag=%d, size=%u\n", com.type, com.tag, (unsigned)com.size);
       }
 
       atomic_add64(&c->stats.total_bytes_recv, com.size);
@@ -2265,7 +2270,7 @@ _t9p_thread_proc(void* param)
 
       /** Check for type mismatch and discard if there is one */
       if (n->tr.rtype != 0 && com.type != n->tr.rtype) {
-        ERROR(c, "recv: Expected msg type '%u' but got '%d'; discarding!\n", n->tr.rtype, com.type);
+        ERROR(c, "recv: Expected msg type '%u' but got '%d'; discarding!\n", (unsigned)n->tr.rtype, com.type);
         _discard(c, &com);
         n->tr.status = -1;
         event_signal(n->event);
@@ -2323,6 +2328,19 @@ _t9p_thread_proc(void* param)
     }
 
     mutex_unlock(c->socket_lock);
+
+    /** Cleanup timed out nodes */
+    mutex_lock(c->trans_pool.guard);
+    for (struct trans_node* n = c->trans_pool.deadhead; n;) {
+      /** Purge from requests list */
+      requests[n->tag] = NULL;
+
+      struct trans_node* nn = n->next;
+      n->next = c->trans_pool.freehead;
+      c->trans_pool.freehead = n;
+      n = nn;
+    }
+    mutex_unlock(c->trans_pool.guard);
 
     /** Interruptible sleep */
     event_wait(c->trans_pool.recv_ev, 1);
