@@ -392,6 +392,29 @@ t9p_rtems_register(void)
   return rtems_filesystem_register(RTEMS_FILESYSTEM_TYPE_9P, t9p_rtems_fsmount_me);
 }
 
+/** For Cexpsh
+  * Roughly match the nfsMount syntax: p9Mount(uid_gid_at_host, server_path, mntpt)
+  */
+int
+p9Mount(const char* ip, const char* srvpath, const char* mntpt)
+{
+  char opts[128];
+  *opts = 0;
+
+  const char* p = strpbrk(ip, "@");
+  if (p) {
+    char uid[32], gid[32];
+    sscanf(ip, "%[^.].%[^@]%*s", uid, gid);
+  }
+
+  printf("Mounting %s at %s with opts '%s'\n", srvpath, mntpt, opts);
+
+  char mnt[512];
+  snprintf(mnt, sizeof(mnt), "%s:%s", p+1, srvpath);
+
+  return mount(mnt, mntpt, RTEMS_FILESYSTEM_TYPE_9P, 0, opts);
+}
+
 #define WR_FLAGS (S_IWUSR | S_IWGRP | S_IWOTH)
 #define RD_FLAGS (S_IRUSR | S_IRGRP | S_IROTH)
 #define EX_FLAGS (S_IXUSR | S_IXGRP | S_IXOTH)
