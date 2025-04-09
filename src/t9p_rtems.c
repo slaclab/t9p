@@ -394,6 +394,8 @@ t9p_rtems_register(void)
 
 /** For Cexpsh
   * Roughly match the nfsMount syntax: p9Mount(uid_gid_at_host, server_path, mntpt)
+  * USAGE:
+  * p9Mount("16626.2211@134.79.217.70", "/scratch/lorelli/dummy-diod-fs", "/test")
   */
 int
 p9Mount(const char* ip, const char* srvpath, const char* mntpt)
@@ -405,14 +407,30 @@ p9Mount(const char* ip, const char* srvpath, const char* mntpt)
   if (p) {
     char uid[32], gid[32];
     sscanf(ip, "%[^.].%[^@]%*s", uid, gid);
+    snprintf(opts, sizeof(opts), "uid=%s,gid=%s", uid, gid);
+  }
+
+  /** Ensure the mount point actually exists */
+  struct stat st;
+  if (stat(mntpt, &st) < 0) {
+    if (mkdir(mntpt, 0777) < 0) {
+      printf("Unable to create %s: %s\n", mntpt, strerror(errno));
+      return -1;
+    }
   }
 
   printf("Mounting %s at %s with opts '%s'\n", srvpath, mntpt, opts);
 
   char mnt[512];
   snprintf(mnt, sizeof(mnt), "%s:%s", p+1, srvpath);
+  printf("mnt=%s, mtpt=%s\n", mnt, mntpt);
 
-  return mount(mnt, mntpt, RTEMS_FILESYSTEM_TYPE_9P, 0, opts);
+  int r = mount(mnt, mntpt, RTEMS_FILESYSTEM_TYPE_9P, 0, opts);
+  if (r < 0) {
+    perror("Mount failed");
+    return -1;
+  }
+  return 0;
 }
 
 #define WR_FLAGS (S_IWUSR | S_IWGRP | S_IWOTH)
@@ -584,6 +602,8 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     errno = EINVAL;
     return -1;
   }
+
+  printf("target=%s, ip=%s, apath=%s\n", mt_entry->target, ip, apath);
 
   fi->c = t9p_init(&t, &fi->opts.opts, apath, ip, mt_entry->target);
   if (fi->c == NULL)
