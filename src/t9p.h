@@ -113,8 +113,8 @@ typedef struct t9p_stats {
   uint32_t send_errs;
   uint32_t recv_cnt;
   uint32_t recv_errs;
-  uint64_t total_bytes_send;
-  uint64_t total_bytes_recv;
+  uint32_t total_bytes_send;
+  uint32_t total_bytes_recv;
   uint32_t msg_counts[128]; /** 128 must match Tmax in t9proto.h */
 } t9p_stats_t;
 
@@ -592,6 +592,13 @@ int t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* n
  * \returns < 0 on error
  */
 int t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* dest);
+
+/**
+ * Returns a the options structure for the context.
+ * \param c Context
+ * \returns Options
+ */
+t9p_opts_t t9p_get_opts(t9p_context_t* c);
 
 /**
  * Returns the context's I/O stats

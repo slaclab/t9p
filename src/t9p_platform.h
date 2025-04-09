@@ -39,13 +39,6 @@ atomic_add32(uint32_t* p, uint32_t v)
   return __atomic_add_fetch(p, v, __ATOMIC_SEQ_CST);
 }
 
-static inline uint64_t
-atomic_add64(uint64_t* p, uint64_t v)
-{
-  *p = *p + v;
-  //return __atomic_add_fetch(p, v, __ATOMIC_SEQ_CST);
-}
-
 #endif
 
 /** Generic thread API */

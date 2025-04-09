@@ -16,6 +16,10 @@
 #include <rtems/thread.h>
 #endif
 
+#ifdef HAVE_CEXPSH
+#include <cexpsh.h>
+#endif
+
 #include "t9p_posix.c"
 
 //#define DO_TRACE
@@ -29,65 +33,16 @@
 #define TRACE(...)
 #endif
 
-#if 0
-/* the file handlers table */
-static
-struct _rtems_filesystem_file_handlers_r nfs_file_file_handlers = {
-                nfs_file_open,                  /* OPTIONAL; may be NULL */
-                nfs_file_close,                 /* OPTIONAL; may be NULL */
-                nfs_file_read,                  /* OPTIONAL; may be NULL */
-                nfs_file_write,                 /* OPTIONAL; may be NULL */
-                nfs_file_ioctl,                 /* OPTIONAL; may be NULL */
-                nfs_file_lseek,                 /* OPTIONAL; may be NULL */
-                nfs_fstat,                              /* OPTIONAL; may be NULL */
-                nfs_fchmod,                             /* OPTIONAL; may be NULL */
-                nfs_file_ftruncate,             /* OPTIONAL; may be NULL */
-                nfs_file_fpathconf,             /* OPTIONAL; may be NULL - UNUSED */
-                nfs_file_fsync,                 /* OPTIONAL; may be NULL */
-                nfs_file_fdatasync,             /* OPTIONAL; may be NULL */
-                nfs_file_fcntl,                 /* OPTIONAL; may be NULL */
-                nfs_unlink,                             /* OPTIONAL; may be NULL */
-};
+typedef struct t9p_rtems_ctx_node {
+  struct t9p_rtems_ctx_node* next;
+  struct t9p_context* c;
+  char* apath;
+  char* mntpt;
+  char* ip;
+} t9p_rtems_ctx_node_t;
 
-/* the directory handlers table */
-static
-struct _rtems_filesystem_file_handlers_r nfs_dir_file_handlers = {
-                nfs_dir_open,                   /* OPTIONAL; may be NULL */
-                nfs_dir_close,                  /* OPTIONAL; may be NULL */
-                nfs_dir_read,                   /* OPTIONAL; may be NULL */
-                nfs_dir_write,                  /* OPTIONAL; may be NULL */
-                nfs_dir_ioctl,                  /* OPTIONAL; may be NULL */
-                nfs_dir_lseek,                  /* OPTIONAL; may be NULL */
-                nfs_fstat,                              /* OPTIONAL; may be NULL */
-                nfs_fchmod,                             /* OPTIONAL; may be NULL */
-                nfs_dir_ftruncate,              /* OPTIONAL; may be NULL */
-                nfs_dir_fpathconf,              /* OPTIONAL; may be NULL - UNUSED */
-                nfs_dir_fsync,                  /* OPTIONAL; may be NULL */
-                nfs_dir_fdatasync,              /* OPTIONAL; may be NULL */
-                nfs_dir_fcntl,                  /* OPTIONAL; may be NULL */
-                nfs_dir_rmnod,                          /* OPTIONAL; may be NULL */
-};
-
-/* the link handlers table */
-static
-struct _rtems_filesystem_file_handlers_r nfs_link_file_handlers = {
-                nfs_link_open,                  /* OPTIONAL; may be NULL */
-                nfs_link_close,                 /* OPTIONAL; may be NULL */
-                nfs_link_read,                  /* OPTIONAL; may be NULL */
-                nfs_link_write,                 /* OPTIONAL; may be NULL */
-                nfs_link_ioctl,                 /* OPTIONAL; may be NULL */
-                nfs_link_lseek,                 /* OPTIONAL; may be NULL */
-                nfs_fstat,                              /* OPTIONAL; may be NULL */
-                nfs_fchmod,                             /* OPTIONAL; may be NULL */
-                nfs_link_ftruncate,             /* OPTIONAL; may be NULL */
-                nfs_link_fpathconf,             /* OPTIONAL; may be NULL - UNUSED */
-                nfs_link_fsync,                 /* OPTIONAL; may be NULL */
-                nfs_link_fdatasync,             /* OPTIONAL; may be NULL */
-                nfs_link_fcntl,                 /* OPTIONAL; may be NULL */
-                nfs_unlink,                             /* OPTIONAL; may be NULL */
-};
-
-#endif
+static mutex_t* s_ctx_mutex;
+static t9p_rtems_ctx_node_t* s_ctxts = NULL; 
 
 /**************************************************************************************
  * File System Operations
@@ -389,6 +344,7 @@ static const rtems_filesystem_file_handlers_r t9p_dir_ops = {
 int
 t9p_rtems_register(void)
 {
+  s_ctx_mutex = mutex_create();
   return rtems_filesystem_register(RTEMS_FILESYSTEM_TYPE_9P, t9p_rtems_fsmount_me);
 }
 
@@ -432,6 +388,56 @@ p9Mount(const char* ip, const char* srvpath, const char* mntpt)
   }
   return 0;
 }
+
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(p9Mount)
+	HELP(
+"Mount a 9P file system.\n"
+"Paramters:\n"
+" ip - String in the format [UID.GID@]IP[:PORT], where\n"
+"      UID is the user ID number, GID is the GID number.\n"
+"      Port is optional and defaults to 10002\n",
+" srvpath - Path to the export on the server.\n"
+"           Sometimes called 'apath' in 9P-speak\n",
+" mntpt - Mount point locally. Will be created with 0777 perms\n"
+"         if it does not exist already\n"
+	int, p9Mount,  (const char* ip, const char* srvpath, const char* mntpt)
+	),
+CEXP_HELP_TAB_END
+#endif
+
+int
+p9Stats()
+{
+  mutex_lock(s_ctx_mutex);
+  int n = 0;
+  for (t9p_rtems_ctx_node_t* c = s_ctxts; c; c = c->next, n++) {
+    t9p_opts_t opts = t9p_get_opts(c->c);
+    t9p_stats_t stats = t9p_get_stats(c->c);
+    printf("%s\n", c->ip);
+    printf("  apath=%s,mntpt=%s,uid=%d,gid=%d\n", c->apath, c->mntpt,
+      (int)opts.uid, (int)opts.gid);
+    printf("   bytesSend=%u bytesRecv=%u\n", (unsigned)stats.total_bytes_recv,
+      (unsigned)stats.total_bytes_recv);
+    printf("   sendCnt=%u, sendErrCnt=%u\n", (unsigned)stats.send_cnt,
+      (unsigned)stats.send_errs);
+    printf("   recvCnt=%u, recvErrCnt=%u\n\n", (unsigned)stats.recv_cnt,
+    (unsigned)stats.recv_errs);
+  }
+  mutex_unlock(s_ctx_mutex);
+
+  printf("\n%d total 9P mounts\n", n);
+  return 0;
+}
+
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(p9Stats)
+	HELP(
+"Display stats about all 9P mounts\n"
+	int, p9Stats,  ()
+	),
+CEXP_HELP_TAB_END
+#endif
 
 #define WR_FLAGS (S_IWUSR | S_IWGRP | S_IWOTH)
 #define RD_FLAGS (S_IRUSR | S_IRGRP | S_IROTH)
@@ -609,6 +615,19 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   if (fi->c == NULL)
     return -1;
 
+  printf("Mounted 9P %s:%s at %s\n", ip, apath, mt_entry->target);
+
+  /** Global list, just for debugging ... */
+  mutex_lock(s_ctx_mutex);
+  t9p_rtems_ctx_node_t* cn = calloc(1, sizeof(t9p_rtems_ctx_node_t));
+  cn->next = s_ctxts;
+  cn->c = fi->c;
+  cn->apath = strdup(apath);
+  cn->mntpt = strdup(mt_entry->target);
+  cn->ip = strdup(ip);
+  s_ctxts = cn;
+  mutex_unlock(s_ctx_mutex);
+
   /** Setup root node info */
   t9p_rtems_node_t* root = calloc(sizeof(t9p_rtems_node_t), 1);
   root->c = fi->c;
@@ -637,6 +656,25 @@ t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry)
 {
   TRACE("mt_entry=%p", mt_entry);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
+
+  /** Remove from context list */
+  mutex_lock(s_ctx_mutex);
+  for (t9p_rtems_ctx_node_t* c = s_ctxts, *p = NULL; c; c = c->next) {
+    if (c->c != fi->c) {
+      p = c;
+     continue;
+    }
+
+    free(c->ip);
+    free(c->apath);
+    free(c->mntpt);
+    if (p)
+      p->next = c->next;
+    free(c);
+    break;
+  }
+  mutex_unlock(s_ctx_mutex);
+
   pthread_mutex_destroy(&fi->mutex);
   pthread_mutexattr_destroy(&fi->mutattr);
   t9p_shutdown(fi->c);

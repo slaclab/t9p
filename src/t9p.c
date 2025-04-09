@@ -2069,6 +2069,12 @@ t9p_get_log_level(t9p_context_t* c)
   return c->opts.log_level;
 }
 
+t9p_opts_t
+t9p_get_opts(t9p_context_t* c)
+{
+  return c->opts;
+}
+
 /********************************************************************/
 /*                                                                  */
 /*                C O N T E X T       M E T H O D S                 */
@@ -2252,7 +2258,7 @@ _t9p_thread_proc(void* param)
       if (node->tr.data)
         atomic_add32(&c->stats.msg_counts[((struct TRcommon*)node->tr.data)->type], 1);
 
-      atomic_add64(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
+      atomic_add32(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
       atomic_add32(&c->stats.send_cnt, 1);
 
       /** Send any header data first */
@@ -2295,7 +2301,7 @@ _t9p_thread_proc(void* param)
         printf("recv: type=%d, tag=%d, size=%u\n", com.type, com.tag, (unsigned)com.size);
       }
 
-      atomic_add64(&c->stats.total_bytes_recv, com.size);
+      atomic_add32(&c->stats.total_bytes_recv, com.size);
 
       /** Check if tag is out of range */
       if (com.tag >= MAX_TAGS) {

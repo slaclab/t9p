@@ -51,7 +51,7 @@ using built-in compiler defines.
 
 A makefile is provided that can automatically configure for all targets.
 ```
-make configure
+make -f Makefile.conf configure
 ```
 
 This assumes you have RTEMS 6 available locally, as the RTEMS_TOP environment variable must be provided. This makefile needs some serious improvement though.
@@ -63,7 +63,7 @@ The build-cmake directory will contain all of the build subdirs. It is safe to d
 
 The makefile can also build all targets:
 ```
-make build
+make -f Makefile.conf build
 ```
 
 ### Configuring Manually
@@ -118,6 +118,29 @@ Important things to note:
 - t9p_cmd: interactive cli for interacting with 9p
 - t9p_threaded_test: threaded validation and performance testing
 - t9p_rtems_test: Combines an automated test with t9p_cmd on RTEMS target
+
+### Running Tests
+
+1. Run ./tests/mktree.sh to create a test file system tree
+2. Run ./tests/diod.sh in a new terminal
+3. Run ./tests/t9p.sh, t9p-threaded.sh or rtems-test.sh
+
+### Testing on Hardware
+
+Integrated ssrlApps/GeSys build at: /sdf/group/cds/sw/epics/users/lorelli/rtems/4.10.2/src/ssrlApps
+
+Set your nvram config to point at this image:
+- mvme3100: /sdf/group/cds/sw/epics/users/lorelli/rtems/4.10.2/target/rtems_p5/ssrlApps_p4/powerpc-rtems/mvme3100/bin/rtems.ralf
+- mvme6100: /sdf/group/cds/sw/epics/users/lorelli/rtems/4.10.2/target/rtems_p5/ssrlApps_p4/powerpc-rtems/beatnik/bin/rtems.ralf
+- uC5282: TODO
+
+t9p.obj gets loaded automatically on boot.
+
+Mounting example:
+```
+p9Mount("16626.2211@134.79.217.70", "/scratch/lorelli/dummy-diod-fs", "/test")
+```
+Must be mounted with correct uid/gid. IP required right now, that needs fixing.
 
 ## Development Guidelines
 
