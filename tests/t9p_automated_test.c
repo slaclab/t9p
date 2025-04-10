@@ -21,6 +21,11 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <time.h>
+
+#ifdef HAVE_CEXP
+#include <cexpsh.h>
+#endif
+
 static void
 result_banner(int f)
 {
@@ -33,11 +38,11 @@ result_banner(int f)
 }
 
 static int
-run_hog(void)
+run_hog(void* param)
 {
   int fails = 0;
   ssize_t l;
-  const char* path = "/test/myfile.txt";
+  const char* path = param;
   int fd = open(path, O_RDWR | O_CREAT, 0644);
 
   if (fd < 0) {
@@ -81,12 +86,16 @@ run_hog(void)
   return 0;
 }
 
-static void
-do_trunc(void)
+void
+t9p_run_trunc_test(const char* path)
 {
+  if (!path) {
+    printf("USAGE: t9p_run_trunc_test PATH\n");
+    return;
+  }
   int fails = 0;
 
-  int fd = open("/test/myfile.txt", O_CREAT | O_RDWR, 0644);
+  int fd = open(path, O_CREAT | O_RDWR, 0644);
   if (fd < 0) {
     perror("*** open failed");
     fails++;
@@ -100,13 +109,13 @@ do_trunc(void)
     close(fd);
   }
 
-  if (truncate("/test/myfile.txt", 128) < 0) {
+  if (truncate("path", 128) < 0) {
     perror("*** truncate failed");
     fails++;
   }
 
   struct stat st = {0};
-  if (stat("/test/myfile.txt", &st) < 0) {
+  if (stat("path", &st) < 0) {
     perror("*** stat failed");
     fails++;
   }
@@ -117,7 +126,7 @@ do_trunc(void)
     fails++;
   }
 
-  fd = open("/test/myfile.txt", O_TRUNC | O_RDWR);
+  fd = open("path", O_TRUNC | O_RDWR);
   if (fd < 0) {
     perror("*** open with O_TRUNC failed");
     fails++;
@@ -137,13 +146,28 @@ do_trunc(void)
   result_banner(fails);
 }
 
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(t9p_run_trunc_test)
+	HELP(
+"Run O_TRUNC/ftruncate/truncate unit test\n"
+	void, t9p_run_trunc_test,  (const char* path)
+	),
+CEXP_HELP_TAB_END
+#endif
+
+
 #define BLOCK_SIZE 16384
 
-static void
-writeperf(void)
+void
+t9p_run_write_perf_test(const char* path)
 {
+  if (!path) {
+    printf("USAGE: t9p_run_write_perf_test PATH\n");
+    return;
+  }
+
   int fails = 0;
-  int fd = open("/test/myfile.txt", O_RDWR | O_CREAT, 0644);
+  int fd = open(path, O_RDWR | O_CREAT, 0644);
   if (fd < 0) {
     perror("open failed");
     result_banner(1);
@@ -185,16 +209,25 @@ writeperf(void)
   result_banner(fails);
 }
 
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(t9p_run_write_perf_test)
+	HELP(
+"Run write performance unit test\n"
+	void, t9p_run_write_perf_test,  (const char* path)
+	),
+CEXP_HELP_TAB_END
+#endif
+
 int
 run_auto_test(int iters)
 {
-  do_trunc();
+  t9p_run_trunc_test("/test/myfile.txt");
 
   //for (int i = 0; i < iters; ++i)
   //  if (run_hog() < 0)
   //    return -1;
 
-  writeperf();
+  t9p_run_write_perf_test("/test/myfile.txt");
 
   return 0;
 }

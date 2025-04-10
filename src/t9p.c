@@ -2262,28 +2262,28 @@ _t9p_thread_proc(void* param)
         continue;
       }
 
+      /** Trace level logging for sent packets */
       if (c->opts.log_level <= T9P_LOG_TRACE) {
-        if (node->tr.hdata)
+        if (node->tr.hdata) {
+          struct TRcommon com;
+          decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
           printf(
-            "send: (header) type=%d, len=%u, tag=%d\n",
-            ((struct TRcommon*)node->tr.hdata)->type,
-            (unsigned)((struct TRcommon*)node->tr.hdata)->size,
-            ((struct TRcommon*)node->tr.hdata)->tag
+            "send: (header) type=%d, len=%u, tag=%d\n", com.type, (unsigned)com.size, com.tag
           );
-        if (node->tr.data)
+        }
+        else if (node->tr.data) {
+          struct TRcommon com;
+          decode_TRcommon(&com, node->tr.data, node->tr.size);
           printf(
-            "send: type=%d, len=%u, tag=%d\n",
-            ((struct TRcommon*)node->tr.data)->type,
-            (unsigned)((struct TRcommon*)node->tr.data)->size,
-            ((struct TRcommon*)node->tr.data)->tag
+            "send: type=%d, len=%u, tag=%d\n", com.type, (unsigned)com.size, com.tag
           );
+        }
       }
 
       /** FIXME: This is pretty ugly and may cause issues in the future */
       if (node->tr.hdata)
         atomic_add32(&c->stats.msg_counts[((struct TRcommon*)node->tr.hdata)->type], 1);
-
-      if (node->tr.data)
+      else if (node->tr.data)
         atomic_add32(&c->stats.msg_counts[((struct TRcommon*)node->tr.data)->type], 1);
 
       atomic_add32(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);

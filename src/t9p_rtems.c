@@ -38,6 +38,8 @@
 
 #include "t9p_posix.c"
 
+#define TESTING
+
 //#define DO_TRACE
 #ifdef DO_TRACE
 #define TRACE(...) do { \
@@ -375,10 +377,10 @@ t9p_rtems_register(void)
 /** For Cexpsh
   * Roughly match the nfsMount syntax: p9Mount(uid_gid_at_host, server_path, mntpt)
   * USAGE:
-  * p9Mount("16626.2211@134.79.217.70", "/scratch/lorelli/dummy-diod-fs", "/test")
+  * p9Mount("16626.2211@134.79.217.70", "/scratch/lorelli/dummy-diod-fs", "/test", ...)
   */
 int
-p9Mount(const char* ip, const char* srvpath, const char* mntpt)
+p9Mount(const char* ip, const char* srvpath, const char* mntpt, const char* otheropts)
 {
   char opts[128];
   *opts = 0;
@@ -388,6 +390,11 @@ p9Mount(const char* ip, const char* srvpath, const char* mntpt)
     char uid[32], gid[32];
     sscanf(ip, "%[^.].%[^@]%*s", uid, gid);
     snprintf(opts, sizeof(opts), "uid=%s,gid=%s", uid, gid);
+  }
+
+  if (*opts && otheropts) {
+    strcat(opts, ",");
+    strcat(opts, otheropts);
   }
 
   /** Ensure the mount point actually exists */
@@ -425,7 +432,9 @@ CEXP_HELP_TAB_BEGIN(p9Mount)
 "           Sometimes called 'apath' in 9P-speak\n",
 " mntpt - Mount point locally. Will be created with 0777 perms\n"
 "         if it does not exist already\n"
-	int, p9Mount,  (const char* ip, const char* srvpath, const char* mntpt)
+" otheropts - Options string to be concatenated to the internal options string\n"
+"             for example, passing 'trace' to other opts will enable tracing mode\n"
+	int, p9Mount,  (const char* ip, const char* srvpath, const char* mntpt, const char* otheropts)
 	),
 CEXP_HELP_TAB_END
 #endif
@@ -571,6 +580,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     return -1;
   }
 
+  int loglevel = T9P_LOG_DEBUG;
   for (char* r = strtok(buf, ","); r; r = strtok(NULL, ",")) {
     if (!strncmp(r, "port", strlen("port"))) {
       const char* p = strpbrk(r, "=");
@@ -592,6 +602,8 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
       const char* p = strpbrk(r, "=");
       if (p)
         strcpy(user, p + 1);
+    } else if (!strcmp(r, "trace")) {
+      loglevel = T9P_LOG_TRACE;
     }
   }
 
@@ -614,7 +626,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   fi->opts.opts.gid = gid;
   fi->opts.opts.uid = uid;
   fi->opts.transport = T9P_RTEMS_TRANS_TCP;
-  fi->opts.opts.log_level = T9P_LOG_DEBUG;
+  fi->opts.opts.log_level = loglevel;
   strcpy(fi->opts.ip, ip);
   strcpy(fi->opts.opts.user, user);
 
@@ -1498,5 +1510,12 @@ msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
   return 
     rtems_message_queue_receive(q->queue, data, size, RTEMS_NO_WAIT, 0) == RTEMS_SUCCESSFUL?0:-1;
 }
+
+#endif
+
+#ifdef TESTING
+
+/** This is so evil.. */
+#include "../tests/t9p_automated_test.c"
 
 #endif
