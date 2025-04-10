@@ -51,11 +51,12 @@ using built-in compiler defines.
 ### Configuring
 
 A makefile is provided that can automatically configure for all targets.
-```
+```sh
 make -f Makefile.conf configure
 ```
 
-This assumes you have RTEMS 6 available locally, as the RTEMS_TOP environment variable must be provided. This makefile needs some serious improvement though.
+If the RTEMS_TOP environment variable is set to the top of your RTEMS 6 install, Makefile.conf will automatically determine the available targets
+and configure for those.
 
 The build-cmake directory will contain all of the build subdirs. It is safe to delete.
 
@@ -63,7 +64,7 @@ The build-cmake directory will contain all of the build subdirs. It is safe to d
 
 
 The makefile can also build all targets:
-```
+```sh
 make -f Makefile.conf build
 ```
 
@@ -71,18 +72,51 @@ make -f Makefile.conf build
 
 
 #### Linux
-```
+
+```sh
 cmake . -Bbuild
 make -C build -j$(nproc)
 ```
 
-#### RTEMS
+Alternatively, you can use Makefile.conf (this will configure for all available targets):
+```sh
+make -f Makefile.conf configure
+```
+
+Makefile.conf will generate `build-cmake/build-linux-x86_64` for Linux.
+
+#### RTEMS 6
 
 Example shown is RTEMS6-pc686-qemu target.
+```sh
+cmake . -Bbuild-cmake/build-rtems6-pc686-qemu -DCMAKE_TOOLCHAIN_FILE=rtems-tools/toolchains/rtems6-pc686-qemu.cmake -DRTEMS_TOP=$HOME/dev/rtems/6.0
+make -C build-cmake/build-rtems6-pc686-qemu -j$(nproc)
 ```
-cmake . -Bbuild-rtems6-pc686-qemu -DCMAKE_TOOLCHAIN_FILE=rtems-tools/toolchains/rtems6-pc686-qemu.cmake -DRTEMS_TOP=$HOME/dev/rtems/6.0
-make -C build-rtems6-pc686-qemu -j$(nproc)
+
+Running in QEMU is done with this script:
+```sh
+./tests/rtems-test.sh -t rtems6-pc686-qemu
 ```
+
+NOTE: you will need qemu-system-i386 to be installed and available in your PATH.
+
+
+#### RTEMS 4
+
+
+Configuring for RTEMS 4.X is similar:
+```sh
+cmake . -Bbuild-cmake/build-rtems4-pc586 -DCMAKE_TOOLCHAIN_FILE=rtems-tools/toolchains/rtems4-pc586.cmake -DRTEMS_TOP=path/to/your/rtems/4.10.2
+make -C build-cmake/build-rtems4-pc586
+```
+
+Running in QEMU can be done by the following script:
+
+```sh
+./tests/rtems-test.sh -t rtems4-pc586
+```
+
+NOTE: you will need qemu-system-i386 to be installed and available in your PATH.
 
 ## Target Environment
 
