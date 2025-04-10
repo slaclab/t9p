@@ -16,7 +16,6 @@
 
 /** Feature flags */
 #define HAVE_TCP 1
-#define HAVE_UDP 1
 
 #include "t9p_platform.h"
 
@@ -42,12 +41,16 @@
 #include <rtems/score/cpuopts.h>
 #if __RTEMS_MAJOR__ >= 6
 #include <sys/limits.h>
+#include <rtems/rtems/types.h>
+#include <rtems/rtems/tasks.h>
+#include <rtems/rtems/event.h>
+#include <rtems/rtems/clock.h>
 #endif
 #else
 #define PATH_MAX 256
 #endif
 
-#if HAVE_TCP || HAVE_UDP
+#if HAVE_TCP
 #if __RTEMS_MAJOR__ < 5
 #include "netinet/in_systm.h"
 #endif
@@ -399,7 +402,7 @@ tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr)
   /** Wait until serviced (or timeout) */
   if ((r = event_wait(n->event, c->opts.recv_timeo)) != 0) {
     /** Add the timed out node to the dead list. It is now the I/O thread's responsibility to
-      * release the node */
+      * release the node and discard its data. */
     mutex_lock(c->trans_pool.guard);
     n->next = c->trans_pool.deadhead;
     c->trans_pool.deadhead = n;
@@ -431,12 +434,17 @@ _recv_type(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t type
   while (1) {
     n = c->trans.recv(c->conn, data, sz, 0);
     if (n >= sizeof(struct TRcommon)) {
-      struct TRcommon* com = data;
-      if (com->tag != tag) {
-        printf("Discarding mismatched tag. %d expected, got %d\n", tag, com->tag);
+      struct TRcommon com;
+      if (decode_TRcommon(&com, data, n) < 0) {
+        ERROR(c, "decode_TRcommon failed\n");
+        continue;
       }
-      if (com->type == type ||
-          ((com->type == T9P_TYPE_Rlerror || com->type == T9P_TYPE_Rerror) && com->tag == tag))
+      /** Check for mismatched tag */
+      else if (com.tag != tag) {
+        ERROR(c, "Discarding mismatched tag. %d expected, got %d\n", tag, com.tag);
+      }
+      /** Return if we have recv'ed the correct type, or Rlerror/Rerror */
+      else if (com.type == type || com.type == T9P_TYPE_Rlerror || com.type == T9P_TYPE_Rerror)
         return n;
     }
 
@@ -2170,6 +2178,7 @@ _discard(struct t9p_context* c, struct TRcommon* com)
 
 #ifdef __rtems__
 
+#ifdef RTEMS_LEGACY_STACK
 struct rtems_wake_io_arg
 {
   rtems_id task;
@@ -2181,6 +2190,7 @@ _rtems_wake_io(struct socket* sock, void* a)
   struct rtems_wake_io_arg* arg = a;
   rtems_event_send(arg->task, T9P_WAKE_EVENT);
 }
+#endif
 
 static void*
 _config_rtems_socket(int sock)
@@ -2202,6 +2212,8 @@ _config_rtems_socket(int sock)
   }
 
   return arg;
+#else
+  return NULL;
 #endif
 }
 
@@ -2437,8 +2449,6 @@ _t9p_thread_proc(void* param)
       n = nn;
     }
     mutex_unlock(c->trans_pool.guard);
-
-    //usleep(1000);
 
   #ifdef __rtems__
     rtems_event_set es;

@@ -178,7 +178,7 @@ event_destroy(event_t* ev)
   free(ev);
 }
 
-// Really dumb message queue because POSIX message queues don't cut the mustard...
+/** Really dumb message queue because POSIX message queues don't quite cut the mustard... */
 
 #ifndef _T9P_NO_POSIX_MQ
 
@@ -214,7 +214,6 @@ msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
   }
 
   q->msize = msgSize;
-  // q->ev = event_create();
   q->mut = mutex_create();
   return q;
 }
@@ -272,7 +271,6 @@ msg_queue_send(msg_queue_t* q, const void* data, size_t size)
 int
 msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 {
-
   struct msg* p = NULL;
   mutex_lock(q->mut);
 

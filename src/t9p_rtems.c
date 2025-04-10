@@ -203,11 +203,15 @@ static int t9p_rtems_fs_node_type(
 
 static int t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry);
 static int t9p_rtems_fs_unmount(rtems_filesystem_mount_table_entry_t* mt_entry);
+
 static int t9p_rtems_fs_rmnod(
-  const rtems_filesystem_location_info_t* parentloc, const rtems_filesystem_location_info_t* loc
+  const rtems_filesystem_location_info_t* parentloc,
+  const rtems_filesystem_location_info_t* loc
 );
+
 static bool t9p_rtems_fs_are_nodes_equal(
-  const rtems_filesystem_location_info_t* a, const rtems_filesystem_location_info_t* b
+  const rtems_filesystem_location_info_t* a,
+  const rtems_filesystem_location_info_t* b
 );
 static int t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t* loc);
 static int t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t* loc, mode_t mode);
@@ -287,10 +291,14 @@ static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, int oflag, 
 static int t9p_rtems_file_fstat(rtems_filesystem_location_info_t* loc, struct stat* buf);
 static int t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t mode);
 static int t9p_rtems_file_fcntl(int p, rtems_libio_t* iop);
-static int t9p_rtems_file_rmnod(rtems_filesystem_location_info_t *parent_loc,
-  rtems_filesystem_location_info_t *pathloc);
 static int t9p_rtems_file_fchmod(rtems_filesystem_location_info_t *pathloc, mode_t mode);
 static int t9p_rtems_file_fpathconf(rtems_libio_t *pathloc, int mode);
+
+static int t9p_rtems_file_rmnod(
+  rtems_filesystem_location_info_t *parent_loc,
+  rtems_filesystem_location_info_t *pathloc
+);
+
 #endif
 static int t9p_rtems_file_ftruncate(rtems_libio_t* iop, off_t length);
 static int t9p_rtems_file_fsync(rtems_libio_t* iop);
@@ -859,8 +867,10 @@ t9p_rtems_fs_eval_for_make(
 }
 
 static int
-t9p_rtems_file_rmnod(rtems_filesystem_location_info_t *parent_loc,
-  rtems_filesystem_location_info_t *pathloc)
+t9p_rtems_file_rmnod(
+  rtems_filesystem_location_info_t *parent_loc,
+  rtems_filesystem_location_info_t *pathloc
+)
 {
   TRACE("parentloc=%p,pathloc=%p", parent_loc, pathloc);
   /** TODO: Im lazy */
@@ -868,7 +878,10 @@ t9p_rtems_file_rmnod(rtems_filesystem_location_info_t *parent_loc,
 }
 
 static int
-t9p_rtems_file_fchmod(rtems_filesystem_location_info_t *pathloc, mode_t mode)
+t9p_rtems_file_fchmod(
+  rtems_filesystem_location_info_t *pathloc,
+  mode_t mode
+)
 {
   TRACE("pathloc=%p,mode=%u", pathloc, (unsigned)mode);
   t9p_rtems_node_t* n = t9p_rtems_fs_get_node(pathloc);
@@ -926,7 +939,9 @@ t9p_rtems_fs_unmount(rtems_filesystem_mount_table_entry_t* mt_entry)
 #if __RTEMS_MAJOR__ >= 6
 static int
 t9p_rtems_fs_symlink(
-  const rtems_filesystem_location_info_t* parentloc, const char* name, size_t namelen,
+  const rtems_filesystem_location_info_t* parentloc,
+  const char* name,
+  size_t namelen,
   const char* target
 )
 #else
@@ -963,7 +978,8 @@ t9p_rtems_fs_utimens(rtems_filesystem_location_info_t* loc, time_t atime, time_t
 
 static int
 t9p_rtems_fs_rmnod(
-  const rtems_filesystem_location_info_t* parentloc, const rtems_filesystem_location_info_t* loc
+  const rtems_filesystem_location_info_t* parentloc,
+  const rtems_filesystem_location_info_t* loc
 )
 {
   TRACE("parentloc=%p, loc=%p", parentloc, loc);
@@ -1002,7 +1018,8 @@ static int t9p_rtems_fs_mknod(
 
 static bool
 t9p_rtems_fs_are_nodes_equal(
-  const rtems_filesystem_location_info_t* a, const rtems_filesystem_location_info_t* b
+  const rtems_filesystem_location_info_t* a,
+  const rtems_filesystem_location_info_t* b
 )
 {
   TRACE("a=%p, b=%p", a, b);
@@ -1074,10 +1091,18 @@ static int t9p_rtems_fs_link(
 
 #if __RTEMS_MAJOR__ >= 6
 static long
-t9p_rtems_fs_readlink(const rtems_filesystem_location_info_t* loc, char* buf, size_t bufsize)
+t9p_rtems_fs_readlink(
+  const rtems_filesystem_location_info_t* loc,
+  char* buf,
+  size_t bufsize
+)
 #else
 static int
-t9p_rtems_fs_readlink(rtems_filesystem_location_info_t* loc, char* buf, size_t bufsize)
+t9p_rtems_fs_readlink(
+  rtems_filesystem_location_info_t* loc,
+  char* buf,
+  size_t bufsize
+)
 #endif
 {
   TRACE("loc=%p, buf=%p, bufsz=%zu", loc, buf, bufsize);
@@ -1097,7 +1122,9 @@ static int
 t9p_rtems_fs_rename(
   const rtems_filesystem_location_info_t* oldparentloc,
   const rtems_filesystem_location_info_t* oldloc,
-  const rtems_filesystem_location_info_t* newparentloc, const char* name, size_t namelen
+  const rtems_filesystem_location_info_t* newparentloc,
+  const char* name,
+  size_t namelen
 )
 #else
 static int
@@ -1468,9 +1495,8 @@ int
 msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 {
   assert(*size == q->msgSize);
-  return rtems_message_queue_receive(q->queue, data, size, RTEMS_NO_WAIT, 0) == RTEMS_SUCCESSFUL
-           ? 0
-           : -1;
+  return 
+    rtems_message_queue_receive(q->queue, data, size, RTEMS_NO_WAIT, 0) == RTEMS_SUCCESSFUL?0:-1;
 }
 
 #endif

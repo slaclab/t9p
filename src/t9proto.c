@@ -22,6 +22,7 @@
 #include "t9p.h"
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #if __RTEMS_MAJOR__ < 5
 #define bswap_32(x) __builtin_bswap32(x)
@@ -36,15 +37,19 @@
 #define BSWAP16(x) bswap_16(x)
 #define BSWAP64(x) bswap_64(x)
 #else
-#define BSWAP32(x) (x)
-#define BSWAP16(x) (x)
-#define BSWAP64(x) (x)
+#define BSWAP32(x) (uint32_t)(x)
+#define BSWAP16(x) (uint16_t)(x)
+#define BSWAP64(x) (uint64_t)(x)
 #endif
 
 qid_t
 swapqid(qid_t in)
 {
-  qid_t q = {.path = BSWAP64(in.path), .type = in.type, .version = BSWAP32(in.version)};
+  qid_t q = {
+    .path = BSWAP64(in.path),
+    .type = in.type,
+    .version = BSWAP32(in.version)
+  };
   return q;
 }
 
@@ -187,6 +192,7 @@ t9p_type_string(int type)
   case T9P_TYPE_Rlink:
     return "Rlink";
   default:
+    assert(0);
     return NULL;
   }
 }
