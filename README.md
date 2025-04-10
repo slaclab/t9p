@@ -19,7 +19,7 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | lopen         | Y |   |
 | lcreate       | Y |   |
 | symlink       | Y |   |
-| mknod         |   |   |
+| mknod         | Y |   |
 | rename        | Y |   |
 | readlink      | Y |   |
 | getattr       | Y |   |
@@ -35,8 +35,9 @@ t9p is a tiny 9p client that implements most of 9p.2000L
 | renameat      | Y |   |
 | unlinkat      | Y |   |
 
+The xattr calls are likely not going to be implemented, as they are not needed for the primary use-case of this client.
 
-Implementation percentage: 21/28 (75%)
+Implementation percentage: 22/28 (78%)
 
 ## Building
 

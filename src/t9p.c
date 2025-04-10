@@ -1453,6 +1453,7 @@ t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize
 
   if ((l = encode_Treadlink(packet, sizeof(packet), n->tag, h->fid)) < 0) {
     ERROR(c, "%s: Unable to encode Treadlink\n", __FUNCTION__);
+    tr_release(&c->trans_pool, n);
     return -EINVAL;
   }
 
@@ -1498,6 +1499,7 @@ t9p_symlink(
 
   if ((l = encode_Tsymlink(packet, sizeof(packet), n->tag, dir->fid, dst, src, gid)) < 0) {
     ERROR(c, "%s: Unable to encode Tsymlink\n", __FUNCTION__);
+    tr_release(&c->trans_pool, n);
     return -EINVAL;
   }
 
@@ -1508,6 +1510,7 @@ t9p_symlink(
     .rsize = sizeof(packet),
     .rtype = T9P_TYPE_Rsymlink,
   };
+
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
     ERROR(c, "%s: Tsymlink: %s\n", __FUNCTION__, _t9p_strerror(l));
     return l;
@@ -1575,10 +1578,6 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
   if (!(dir->qid.type & T9P_QID_DIR))
     return -ENOTDIR;
 
-  struct trans_node* n = tr_get_node(&c->trans_pool);
-  if (!n)
-    return -ENOMEM;
-
   /** Treaddir is a bit of a strange call. count does not refer to the number of records returned,
    *  but instead refers to the number of bytes returned. In some ways this is better than the
    * number of records because we can constrain the number of bytes better than arbitrary length
@@ -1589,9 +1588,16 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
   uint64_t offset = 0;
   for (int i = 0; i < 999; ++i) {
 
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) {
+      status = -ENOMEM;
+      goto error;
+    }
+
     if ((l = encode_Treaddir(packet, sizeof(packet), n->tag, dir->fid, offset, count)) < 0) {
       ERROR(c, "%s: Unable to encode Treaddir\n", __FUNCTION__);
       status = -EINVAL;
+      tr_release(&c->trans_pool, n);
       goto error;
     }
 
@@ -1697,10 +1703,6 @@ t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
   if (!(dir->qid.type & T9P_QID_DIR))
     return -ENOTDIR;
 
-  struct trans_node* n = tr_get_node(&c->trans_pool);
-  if (!n)
-    return -ENOMEM;
-
   const ssize_t numEnts = bufsize / sizeof(struct dirent);
 
   /** Number of entries read per transaction is fixed */
@@ -1709,9 +1711,16 @@ t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
   ssize_t i;
   for (i = 0; i < numEnts;) {
 
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) {
+      status = -ENOMEM;
+      goto error;
+    }
+
     if ((l = encode_Treaddir(packet, sizeof(packet), n->tag, dir->fid, ctx->offset, count)) < 0) {
       ERROR(c, "%s: Unable to encode Treaddir\n", __FUNCTION__);
       status = -EINVAL;
+      tr_release(&c->trans_pool, n);
       goto error;
     }
 
@@ -1935,6 +1944,7 @@ t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
   
   if ((l = encode_Tlink(packet, sizeof(packet), n->tag, dir->fid, h->fid, target)) < 0) {
     ERROR(c, "%s: unable to encode Tlink\n", __FUNCTION__);
+    tr_release(&c->trans_pool, n);
     return -1;
   }
   
@@ -1970,6 +1980,7 @@ t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, u
   if ((l = encode_Tmknod(packet, sizeof(packet), n->tag, dir->fid, name, mode, major, minor, gid)) 
     < 0) {
       ERROR(c, "%s: unable to encode Tmknod\n", __FUNCTION__);
+      tr_release(&c->trans_pool, n);
       return -1;
     }
   
