@@ -427,7 +427,7 @@ encode_Twrite(
   tw->count = BSWAP32(count);
   tw->offset = BSWAP64(offset);
   tw->fid = BSWAP32(fid);
-  tw->size = sizeof(*tw) + count;
+  tw->size = BSWAP32(sizeof(*tw) + count);
   return sizeof(*tw); /** Intentionally excluding count here */
 }
 
@@ -563,7 +563,7 @@ encode_Tlcreate(
   tl->namelen = BSWAP16(nl);
   tl->fid = BSWAP32(fid);
   tl->type = T9P_TYPE_Tlcreate;
-  tl->size = totalSize;
+  tl->size = BSWAP32(totalSize);
 
   uint8_t* p = ((uint8_t*)buf) + offsetof(struct Tlcreate, name);
   wrbuf(&p, (uint8_t*)name, nl);
