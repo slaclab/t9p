@@ -1954,6 +1954,41 @@ t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
 }
 
 int
+t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, uint32_t major,
+  uint32_t minor, uint32_t gid, qid_t* outqid)
+{
+  char packet[PACKET_BUF_SIZE];
+  ssize_t l = 0;
+
+  if (!t9p_is_valid(dir))
+    return -EBADF;
+
+  struct trans_node* n = tr_get_node(&c->trans_pool);
+  if (!n)
+    return -ENOMEM;
+
+  if ((l = encode_Tmknod(packet, sizeof(packet), n->tag, dir->fid, name, mode, major, minor, gid)) 
+    < 0) {
+      ERROR(c, "%s: unable to encode Tmknod\n", __FUNCTION__);
+      return -1;
+    }
+  
+    struct trans tr = {
+      .data = packet,
+      .size = l,
+      .rdata = packet,
+      .rsize = sizeof(packet),
+      .rtype = T9P_TYPE_Rmknod
+    };
+
+    if ((l = tr_send_recv(c, n, &tr)) < 0) {
+      ERROR(c, "%s: Tmknod: %s\n", __FUNCTION__, _t9p_strerror(l));
+      return l;
+    }
+    return 0;
+}
+
+int
 t9p_truncate(t9p_context_t* c, t9p_handle_t h, uint64_t size)
 {
   if (!t9p_is_file(h))

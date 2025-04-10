@@ -647,9 +647,20 @@ struct T9P_PACKED Trename
 int encode_Trename(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t dfid,
   const char* name);
 
-struct Rrename
+struct T9P_PACKED Rrename
 {
   T9P_COMMON_FIELDS
 };
 
 int decode_Rrename(struct Rrename* rn, const void* buf, size_t buflen);
+
+int encode_Tmknod(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name,
+  uint32_t mode, uint32_t majopr, uint32_t minor, uint32_t gid);
+
+struct T9P_PACKED Rmknod
+{
+  T9P_COMMON_FIELDS
+  qid_t qid;
+};
+
+int decode_Rmknod(struct Rmknod* rm, const void* buf, size_t buflen);

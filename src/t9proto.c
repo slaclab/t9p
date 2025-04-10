@@ -42,7 +42,7 @@
 #define BSWAP64(x) (uint64_t)(x)
 #endif
 
-qid_t
+static qid_t
 swapqid(qid_t in)
 {
   qid_t q = {
@@ -53,35 +53,42 @@ swapqid(qid_t in)
   return q;
 }
 
-void
+static void
 wr64(uint8_t** pos, uint64_t val)
 {
   *(uint64_t*)(*pos) = BSWAP64(val);
   *pos += 8;
 }
 
-void
+static void
+wr8(uint8_t** pos, uint8_t val)
+{
+  **(pos) = val;
+  *pos += 1;
+}
+
+static void
 wr32(uint8_t** pos, uint32_t val)
 {
   *(uint32_t*)(*pos) = BSWAP32(val);
   *pos += 4;
 }
 
-void
+static void
 wr16(uint8_t** pos, uint16_t val)
 {
   *(uint16_t*)(*pos) = BSWAP16(val);
   *pos += 2;
 }
 
-void
+static void
 wrbuf(uint8_t** pos, const uint8_t* buf, uint32_t bl)
 {
   for (uint32_t n = 0; n < bl; ++n)
     *(*pos)++ = buf[n];
 }
 
-void
+static void
 wrstr(uint8_t** pos, const char* str, int len)
 {
   len = len < 0 ? strlen(str) : len;
@@ -1019,4 +1026,41 @@ decode_Rrename(struct Rrename* rn, const void* buf, size_t buflen)
   rn->size = BSWAP32(rn->size);
   rn->tag = BSWAP16(rn->tag);
   return sizeof(*rn);
+}
+
+
+int encode_Tmknod(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name,
+  uint32_t mode, uint32_t major, uint32_t minor, uint32_t gid)
+{
+  const size_t nl = strlen(name);
+  const size_t totalSize = sizeof(struct TRcommon) + sizeof(uint32_t) + sizeof(uint16_t)
+    + nl + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+  if (buflen < totalSize)
+    return -1;
+
+  uint8_t* p = buf;
+  wr32(&p, totalSize);
+  wr8(&p, T9P_TYPE_Tmknod);
+  wr16(&p, tag);
+  wr32(&p, dfid);
+  wrstr(&p, name, nl);
+  wr32(&p, mode);
+  wr32(&p, major);
+  wr32(&p, minor);
+  wr32(&p, gid);
+
+  return totalSize;
+}
+
+int decode_Rmknod(struct Rmknod* rm, const void* buf, size_t buflen)
+{
+  if (buflen < sizeof *rm)
+    return -1;
+
+  *rm = *(struct Rmknod*)buf;
+  rm->qid = swapqid(rm->qid);
+  rm->size = BSWAP32(rm->size);
+  rm->tag = BSWAP16(rm->tag);
+
+  return sizeof *rm;
 }

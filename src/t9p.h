@@ -609,6 +609,21 @@ int t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* n
 int t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* dest);
 
 /**
+ * Creates a new node on the device with the specified minor, major, mode and group
+ * \param c Context
+ * \param dir Directory to create the node in
+ * \param name Name of the node to be created
+ * \param mode Mode of the node
+ * \param major Major version
+ * \param minor Minor version
+ * \param gid Group ID to own the node
+ * \param outqid Resulting QID of the node, may be NULL if you don't care about it
+ * \returns < 0 on error
+ */
+int t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, uint32_t major,
+  uint32_t minor, uint32_t gid, qid_t* outqid);
+
+/**
  * Returns a the options structure for the context.
  * \param c Context
  * \returns Options
