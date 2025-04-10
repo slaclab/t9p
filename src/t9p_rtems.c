@@ -1,3 +1,19 @@
+/**
+ * ----------------------------------------------------------------------------
+ * Company    : SLAC National Accelerator Laboratory
+ * ----------------------------------------------------------------------------
+ * Description: RTEMS platform-specific code + file system ops implementation.
+ * ----------------------------------------------------------------------------
+ * This file is part of 't9p'. It is subject to the license terms in the
+ * LICENSE.txt file found in the top-level directory of this distribution,
+ * and at:
+ *    https://confluence.slac.stanford.edu/display/ppareg/LICENSE.html.
+ * No part of 't9p', including this file, may be copied, modified,
+ * propagated, or distributed except according to the terms contained in the
+ * LICENSE.txt file.
+ * ----------------------------------------------------------------------------
+ **/
+
 #define _T9P_NO_POSIX_MQ
 #include "t9p_rtems.h"
 #include "t9p.h"
@@ -1405,7 +1421,12 @@ t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer)
   return 0;
 }
 
-#if 1
+/**************************************************************************************
+ * Platform abstraction
+ **************************************************************************************/
+
+#ifdef _T9P_NO_POSIX_MQ
+
 struct _msg_queue_s
 {
   rtems_name name;

@@ -1,4 +1,21 @@
-
+/**
+ * ----------------------------------------------------------------------------
+ * Company    : SLAC National Accelerator Laboratory
+ * ----------------------------------------------------------------------------
+ * Description: 9P/2000.L serialization library. Handles encoding and decoding
+ *  of messages to a binary format that can be sent over the wire. Messages are
+ *  byteswapped to account for LE/BE differences. 9P itself is a little-endian
+ *  format, so on most platforms byteswapping is not necessary.
+ * ----------------------------------------------------------------------------
+ * This file is part of 't9p'. It is subject to the license terms in the
+ * LICENSE.txt file found in the top-level directory of this distribution,
+ * and at:
+ *    https://confluence.slac.stanford.edu/display/ppareg/LICENSE.html.
+ * No part of 't9p', including this file, may be copied, modified,
+ * propagated, or distributed except according to the terms contained in the
+ * LICENSE.txt file.
+ * ----------------------------------------------------------------------------
+ **/
 #define _T9P_PROTO_IMPL
 
 #include "t9proto.h"

@@ -1,4 +1,18 @@
-
+/**
+ * ----------------------------------------------------------------------------
+ * Company    : SLAC National Accelerator Laboratory
+ * ----------------------------------------------------------------------------
+ * Description: Command-line utility for interacting with 9P. For debugging!
+ * ----------------------------------------------------------------------------
+ * This file is part of 't9p'. It is subject to the license terms in the
+ * LICENSE.txt file found in the top-level directory of this distribution,
+ * and at:
+ *    https://confluence.slac.stanford.edu/display/ppareg/LICENSE.html.
+ * No part of 't9p', including this file, may be copied, modified,
+ * propagated, or distributed except according to the terms contained in the
+ * LICENSE.txt file.
+ * ----------------------------------------------------------------------------
+ **/
 #include "t9p.h"
 
 #include <ctype.h>
@@ -18,6 +32,7 @@
 #ifdef __linux__
 #include <linux/limits.h>
 #else
+#undef PATH_MAX
 #define PATH_MAX 256
 #endif
 
