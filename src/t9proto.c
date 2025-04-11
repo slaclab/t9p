@@ -100,107 +100,70 @@ const char*
 t9p_type_string(int type)
 {
   switch (type) {
-  case T9P_TYPE_Rlerror:
-    return "Rlerror";
-  case T9P_TYPE_Tlopen:
-    return "Tlopen";
-  case T9P_TYPE_Rlopen:
-    return "Rlopen";
-  case T9P_TYPE_Tlcreate:
-    return "Tlcreate";
-  case T9P_TYPE_Rlcreate:
-    return "Rlcreate";
-  case T9P_TYPE_Tgetattr:
-    return "Tgetattr";
-  case T9P_TYPE_Rgetattr:
-    return "Rgetattr";
-  case T9P_TYPE_Tversion:
-    return "Tversion";
-  case T9P_TYPE_Rversion:
-    return "Rversion";
-  case T9P_TYPE_Tauth:
-    return "Tauth";
-  case T9P_TYPE_Rauth:
-    return "Rauth";
-  case T9P_TYPE_Tattach:
-    return "Tattach";
-  case T9P_TYPE_Rattach:
-    return "Rattach";
-  case T9P_TYPE_Terror:
-    return "Terror";
-  case T9P_TYPE_Rerror:
-    return "Rerror";
-  case T9P_TYPE_Tflush:
-    return "Tflush";
-  case T9P_TYPE_Rflush:
-    return "Rflush";
-  case T9P_TYPE_Twalk:
-    return "Twalk";
-  case T9P_TYPE_Rwalk:
-    return "Rwalk";
-  case T9P_TYPE_Topen:
-    return "Topen";
-  case T9P_TYPE_Ropen:
-    return "Ropen";
-  case T9P_TYPE_Tcreate:
-    return "Tcreate";
-  case T9P_TYPE_Rcreate:
-    return "Rcreate";
-  case T9P_TYPE_Tread:
-    return "Tread";
-  case T9P_TYPE_Rread:
-    return "Rread";
-  case T9P_TYPE_Twrite:
-    return "Twrite";
-  case T9P_TYPE_Rwrite:
-    return "Rwrite";
-  case T9P_TYPE_Tclunk:
-    return "Tclunk";
-  case T9P_TYPE_Rclunk:
-    return "Rclunk";
-  case T9P_TYPE_Tremove:
-    return "Tremove";
-  case T9P_TYPE_Rremove:
-    return "Rremove";
-  case T9P_TYPE_Tstat:
-    return "Tstat";
-  case T9P_TYPE_Rstat:
-    return "Rstat";
-  case T9P_TYPE_Twstat:
-    return "Twstat";
-  case T9P_TYPE_Rwstat:
-    return "Rwstat";
-  case T9P_TYPE_Tstatfs:
-    return "Tstatfs";
-  case T9P_TYPE_Rstatfs:
-    return "Rstatfs";
-  case T9P_TYPE_Treadlink:
-    return "Treadlink";
-  case T9P_TYPE_Rreadlink:
-    return "Rreadlink";
-  case T9P_TYPE_Tsymlink:
-    return "Tsymlink";
-  case T9P_TYPE_Rsymlink:
-    return "Rsymlink";
-  case T9P_TYPE_Rreaddir:
-    return "Rreaddir";
-  case T9P_TYPE_Treaddir:
-    return "Treaddir";
-  case T9P_TYPE_Tmknod:
-    return "Tmknod";
-  case T9P_TYPE_Rmknod:
-    return "Rmknod";
-  case T9P_TYPE_Trename:
-    return "Trename";
-  case T9P_TYPE_Rrename:
-    return "Rrename";
-  case T9P_TYPE_Tlink:
-    return "Tlink";
-  case T9P_TYPE_Rlink:
-    return "Rlink";
-  default:
-    assert(0);
-    return NULL;
+  case T9P_TYPE_Rlerror:    return "Rlerror";
+  case T9P_TYPE_Tstatfs:    return "Tstatfs";
+  case T9P_TYPE_Rstatfs:    return "Rstatfs";
+  case T9P_TYPE_Tlopen:     return "Tlopen";
+  case T9P_TYPE_Rlopen:     return "Rlopen";
+  case T9P_TYPE_Tlcreate:   return "Tlcreate";
+  case T9P_TYPE_Rlcreate:   return "Rlcreate";
+  case T9P_TYPE_Tsymlink:   return "Tsymlink";
+  case T9P_TYPE_Rsymlink:   return "Rsymlink";
+  case T9P_TYPE_Tmknod:     return "Tmknod";
+  case T9P_TYPE_Rmknod:     return "Rmknod";
+  case T9P_TYPE_Trename:    return "Trename";
+  case T9P_TYPE_Rrename:    return "Rrename";
+  case T9P_TYPE_Treadlink:  return "Treadlink";
+  case T9P_TYPE_Rreadlink:  return "Rreadlink";
+  case T9P_TYPE_Tgetattr:   return "Tgetattr";
+  case T9P_TYPE_Rgetattr:   return "Rgetattr";
+  case T9P_TYPE_Tsetattr:   return "Tsetattr";
+  case T9P_TYPE_Rsetattr:   return "Rsetattr";
+  case T9P_TYPE_Treaddir:   return "Treaddir";
+  case T9P_TYPE_Rreaddir:   return "Rreaddir";
+  case T9P_TYPE_Tfsync:     return "Tfsync";
+  case T9P_TYPE_Rfsync:     return "Rfsync";
+  case T9P_TYPE_Tlock:      return "Tlock";
+  case T9P_TYPE_Rlock:      return "Rlock";
+  case T9P_TYPE_Tgetlock:   return "Tgetlock";
+  case T9P_TYPE_Rgetlock:   return "Rgetlock";
+  case T9P_TYPE_Tlink:      return "Tlink";
+  case T9P_TYPE_Rlink:      return "Rlink";
+  case T9P_TYPE_Tmkdir:     return "Tmkdir";
+  case T9P_TYPE_Rmkdir:     return "Rmkdir";
+  case T9P_TYPE_Trenameat:  return "Trenameat";
+  case T9P_TYPE_Rrenameat:  return "Rrenameat";
+  case T9P_TYPE_Tunlinkat:  return "Tunlinkat";
+  case T9P_TYPE_Runlinkat:  return "Runlinkat";
+  case T9P_TYPE_Tversion:   return "Tversion";
+  case T9P_TYPE_Rversion:   return "Rversion";
+  case T9P_TYPE_Tauth:      return "Tauth";
+  case T9P_TYPE_Rauth:      return "Rauth";
+  case T9P_TYPE_Tattach:    return "Tattach";
+  case T9P_TYPE_Rattach:    return "Rattach";
+  case T9P_TYPE_Terror:     return "Terror";
+  case T9P_TYPE_Rerror:     return "Rerror";
+  case T9P_TYPE_Tflush:     return "Tflush";
+  case T9P_TYPE_Rflush:     return "Rflush";
+  case T9P_TYPE_Twalk:      return "Twalk";
+  case T9P_TYPE_Rwalk:      return "Rwalk";
+  case T9P_TYPE_Topen:      return "Topen";
+  case T9P_TYPE_Ropen:      return "Ropen";
+  case T9P_TYPE_Tcreate:    return "Tcreate";
+  case T9P_TYPE_Rcreate:    return "Rcreate";
+  case T9P_TYPE_Tread:      return "Tread";
+  case T9P_TYPE_Rread:      return "Rread";
+  case T9P_TYPE_Twrite:     return "Twrite";
+  case T9P_TYPE_Rwrite:     return "Rwrite";
+  case T9P_TYPE_Tclunk:     return "Tclunk";
+  case T9P_TYPE_Rclunk:     return "Rclunk";
+  case T9P_TYPE_Tremove:    return "Tremove";
+  case T9P_TYPE_Rremove:    return "Rremove";
+  case T9P_TYPE_Tstat:      return "Tstat";
+  case T9P_TYPE_Rstat:      return "Rstat";
+  case T9P_TYPE_Twstat:     return "Twstat";
+  case T9P_TYPE_Rwstat:     return "Rwstat";
+  default:                  return "Invalid";
   }
 }
 
@@ -341,7 +304,8 @@ decode_Rwalk(struct Rwalk* rw, const void* buf, size_t buflen, qid_t** outqids)
   rw->size = BSWAP32(rw->size);
   rw->tag = BSWAP16(rw->tag);
   rw->nwqid = BSWAP16(rw->nwqid);
-  const qid_t* qs = (const qid_t*)((uint8_t*)buf + offsetof(struct Rwalk, nwqid));
+  const qid_t* qs = (const qid_t*)((uint8_t*)buf + offsetof(struct Rwalk, nwqid)
+    + sizeof(uint16_t));
 
   *outqids = calloc(rw->nwqid, sizeof(qid_t));
   for (int i = 0; i < rw->nwqid; ++i)
