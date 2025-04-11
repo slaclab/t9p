@@ -2536,6 +2536,13 @@ t9p_tcp_init(void)
     free(ctx);
     return NULL;
   }
+
+  /** Keep connections alive */
+  int o = 1;
+  if (setsockopt(ctx->sock, SOL_SOCKET, SO_KEEPALIVE, &o, sizeof(o)) < 0) {
+    perror("setsockopt");
+  }
+
   return ctx;
 }
 

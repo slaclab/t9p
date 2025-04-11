@@ -24,6 +24,8 @@
 #include <rtems/libio_.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <fcntl.h>
+
 #if __RTEMS_MAJOR__ < 5
 #include <rtems/posix/mutex.h>
 #endif
@@ -477,19 +479,13 @@ CEXP_HELP_TAB_END
 #define EX_FLAGS (S_IXUSR | S_IXGRP | S_IXOTH)
 
 static int
-rtems_mode_to_t9p(mode_t mode)
+rtems_oflag_to_t9p(uint32_t oflag)
 {
-  int m = 0;
-
-  if ((mode & WR_FLAGS) && (mode & RD_FLAGS))
-    m = T9P_ORDWR;
-  else if (mode & WR_FLAGS)
-    m = T9P_OWRITEONLY;
-  else if (mode & RD_FLAGS)
-    m = T9P_OREADONLY;
-  else
-    m = T9P_ONOACCESS;
-  return m;
+  if ((oflag & O_RDWR) == O_RDWR)
+    return T9P_ORDWR;
+  if ((oflag & O_WRONLY) == O_WRONLY)
+    return T9P_OWRITEONLY;
+  return T9P_OREADONLY;
 }
 
 static int
@@ -809,6 +805,11 @@ t9p_rtems_fs_evalpath(
     return -1;
   }
 
+  t9p_rtems_node_t* on = t9p_rtems_fs_get_node(pathloc);
+  if (on && !t9p_is_dir(on->h)) {
+    return -1;
+  }
+
   t9p_rtems_node_t* p = t9p_rtems_iop_clone_node(pathloc->node_access, 0);
   pathloc->node_access = p;
 
@@ -843,6 +844,13 @@ t9p_rtems_fs_evalpath(
   return 0;
 }
 
+/**
+ * From RTEMS src:
+ *  The following routine evaluate path for a new node to be created.
+ *  pathloc is returned with a pointer to the parent of the new node.
+ *  name is returned with a pointer to the first character in the
+ *  new node name.  The parent node is verified to be a directory.
+ */
 static int
 t9p_rtems_fs_eval_for_make(
   const char                       *path,
@@ -852,13 +860,48 @@ t9p_rtems_fs_eval_for_make(
 {
   TRACE("path=%s, pathloc=%p, name=%p", path, pathloc, name);
   int r;
+  /** Determine the name of the file */
   *name = strrchr(path, '/');
   if (!*name)
     *name = path;
+  else
+    (*name)++; /** Skip past the '/' */
+
+  /** Open handle to the parent of the file */
+
+  if (*name == path) {
+    /** Must be in the root dir */
+    return 0;
+  }
+
+  t9p_rtems_node_t* n = pathloc->node_access;
+
+  /** Determine parent dir */
+  char parentPath[PATH_MAX];
+  t9p_get_parent_dir(path, parentPath, sizeof(parentPath));
+
+  /** Open handle to the parent dir */
+  t9p_handle_t nh = t9p_open_handle(n->c, n->h, path);
+  if (nh == NULL) {
+    return -1;
+  }
+
+  n->h = nh;
+  n->size = -1;
+
+#if 0
 
   t9p_rtems_node_t* nn = t9p_rtems_iop_clone_node(pathloc->node_access, 0);
-  pathloc->node_access = nn;
+  if (!t9p_is_dir(nn->h)) {
+    printf("omg not a dir\n");
+    return -1;
+  }
 
+  pathloc->node_access = nn;
+  nn->size = -1;
+  nn->h = 0;
+
+  #if 0
   t9p_handle_t h = t9p_open_handle(nn->c, nn->h, path);
   if (h == NULL) {
     /** Create a new file if one does not exist (plus inherit gid) */
@@ -871,8 +914,12 @@ t9p_rtems_fs_eval_for_make(
 
   nn->h = h;
   nn->size = -1;
+  #endif
 
-  pathloc->handlers = &t9p_file_ops;
+#endif
+
+  /** Must always be a dir */
+  pathloc->handlers = &t9p_dir_ops;
   pathloc->ops = &t9p_fs_ops;
 
   return 0;
@@ -1236,7 +1283,7 @@ t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t
 {
   TRACE("iop=%p, path=%s, oflag=0x%X, mode=0%o", iop, path, (unsigned)oflag, (unsigned)mode);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
-  int r = t9p_open(n->c, n->h, rtems_mode_to_t9p(mode));
+  int r = t9p_open(n->c, n->h, rtems_oflag_to_t9p(oflag));
   if (r < 0) {
     TRACE("E: %d (%s)\n", -r, strerror(-r));
     errno = -r;

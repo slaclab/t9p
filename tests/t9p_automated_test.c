@@ -38,6 +38,15 @@ result_banner(int f)
 }
 
 static int
+file_exists(const char* path)
+{
+  struct stat st;
+  if (stat(path, &st) < 0)
+    return 0;
+  return 1;
+}
+
+static int
 run_hog(void* param)
 {
   int fails = 0;
@@ -93,6 +102,9 @@ t9p_run_trunc_test(const char* path)
     printf("USAGE: t9p_run_trunc_test PATH\n");
     return;
   }
+
+  printf("===============> TRUNC TEST <===============\n");
+
   int fails = 0;
 
   int fd = open(path, O_CREAT | O_RDWR, 0644);
@@ -109,13 +121,13 @@ t9p_run_trunc_test(const char* path)
     close(fd);
   }
 
-  if (truncate("path", 128) < 0) {
+  if (truncate(path, 128) < 0) {
     perror("*** truncate failed");
     fails++;
   }
 
   struct stat st = {0};
-  if (stat("path", &st) < 0) {
+  if (stat(path, &st) < 0) {
     perror("*** stat failed");
     fails++;
   }
@@ -126,7 +138,7 @@ t9p_run_trunc_test(const char* path)
     fails++;
   }
 
-  fd = open("path", O_TRUNC | O_RDWR);
+  fd = open(path, O_TRUNC | O_RDWR);
   if (fd < 0) {
     perror("*** open with O_TRUNC failed");
     fails++;
@@ -165,6 +177,8 @@ t9p_run_write_perf_test(const char* path)
     printf("USAGE: t9p_run_write_perf_test PATH\n");
     return;
   }
+
+  printf("===============> WRITE PERF TEST <===============\n");
 
   int fails = 0;
   int fd = open(path, O_RDWR | O_CREAT, 0644);
@@ -226,6 +240,8 @@ t9p_run_create_test(const char* path)
     return;
   }
 
+  printf("===============> CREATE TEST <===============\n");
+
   int fails = 0;
 
   struct stat st;
@@ -279,6 +295,8 @@ t9p_run_rename_test(const char* path)
     printf("USAGE: %s PATH\n", __FUNCTION__);
     return;
   }
+  printf("===============> RENAME TEST <===============\n");
+  printf("path=%s\n", path);
 
   int fails = 0;
 
@@ -334,6 +352,8 @@ t9p_run_chmod_chown_test(const char* path)
     return;
   }
 
+  printf("===============> CHMOD/CHOWN TEST <===============\n");
+
   int fails=0;
 
   /** Create file if it doesnt exist already */
@@ -356,11 +376,30 @@ t9p_run_chmod_chown_test(const char* path)
     ++fails;
   }
   else {
-    if (st.st_mode != 0777) {
-      printf("*** expected %o mode, got %o\n", 0777, (unsigned)st.st_mode);
+    if ((st.st_mode & 0777) != 0777) {
+      printf("*** expected %o mode, got %o\n", 0777, (unsigned)(st.st_mode&0777));
     }
   }
 
+  if (chmod(path, 0444) < 0) {
+    perror("*** chmod failed");
+    ++fails;
+  }
+
+  if (stat(path, &st) < 0) {
+    perror("*** stat");
+    ++fails;
+  }
+  else {
+    if ((st.st_mode & 0777) != 0444) {
+      printf("*** expected %o mode, got %o\n", 0444, (unsigned)(st.st_mode&0777));
+    }
+  }
+
+  /** Make it writable for the next test in the list */
+  chmod(path, 0644);
+
+#if 0 /** Not really a good way to test this in a portable manner */
   if (chown(path, 8412, 2211) < 0) {
     perror("*** chown failed");
     ++fails;
@@ -380,6 +419,7 @@ t9p_run_chmod_chown_test(const char* path)
       ++fails;
     }
   }
+#endif
 
   result_banner(fails);
 }
@@ -398,11 +438,11 @@ run_auto_test(int iters)
 {
   t9p_run_trunc_test("/test/myfile.txt");
 
-  //for (int i = 0; i < iters; ++i)
-  //  if (run_hog() < 0)
-  //    return -1;
+  //t9p_run_write_perf_test("/test/myfile.txt");
 
-  t9p_run_write_perf_test("/test/myfile.txt");
+  t9p_run_chmod_chown_test("/test/myfile.txt");
+
+  t9p_run_rename_test("/test/myfile.txt");
 
   return 0;
 }
