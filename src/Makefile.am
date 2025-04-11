@@ -23,21 +23,10 @@ t9p_LDADD                       = t9p.$(OBJEXT) t9p_rtems.$(OBJEXT) t9proto.$(OB
 t9p_DEPENDENCIES                = $(t9p_LDADD)
 t9p_LINK                        = $(OBJLINK)
 
-#rpcio_SOURCES                  = rpcio.modini.c
-#rpcio_LDADD                    = rpcio.$(OBJEXT)
-#rpcio_DEPENDENCIES             = $(rpcio_LDADD)
-#rpcio_LINK                     = $(OBJLINK)
-
-#nfs_SOURCES                    = rpcio.modini.c
-#nfs_LDADD                      = nfs.$(OBJEXT) sock_mbuf.$(OBJEXT)
-#nfs_LDADD                     += xdr_mbuf.$(OBJEXT)
-#nfs_DEPENDENCIES               = $(nfs_LDADD)
-#nfs_LINK                       = $(OBJLINK)
 
 endif # HAVE_CEXP
 
-#AM_CPPFLAGS                   += -I$(srcdir)/../proto
-AM_CFLAGS                      += -std=gnu99
+AM_CFLAGS                      += -std=gnu99 -DHAVE_GESYS=1
 
 include $(top_srcdir)/rtems.am
 

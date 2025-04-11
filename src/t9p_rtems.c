@@ -40,7 +40,7 @@
 
 #define TESTING
 
-//#define DO_TRACE
+#define DO_TRACE
 #ifdef DO_TRACE
 #define TRACE(...) do { \
   printf("%s(", __FUNCTION__); \
@@ -1513,7 +1513,7 @@ msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 
 #endif
 
-#ifdef TESTING
+#if defined(TESTING) && defined(HAVE_GESYS)
 
 /** This is so evil.. */
 #include "../tests/t9p_automated_test.c"
