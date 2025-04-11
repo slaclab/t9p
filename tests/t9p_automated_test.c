@@ -218,6 +218,181 @@ CEXP_HELP_TAB_BEGIN(t9p_run_write_perf_test)
 CEXP_HELP_TAB_END
 #endif
 
+void
+t9p_run_create_test(const char* path)
+{
+  if (!path) {
+    printf("USAGE: %s PATH\n", __FUNCTION__);
+    return;
+  }
+
+  int fails = 0;
+
+  struct stat st;
+  if (stat(path, &st) >= 0) {
+    if (unlink(path) < 0) {
+      perror("*** unlink failed");
+      ++fails;
+    }
+  }
+
+  int fd = open(path, O_RDWR | O_CREAT, 0644);
+  if (fd < 0) {
+    perror("*** open failed");
+    ++fails;
+  }
+
+  /** Check mode */
+  if (stat(path, &st) >= 0) {
+    if (st.st_mode != 0644) {
+      printf("*** Mode mistmatch. Expected %o, got %o\n", 0644, (unsigned)st.st_mode);
+    }
+  }
+  else {
+    perror("*** stat");
+    ++fails;
+  }
+
+  close(fd);
+
+  if (stat(path, &st) < 0) {
+    perror("*** stat failed, even though the file should exist");
+    ++fails;
+  }
+
+  result_banner(fails);
+}
+
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(t9p_run_create_test)
+	HELP(
+"Run file create/unlink test\n"
+	void, t9p_run_create_test,  (const char* path)
+	),
+CEXP_HELP_TAB_END
+#endif
+
+void
+t9p_run_rename_test(const char* path)
+{
+  if (!path) {
+    printf("USAGE: %s PATH\n", __FUNCTION__);
+    return;
+  }
+
+  int fails = 0;
+
+  /** Create the test file if it doesn't exist yet */
+  struct stat st;
+  if (stat(path, &st) < 0) {
+    int fd = open(path, O_CREAT | O_RDWR, 0644);
+    if (fd < 0) {
+      perror("*** failed to create test file");
+      ++fails;
+    }
+    
+    if (write(fd, "hello world", strlen("hello world")) < 0) {
+      perror("*** write failed");
+      ++fails;
+    }
+
+    close(fd);
+  }
+
+  char newname[256];
+  snprintf(newname, sizeof(newname), "%s.1", path);
+
+  /** Rename! */
+  if (rename(path, newname) < 0) {
+    perror("*** rename failed");
+    ++fails;
+  }
+
+  /** Remove it */
+  if (unlink(newname) < 0) {
+    perror("*** unlink failed");
+    ++fails;
+  }
+
+  result_banner(fails);
+}
+
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(t9p_run_rename_test)
+	HELP(
+"Run file rename/unlink test\n"
+	void, t9p_run_rename_test,  (const char* path)
+	),
+CEXP_HELP_TAB_END
+#endif
+
+void
+t9p_run_chmod_chown_test(const char* path)
+{
+  if (!path) {
+    printf("USAGE: %s PATH\n", path);
+    return;
+  }
+
+  int fails=0;
+
+  /** Create file if it doesnt exist already */
+  struct stat st;
+  if (stat(path, &st) < 0) {
+    if (creat(path, 0644) < 0) {
+      perror("*** creat failed");
+      result_banner(1);
+      return;
+    }
+  }
+
+  if (chmod(path, 0777) < 0) {
+    perror("*** chmod failed");
+    ++fails;
+  }
+
+  if (stat(path, &st) < 0) {
+    perror("*** stat");
+    ++fails;
+  }
+  else {
+    if (st.st_mode != 0777) {
+      printf("*** expected %o mode, got %o\n", 0777, (unsigned)st.st_mode);
+    }
+  }
+
+  if (chown(path, 8412, 2211) < 0) {
+    perror("*** chown failed");
+    ++fails;
+  }
+
+  if (stat(path, &st) < 0) {
+    perror("*** stat");
+    ++fails;
+  }
+  else {
+    if (st.st_uid != 8412) {
+      printf("*** Expected uid=%d, got uid=%d\n", 8412, st.st_uid);
+      ++fails;
+    }
+    if (st.st_gid != 2211) {
+      printf("*** Expected gid=%d, got gid=%d\n", 2211, st.st_gid);
+      ++fails;
+    }
+  }
+
+  result_banner(fails);
+}
+
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(t9p_run_chmod_chown_test)
+	HELP(
+"Run file own/chmod test\n"
+	void, t9p_run_chmod_chown_test,  (const char* path)
+	),
+CEXP_HELP_TAB_END
+#endif
+
 int
 run_auto_test(int iters)
 {

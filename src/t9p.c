@@ -1977,8 +1977,7 @@ t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, u
   if (!n)
     return -ENOMEM;
 
-  if ((l = encode_Tmknod(packet, sizeof(packet), n->tag, dir->fid, name, mode, major, minor, gid)) 
-    < 0) {
+  if ((l = encode_Tmknod(packet, sizeof(packet), n->tag, dir->fid, name, mode, major, minor, gid)) < 0) {
       ERROR(c, "%s: unable to encode Tmknod\n", __FUNCTION__);
       tr_release(&c->trans_pool, n);
       return -1;
