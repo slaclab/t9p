@@ -833,11 +833,14 @@ t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
   }
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
-  if (!n)
+  if (!n) {
+    ERROR(c, "%s: out of nodes\n", __FUNCTION__);
     return NULL;
+  }
 
   struct t9p_handle_node* fh = _alloc_handle(c);
   if (!fh) {
+    ERROR(c, "%s: out of handles\n", __FUNCTION__);
     return NULL;
   }
 
@@ -869,6 +872,13 @@ t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
   qid_t* qids = NULL;
   if (decode_Rwalk(&rw, packet, l, &qids) < 0) {
     ERROR(c, "%s: Rwalk decode failed\n", __FUNCTION__);
+    goto error;
+  }
+
+  /** If the number of comps we requested earlier doesn't match the number of qids we have,
+    * we have failed to open the full path. Just clunk and return error */
+  if (nwcount != rw.nwqid) {
+    free(qids);
     goto error;
   }
 
@@ -2081,6 +2091,14 @@ t9p_get_qid(t9p_handle_t h)
   return inval;
 }
 
+uint32_t
+t9p_get_fid(t9p_handle_t h)
+{
+  if (h->valid_mask & T9P_HANDLE_FID_VALID)
+    return h->fid;
+  return ~0U;
+}
+
 void
 t9p_free_dirs(t9p_dir_info_t* head)
 {
@@ -2096,7 +2114,12 @@ t9p_free_dirs(t9p_dir_info_t* head)
 int
 t9p_is_dir(t9p_handle_t h)
 {
-  return (t9p_get_qid(h).type == T9P_QID_DIR) || (t9p_get_qid(h).type == T9P_QID_MOUNT);
+  qid_t q = t9p_get_qid(h);
+  if ((q.type & T9P_QID_DIR) == T9P_QID_DIR)
+    return 1;
+  if ((q.type & T9P_QID_MOUNT) == T9P_QID_MOUNT)
+    return 1;
+  return 0;
 }
 
 void
@@ -2313,14 +2336,16 @@ _t9p_thread_proc(void* param)
           struct TRcommon com;
           decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
           printf(
-            "send: (header) type=%d, len=%u, tag=%d\n", com.type, (unsigned)com.size, com.tag
+            "send: (header) type=%d(%s), len=%u, tag=%d\n",
+            com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
           );
         }
         else if (node->tr.data) {
           struct TRcommon com;
           decode_TRcommon(&com, node->tr.data, node->tr.size);
           printf(
-            "send: type=%d, len=%u, tag=%d\n", com.type, (unsigned)com.size, com.tag
+            "send: type=%d(%s), len=%u, tag=%d\n",
+            com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
           );
         }
       }
@@ -2371,7 +2396,8 @@ _t9p_thread_proc(void* param)
       }
 
       if (c->opts.log_level <= T9P_LOG_TRACE) {
-        printf("recv: type=%d, tag=%d, size=%u\n", com.type, com.tag, (unsigned)com.size);
+        printf("recv: type=%d(%s), tag=%d, size=%u\n",
+          com.type, t9p_type_string(com.type), com.tag, (unsigned)com.size);
       }
 
       atomic_add32(&c->stats.total_bytes_recv, com.size);
