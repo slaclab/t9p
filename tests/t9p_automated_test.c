@@ -29,12 +29,12 @@
 static void
 result_banner(int f)
 {
-  printf("*******************************************\n");
+  printf("*********************************************\n");
   if (f != 0)
     printf(" TEST FAILURE DETECTED!!!!\n");
   else
     printf(" TESTS PASSED\n");
-  printf("*******************************************\n");
+  printf("*********************************************\n");
 }
 
 static int
@@ -95,12 +95,12 @@ run_hog(void* param)
   return 0;
 }
 
-void
+int
 t9p_run_trunc_test(const char* path)
 {
   if (!path) {
     printf("USAGE: t9p_run_trunc_test PATH\n");
-    return;
+    return -1;
   }
 
   printf("===============> TRUNC TEST <===============\n");
@@ -156,13 +156,14 @@ t9p_run_trunc_test(const char* path)
   close(fd);
 
   result_banner(fails);
+  return fails;
 }
 
 #ifdef HAVE_CEXP
 CEXP_HELP_TAB_BEGIN(t9p_run_trunc_test)
 	HELP(
 "Run O_TRUNC/ftruncate/truncate unit test\n"
-	void, t9p_run_trunc_test,  (const char* path)
+	int, t9p_run_trunc_test,  (const char* path)
 	),
 CEXP_HELP_TAB_END
 #endif
@@ -170,12 +171,12 @@ CEXP_HELP_TAB_END
 
 #define BLOCK_SIZE 16384
 
-void
+int
 t9p_run_write_perf_test(const char* path)
 {
   if (!path) {
     printf("USAGE: t9p_run_write_perf_test PATH\n");
-    return;
+    return -1;
   }
 
   printf("===============> WRITE PERF TEST <===============\n");
@@ -185,7 +186,7 @@ t9p_run_write_perf_test(const char* path)
   if (fd < 0) {
     perror("open failed");
     result_banner(1);
-    return;
+    return -1;
   }
 
   char* buf = malloc(BLOCK_SIZE);
@@ -221,23 +222,24 @@ t9p_run_write_perf_test(const char* path)
   free(buf);
   close(fd);
   result_banner(fails);
+  return fails;
 }
 
 #ifdef HAVE_CEXP
 CEXP_HELP_TAB_BEGIN(t9p_run_write_perf_test)
 	HELP(
 "Run write performance unit test\n"
-	void, t9p_run_write_perf_test,  (const char* path)
+	int, t9p_run_write_perf_test,  (const char* path)
 	),
 CEXP_HELP_TAB_END
 #endif
 
-void
+int
 t9p_run_create_test(const char* path)
 {
   if (!path) {
     printf("USAGE: %s PATH\n", __FUNCTION__);
-    return;
+    return -1;
   }
 
   printf("===============> CREATE TEST <===============\n");
@@ -277,23 +279,24 @@ t9p_run_create_test(const char* path)
   }
 
   result_banner(fails);
+  return fails;
 }
 
 #ifdef HAVE_CEXP
 CEXP_HELP_TAB_BEGIN(t9p_run_create_test)
 	HELP(
 "Run file create/unlink test\n"
-	void, t9p_run_create_test,  (const char* path)
+	int, t9p_run_create_test,  (const char* path)
 	),
 CEXP_HELP_TAB_END
 #endif
 
-void
+int
 t9p_run_rename_test(const char* path)
 {
   if (!path) {
     printf("USAGE: %s PATH\n", __FUNCTION__);
-    return;
+    return -1;
   }
   printf("===============> RENAME TEST <===============\n");
   printf("path=%s\n", path);
@@ -339,17 +342,17 @@ t9p_run_rename_test(const char* path)
 CEXP_HELP_TAB_BEGIN(t9p_run_rename_test)
 	HELP(
 "Run file rename/unlink test\n"
-	void, t9p_run_rename_test,  (const char* path)
+	int, t9p_run_rename_test,  (const char* path)
 	),
 CEXP_HELP_TAB_END
 #endif
 
-void
+int
 t9p_run_chmod_chown_test(const char* path)
 {
   if (!path) {
     printf("USAGE: %s PATH\n", path);
-    return;
+    return -1;
   }
 
   printf("===============> CHMOD/CHOWN TEST <===============\n");
@@ -362,7 +365,7 @@ t9p_run_chmod_chown_test(const char* path)
     if (creat(path, 0644) < 0) {
       perror("*** creat failed");
       result_banner(1);
-      return;
+      return -1;
     }
   }
 
@@ -422,27 +425,120 @@ t9p_run_chmod_chown_test(const char* path)
 #endif
 
   result_banner(fails);
+  return fails;
 }
 
 #ifdef HAVE_CEXP
 CEXP_HELP_TAB_BEGIN(t9p_run_chmod_chown_test)
 	HELP(
 "Run file own/chmod test\n"
-	void, t9p_run_chmod_chown_test,  (const char* path)
+	int, t9p_run_chmod_chown_test,  (const char* path)
 	),
 CEXP_HELP_TAB_END
 #endif
 
 int
+t9p_run_dir_test(const char* path)
+{
+  if (!path) {
+    printf("USAGE: %s PATH\n", __FUNCTION__);
+    return -1;
+  }
+
+  int fails = 0;
+
+  printf("===============> DIR TEST <===============\n");
+
+  char dirPath[PATH_MAX];
+  snprintf(dirPath, sizeof(dirPath), "%s/mydir", path);
+
+  char filePath[PATH_MAX];
+  snprintf(filePath, sizeof(filePath), "%s/myfile.txt", dirPath);
+
+  if (file_exists(filePath))
+    if (unlink(filePath) < 0)
+      perror("*** unlink failed");
+
+  /** Remove pre-existing dir or file */
+  struct stat st;
+  if (stat(dirPath, &st) >= 0) {
+    if (S_ISDIR(st.st_mode)) {
+      if (rmdir(dirPath) < 0) {
+        perror("*** rmdir failed");
+        ++fails;
+      }
+    }
+    else {
+      if (unlink(dirPath) < 0) {
+        perror("*** unlink failed");
+        ++fails;
+      }
+    }
+  }
+
+  if (mkdir(dirPath, 0777) < 0) {
+    perror("*** mkdir failed");
+    ++fails;
+  }
+
+  /** Create in the subdir */
+  if (creat(filePath, 0644) < 0) {
+    perror("*** creat failed");
+    ++fails;
+  }
+
+  /** Attempt to actually do I/O */
+  int fd = open(filePath, O_TRUNC | O_RDWR);
+  if (fd < 0) {
+    perror("*** open failed");
+    ++fails;
+  }
+  else {
+    char tow[] = "hello world";
+    if (write(fd, tow, sizeof(tow)-1) < 0) {
+      perror("*** write failed");
+      ++fails;
+    }
+
+    lseek(fd, 0, SEEK_SET);
+
+    char newb[128] = {0};
+    ssize_t l;
+    if ((l=read(fd, newb, sizeof(newb))) < 0) {
+      perror("*** read failed");
+      ++fails;
+    }
+
+    if (strcmp(newb, tow)) {
+      printf("*** data mismatch!\n");
+      ++fails;
+    }
+
+    close(fd);
+  }
+
+  result_banner(fails);
+  return fails;
+}
+
+int
 run_auto_test(int iters)
 {
-  t9p_run_trunc_test("/test/myfile.txt");
+  int ok = 1;
+  if (t9p_run_trunc_test("/test/myfile.txt") != 0)
+    ok = 0;
 
-  //t9p_run_write_perf_test("/test/myfile.txt");
+  if (t9p_run_write_perf_test("/test/myfile.txt") != 0)
+    ok = 0;
 
-  t9p_run_chmod_chown_test("/test/myfile.txt");
+  if (t9p_run_chmod_chown_test("/test/myfile.txt") != 0)
+    ok = 0;
 
-  t9p_run_rename_test("/test/myfile.txt");
+  if (t9p_run_rename_test("/test/myfile.txt") != 0)
+    ok = 0;
 
-  return 0;
+  if (t9p_run_dir_test("/test") != 0)
+    ok = 0;
+
+  return ok ? 0 : -1;
 }

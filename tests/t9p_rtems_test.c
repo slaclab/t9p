@@ -54,43 +54,43 @@ extern int run_auto_test(int);
 int
 rtems_ne2kpci_driver_attach (struct rtems_bsdnet_ifconfig *config, int attach)
 {
-    uint8_t  irq;
-    uint32_t bar0;
-    int B, D, F, ret;
-    printk("Probing for NE2000 on PCI (aka. Realtek 8029)\n");
+  uint8_t  irq;
+  uint32_t bar0;
+  int B, D, F, ret;
+  printk("Probing for NE2000 on PCI (aka. Realtek 8029)\n");
 
-    if(pci_find_device(PCI_VENDOR_ID_REALTEK, PCI_DEVICE_ID_REALTEK_8029, 0, &B, &D, &F))
-    {
-        printk("Not found\n");
-        return 0;
-    }
+  if(pci_find_device(PCI_VENDOR_ID_REALTEK, PCI_DEVICE_ID_REALTEK_8029, 0, &B, &D, &F))
+  {
+      printk("Not found\n");
+      return 0;
+  }
 
-    printk("Found %d:%d.%d\n", B, D, F);
+  printk("Found %d:%d.%d\n", B, D, F);
 
-    ret = pci_read_config_dword(B, D, F, PCI_BASE_ADDRESS_0, &bar0);
-    ret|= pci_read_config_byte(B, D, F, PCI_INTERRUPT_LINE, &irq);
+  ret = pci_read_config_dword(B, D, F, PCI_BASE_ADDRESS_0, &bar0);
+  ret|= pci_read_config_byte(B, D, F, PCI_INTERRUPT_LINE, &irq);
 
-    if(ret || (bar0&PCI_BASE_ADDRESS_SPACE)!=PCI_BASE_ADDRESS_SPACE_IO)
-    {
-        printk("Failed reading card config\n");
-        return 0;
-    }
+  if(ret || (bar0&PCI_BASE_ADDRESS_SPACE)!=PCI_BASE_ADDRESS_SPACE_IO)
+  {
+      printk("Failed reading card config\n");
+      return 0;
+  }
 
-    config->irno = irq;
-    config->port = bar0&PCI_BASE_ADDRESS_IO_MASK;
+  config->irno = irq;
+  config->port = bar0&PCI_BASE_ADDRESS_IO_MASK;
 
-    printk("Using port=0x%x irq=%u\n", (unsigned)config->port, config->irno);
+  printk("Using port=0x%x irq=%u\n", (unsigned)config->port, config->irno);
 
-    return rtems_ne_driver_attach(config, attach);
+  return rtems_ne_driver_attach(config, attach);
 }
 
 extern int rtems_bsdnet_loopattach(struct rtems_bsdnet_ifconfig*, int);
 static struct rtems_bsdnet_ifconfig loopback_config = {
-    "lo0",
-    rtems_bsdnet_loopattach,
-    NULL,
-    "127.0.0.1",
-    "255.0.0.0",
+  "lo0",
+  rtems_bsdnet_loopattach,
+  NULL,
+  "127.0.0.1",
+  "255.0.0.0",
 };
 
 static struct rtems_bsdnet_ifconfig ne2k_driver_config = {

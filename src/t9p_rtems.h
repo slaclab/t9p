@@ -26,11 +26,13 @@ typedef enum t9p_rtems_trans
 
 typedef enum t9p_rtems_ioctl
 {
-  T9P_RTEMS_IOCTL_GET_LOG_LEVEL = 0,
-  T9P_RTEMS_IOCTL_SET_LOG_LEVEL,
-  T9P_RTEMS_IOCTL_GET_IOUNIT,
-  T9P_RTEMS_IOCTL_GET_FID,
-  T9P_RTEMS_IOCTL_GET_FID_COUNT, 
+  T9P_RTEMS_IOCTL_GET_LOG_LEVEL = 0,/** int */
+  T9P_RTEMS_IOCTL_SET_LOG_LEVEL,    /** int */
+  T9P_RTEMS_IOCTL_GET_IOUNIT,       /** uint32_t */
+  T9P_RTEMS_IOCTL_GET_FID,          /** uint32_t */
+  T9P_RTEMS_IOCTL_GET_FID_COUNT,    /** int */
+  T9P_RTEMS_IOCTL_GET_CONTEXT,      /** void* */
+  T9P_RTEMS_IOCTL_GET_QID,          /** qid_t */
 } t9p_rtems_ioctl_t;
 
 typedef struct t9p_rtems_mount_opts

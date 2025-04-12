@@ -22,6 +22,7 @@
 #include <rtems.h>
 #include <rtems/libio.h>
 #include <rtems/libio_.h>
+#include <rtems/seterr.h>
 #include <stdlib.h>
 #include <inttypes.h>
 #include <fcntl.h>
@@ -203,6 +204,11 @@ static int t9p_rtems_fs_node_type(
   rtems_filesystem_location_info_t *pathloc
 );
 
+static int t9p_rtems_fs_unlink(
+  rtems_filesystem_location_info_t *parentloc,
+  rtems_filesystem_location_info_t *pathloc
+);
+
 #endif // RTEMS_MAJOR >= 6
 
 static int t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry);
@@ -221,31 +227,32 @@ static int t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t* loc);
 static int t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t* loc, mode_t mode);
 
 static const struct _rtems_filesystem_operations_table t9p_fs_ops = {
-  .link_h = t9p_rtems_fs_link,                       /*rtems_filesystem_link_t*/
-  .mknod_h = t9p_rtems_fs_mknod,                     /*rtems_filesystem_mknod_t*/
-  .chown_h = t9p_rtems_fs_chown,                     /*rtems_filesystem_chown_t*/
-  .freenod_h = t9p_rtems_fs_freenode,                /*rtems_filesystem_freenode_t*/
-  .mount_h = t9p_rtems_fs_mount,                     /*rtems_filesystem_mount_t*/
-  .unmount_h = t9p_rtems_fs_unmount,                 /*rtems_filesystem_unmount_t*/
-  .fsunmount_me_h = t9p_rtems_fs_unmountme,          /*rtems_filesystem_fsunmount_me_t*/
-  .symlink_h = t9p_rtems_fs_symlink,                 /*rtems_filesystem_symlink_t*/
-  .readlink_h = t9p_rtems_fs_readlink,               /*rtems_filesystem_readlink_t*/
-  .rename_h = t9p_rtems_fs_rename,                   /*rtems_filesystem_rename_t*/
-  .statvfs_h = NULL,                                 /*rtems_filesystem_statvfs_t*/
+  .link_h = t9p_rtems_fs_link,
+  .mknod_h = t9p_rtems_fs_mknod,
+  .chown_h = t9p_rtems_fs_chown,
+  .freenod_h = t9p_rtems_fs_freenode,
+  .mount_h = t9p_rtems_fs_mount,
+  .unmount_h = t9p_rtems_fs_unmount,
+  .fsunmount_me_h = t9p_rtems_fs_unmountme,
+  .symlink_h = t9p_rtems_fs_symlink,
+  .readlink_h = t9p_rtems_fs_readlink,
+  .rename_h = t9p_rtems_fs_rename,
+  .statvfs_h = NULL,
 #if __RTEMS_MAJOR__ >= 6
-  .are_nodes_equal_h = t9p_rtems_fs_are_nodes_equal, /*rtems_filesystem_are_nodes_equal_t*/
-  .fchmod_h = t9p_rtems_fs_fchmod,                   /*rtems_filesystem_fchmod_t*/
-  .clonenod_h = t9p_rtems_fs_clonenode,              /*rtems_filesystem_clonenode_t*/
-  .rmnod_h = t9p_rtems_fs_rmnod,                     /*rtems_filesystem_rmnod_t*/
-  .lock_h = t9p_rtems_fs_lock,                       /*rtems_filesystem_mt_entry_lock_t*/
-  .unlock_h = t9p_rtems_fs_unlock,                   /*rtems_filesystem_mt_entry_unlock_t*/
-  .eval_path_h = t9p_rtems_fs_evalpath,              /*rtems_filesystem_eval_path_t*/
-  .utimens_h = t9p_rtems_fs_utimens,                /*rtems_filesystem_utimens_t*/
+  .are_nodes_equal_h = t9p_rtems_fs_are_nodes_equal
+  .fchmod_h = t9p_rtems_fs_fchmod,
+  .clonenod_h = t9p_rtems_fs_clonenode,
+  .rmnod_h = t9p_rtems_fs_rmnod,
+  .lock_h = t9p_rtems_fs_lock,
+  .unlock_h = t9p_rtems_fs_unlock,
+  .eval_path_h = t9p_rtems_fs_evalpath,
+  .utimens_h = t9p_rtems_fs_utimens,
 #else
-  .evalpath_h = t9p_rtems_fs_evalpath,              /*rtems_filesystem_eval_path_t*/
+  .evalpath_h = t9p_rtems_fs_evalpath,
   .evalformake_h = t9p_rtems_fs_eval_for_make,
   .utime_h = t9p_rtems_fs_utimens,
   .node_type_h = t9p_rtems_fs_node_type,
+  .unlink_h = t9p_rtems_fs_unlink,
 #endif
 };
 
@@ -309,16 +316,16 @@ static int t9p_rtems_file_fsync(rtems_libio_t* iop);
 static int t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer);
 
 static const rtems_filesystem_file_handlers_r t9p_file_ops = {
-  .open_h = t9p_rtems_file_open,           /*rtems_filesystem_open_t */
-  .close_h = t9p_rtems_file_close,         /*rtems_filesystem_close_t */
-  .read_h = t9p_rtems_file_read,           /*rtems_filesystem_read_t */
-  .write_h = t9p_rtems_file_write,         /*rtems_filesystem_write_t */
-  .ioctl_h = t9p_rtems_file_ioctl,         /*rtems_filesystem_ioctl_t */
-  .lseek_h = t9p_rtems_file_lseek,         /*rtems_filesystem_lseek_t */
-  .fstat_h = t9p_rtems_file_fstat,         /*rtems_filesystem_fstat_t */
-  .ftruncate_h = t9p_rtems_file_ftruncate, /*rtems_filesystem_ftruncate_t */
-  .fsync_h = t9p_rtems_file_fsync,         /*rtems_filesystem_fsync_t */
-  .fdatasync_h = t9p_rtems_file_fsync,     /*rtems_filesystem_fdatasync_t */
+  .open_h = t9p_rtems_file_open,
+  .close_h = t9p_rtems_file_close,
+  .read_h = t9p_rtems_file_read,
+  .write_h = t9p_rtems_file_write,
+  .ioctl_h = t9p_rtems_file_ioctl,
+  .lseek_h = t9p_rtems_file_lseek,
+  .fstat_h = t9p_rtems_file_fstat,
+  .ftruncate_h = t9p_rtems_file_ftruncate,
+  .fsync_h = t9p_rtems_file_fsync,
+  .fdatasync_h = t9p_rtems_file_fsync,
 #if __RTEMS_MAJOR__ >= 6
   .fcntl_h = rtems_filesystem_default_fcntl,
   .poll_h = rtems_filesystem_default_poll,
@@ -361,6 +368,7 @@ static const rtems_filesystem_file_handlers_r t9p_dir_ops = {
   .writev_h = rtems_filesystem_default_writev,
   .mmap_h = rtems_filesystem_default_mmap,
 #else
+  .rmnod_h = t9p_rtems_file_rmnod,    /** Can share the same logic as file rm */
   /** Default the rest to NULL */
 #endif
 };
@@ -495,11 +503,11 @@ min(int x, int y)
 }
 
 /**************************************************************************************
- * FS ops implementation
+ * Utilities
  **************************************************************************************/
 
 static t9p_rtems_node_t*
-t9p_rtems_fs_get_node(const rtems_filesystem_location_info_t* loc)
+t9p_rtems_loc_get_node(const rtems_filesystem_location_info_t* loc)
 {
   return loc->node_access;
 }
@@ -516,8 +524,20 @@ t9p_rtems_iop_get_ctx(const rtems_libio_t* iop)
   return ((t9p_rtems_fs_info_t*)iop->pathinfo.mt_entry->fs_info)->c;
 }
 
+t9p_rtems_node_t*
+t9p_rtems_loc_get_root_node(const rtems_filesystem_location_info_t* loc)
+{
+  return loc->mt_entry->mt_fs_root.node_access;
+}
+
+t9p_rtems_fs_info_t*
+t9p_rtems_loc_get_fsinfo(const rtems_filesystem_location_info_t* loc)
+{
+  return loc->mt_entry->fs_info;
+}
+
 static t9p_rtems_node_t*
-t9p_rtems_iop_clone_node(const t9p_rtems_node_t* old, int dupFid)
+t9p_rtems_clone_node(const t9p_rtems_node_t* old, int dupFid)
 {
   t9p_rtems_node_t* n = calloc(sizeof(t9p_rtems_node_t), 1);
   *n = *old;
@@ -533,6 +553,26 @@ t9p_rtems_iop_clone_node(const t9p_rtems_node_t* old, int dupFid)
 
   return n;
 }
+
+static void
+copyNStr(char* dst, size_t dstSize, const char* src, size_t num) {
+  size_t tocopy = min(dstSize-1, num);
+  strncpy(dst, src, tocopy);
+  dst[tocopy] = 0;
+}
+
+static void
+copyUntil(char* dst, size_t dstsize, const char* src, char until) {
+  size_t m  = 0;
+  while ((*src) != until && *src && m < dstsize) {
+    *(dst++) = *(src);
+    src++, m++;
+  }
+}
+
+/**************************************************************************************
+ * FS ops implementation
+ **************************************************************************************/
 
 static int
 t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void* data)
@@ -775,7 +815,10 @@ t9p_rtems_fs_eval_link(
   int flags
 )
 {
+  /** TODO: Implement me! */
   TRACE("pathloc=%p, flags=%d", pathloc, flags);
+  errno = ENOTSUP;
+  return -1;
 }
 
 /**
@@ -784,19 +827,19 @@ t9p_rtems_fs_eval_link(
  */
 
 /**
- * Evalpath notes
- * - When entering eval path, clone the node
+ * rtems_filesystem_eval_path
+ * Transform a path defined by pathname/pathnamelen into a final location.
+ * Pathloc should be modified to point at this location.
  */
-
 static int
 t9p_rtems_fs_evalpath(
-  const char *pathname,
+  const char *inpathname,
   size_t pathnamelen,
   int flags,
   rtems_filesystem_location_info_t *pathloc
 )
 {
-  TRACE("pathname=%s,pathnamelen=%zu,flags=%d,pathloc=%p", pathname, pathnamelen,
+  TRACE("pathname=%s,pathnamelen=%zu,flags=%d,pathloc=%p", inpathname, pathnamelen,
     flags, pathloc);
 
   if (!rtems_libio_is_valid_perms(flags)) {
@@ -805,34 +848,33 @@ t9p_rtems_fs_evalpath(
     return -1;
   }
 
-  t9p_rtems_node_t* on = t9p_rtems_fs_get_node(pathloc);
-  if (on && !t9p_is_dir(on->h)) {
-    return -1;
-  }
+  /** inpathname is actually a bounded string... Let's make a NULL terminated copy
+    * of it to make things easier */
+  char pathbuf[PATH_MAX];
+  pathbuf[0] = 0;
+  copyNStr(pathbuf, sizeof(pathbuf), inpathname, pathnamelen);
+  const char* pathname = pathbuf;
 
-  t9p_rtems_node_t* p = t9p_rtems_iop_clone_node(pathloc->node_access, 0);
-  pathloc->node_access = p;
+  t9p_rtems_node_t* realnode = t9p_rtems_loc_get_node(pathloc);
 
-  /** Strip mount point from the start of the path... */
-  const size_t tl = strlen(pathloc->mt_entry->target);
-  if (!strncmp(pathloc->mt_entry->target, pathname, tl)) {
-    pathname += tl;
-    if (*pathname == '/')
-      pathname++;
-  }
-
-  t9p_handle_t nh = t9p_open_handle(p->c, p->h, pathname);
+  /** Walk downwards, starting with the parent node */
+  t9p_handle_t nh = t9p_open_handle(realnode->c, realnode->h, pathname);
   if (nh == NULL) {
     TRACE("E: ENOENT");
     errno = ENOENT;
     return -1;
   }
 
+  /** Make a new node for pathloc, to replace the parent's */
+  t9p_rtems_node_t* p = t9p_rtems_clone_node(pathloc->node_access, 0);
   p->h = nh;
   p->size = -1;
+  pathloc->node_access = p;
+
+  /** NOTE: Do not need to free the old node_access */
 
   pathloc->ops = &t9p_fs_ops;
-  if (t9p_is_dir(p->h)) {
+  if (t9p_is_dir(nh)) {
     pathloc->handlers = &t9p_dir_ops;
     TRACE("handlers=dir_ops");
   }
@@ -859,7 +901,7 @@ t9p_rtems_fs_eval_for_make(
 )
 {
   TRACE("path=%s, pathloc=%p, name=%p", path, pathloc, name);
-  int r;
+
   /** Determine the name of the file */
   *name = strrchr(path, '/');
   if (!*name)
@@ -867,73 +909,61 @@ t9p_rtems_fs_eval_for_make(
   else
     (*name)++; /** Skip past the '/' */
 
-  /** Open handle to the parent of the file */
-
-  if (*name == path) {
-    /** Must be in the root dir */
-    return 0;
-  }
-
-  t9p_rtems_node_t* n = pathloc->node_access;
+  t9p_rtems_node_t* node = t9p_rtems_loc_get_node(pathloc);
+  const t9p_rtems_node_t* rootn = t9p_rtems_loc_get_root_node(pathloc);
 
   /** Determine parent dir */
   char parentPath[PATH_MAX];
   t9p_get_parent_dir(path, parentPath, sizeof(parentPath));
 
+  printf("parentPath=%s\n", parentPath);
+
   /** Open handle to the parent dir */
-  t9p_handle_t nh = t9p_open_handle(n->c, n->h, path);
+  t9p_handle_t nh = t9p_open_handle(rootn->c, rootn->h, parentPath);
   if (nh == NULL) {
     return -1;
   }
 
-  n->h = nh;
-  n->size = -1;
+  /** Allocate new node */
+  t9p_rtems_node_t* newnode = t9p_rtems_clone_node(node, 0);
+  newnode->h = nh;
+  newnode->size = -1;
 
-#if 0
-
-  t9p_rtems_node_t* nn = t9p_rtems_iop_clone_node(pathloc->node_access, 0);
-  if (!t9p_is_dir(nn->h)) {
-    printf("omg not a dir\n");
-    return -1;
-  }
-
-  pathloc->node_access = nn;
-  nn->size = -1;
-  nn->h = 0;
-
-  #if 0
-  t9p_handle_t h = t9p_open_handle(nn->c, nn->h, path);
-  if (h == NULL) {
-    /** Create a new file if one does not exist (plus inherit gid) */
-    if ((r = t9p_create(nn->c, &h, nn->h, path, 0644, T9P_NOGID, 0)) < 0) {
-      errno = -r;
-      free(nn);
-      return -1;
-    }
-  }
-
-  nn->h = h;
-  nn->size = -1;
-  #endif
-
-#endif
-
-  /** Must always be a dir */
-  pathloc->handlers = &t9p_dir_ops;
   pathloc->ops = &t9p_fs_ops;
+  pathloc->node_access = newnode;
 
   return 0;
 }
 
+/**
+ * Remove the file pointed to by pathloc. parentloc is the parent's location.
+ */
 static int
 t9p_rtems_file_rmnod(
-  rtems_filesystem_location_info_t *parent_loc,
+  rtems_filesystem_location_info_t *parentloc,
   rtems_filesystem_location_info_t *pathloc
 )
 {
-  TRACE("parentloc=%p,pathloc=%p", parent_loc, pathloc);
-  /** TODO: Im lazy */
-  return -1;
+  TRACE("parentloc=%p,pathloc=%p", parentloc, pathloc);
+
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(pathloc);
+  if (!n) {
+    errno = EBADF;
+    return -1;
+  }
+
+  /** Remove will always clunk the fid. This is not ideal, as the higher level fs code will
+    * explicitly call freenode on the node after this. For now I think it's safe to clunk
+    * and just clear out the n->h. In freenode, we'll check for validity first.
+    * TODO: Re-evaluate me at some point!
+    */
+  int r = t9p_remove(n->c, n->h);
+  n->h = NULL;
+  if (r < 0) {
+    errno = -r;
+    return -1;
+  }
+  return 0;
 }
 
 static int
@@ -943,7 +973,7 @@ t9p_rtems_file_fchmod(
 )
 {
   TRACE("pathloc=%p,mode=%u", pathloc, (unsigned)mode);
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(pathloc);
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(pathloc);
   int r;
   if ((r = t9p_chmod(n->c, n->h, mode)) < 0) {
     errno = -r;
@@ -956,6 +986,7 @@ static int
 t9p_rtems_file_fpathconf(rtems_libio_t *pathloc, int name)
 {
   TRACE("pathloc=%p,name=%d", pathloc, name);
+  errno = ENOTSUP;
   return -1;
 }
 
@@ -963,6 +994,7 @@ static int
 t9p_rtems_file_fcntl(int p, rtems_libio_t* iop)
 {
   TRACE("p=%d,iop=%p", p, iop);
+  errno = ENOTSUP;
   return -1;
 }
 
@@ -970,13 +1002,39 @@ static int
 t9p_rtems_fs_node_type(rtems_filesystem_location_info_t *pathloc)
 {
   TRACE("pathloc=%p", pathloc);
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(pathloc);
+  const t9p_rtems_node_t* n = t9p_rtems_loc_get_node(pathloc);
   if (t9p_is_dir(n->h)) {
     return RTEMS_FILESYSTEM_DIRECTORY;
   }
   else {
-    return 0; /** ??? this means regular??? */
+    return RTEMS_FILESYSTEM_MEMORY_FILE; /** TODO: This means regular...right? */
   }
+}
+
+static int 
+t9p_rtems_fs_unlink(
+  rtems_filesystem_location_info_t *parentloc,
+  rtems_filesystem_location_info_t *pathloc
+)
+{
+  TRACE("parentloc=%p,pathloc=%p", parentloc, pathloc);
+
+  t9p_rtems_node_t* node = t9p_rtems_loc_get_node(pathloc);
+  if (!node)
+    rtems_set_errno_and_return_minus_one(EIO);
+
+  int r;
+  if ((r = t9p_remove(node->c, node->h)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
+
+  /** Same situation as noted in rmnod. Tremove always clunks, so we need
+    * to null out this handle. An alternative would be to duplicate the fid,
+    * so we can keep a copy of it around for freenode. However, I think it's
+    * generally a bad idea to have a use-after-unlink situation anyway.
+    * This should be OK.
+    */
+  node->h = NULL;
+  return 0;
 }
 
 #endif // __RTEMS_MAJOR__ < 6
@@ -985,6 +1043,7 @@ static int
 t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry)
 {
   TRACE("mt_entry=%p", mt_entry);
+  errno = ENOTSUP;
   return -1;
 }
 
@@ -992,6 +1051,7 @@ static int
 t9p_rtems_fs_unmount(rtems_filesystem_mount_table_entry_t* mt_entry)
 {
   TRACE("mt_entry=%p", mt_entry);
+  errno = ENOTSUP;
   return -1;
 }
 
@@ -1014,12 +1074,11 @@ t9p_rtems_fs_symlink(
 {
   TRACE("parentloc=%p, name=%s, target=%s", parentloc, name, target);
   t9p_rtems_fs_info_t* fi = parentloc->mt_entry->fs_info;
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(parentloc);
-  int r = t9p_symlink(fi->c, n->h, target, name, T9P_NOGID, NULL);
-  if (r < 0) {
-    errno = -r;
-    return -1;
-  }
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(parentloc);
+
+  int r;
+  if ((r = t9p_symlink(fi->c, n->h, target, name, T9P_NOGID, NULL)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
 
@@ -1042,7 +1101,15 @@ t9p_rtems_fs_rmnod(
 )
 {
   TRACE("parentloc=%p, loc=%p", parentloc, loc);
-  return -1;
+
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
+  if (!n)
+    rtems_set_errno_and_return_minus_one(EBADF);
+
+  int r;
+  if ((r = t9p_remove(n->c, n->h)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
+  return 0;
 }
 
 #if __RTEMS_MAJOR__ >= 6
@@ -1064,14 +1131,24 @@ static int t9p_rtems_fs_mknod(
 #endif
 {
   TRACE("parentloc=%p, name=%s, mode=%u, dev=%llu", parentloc, name, (unsigned)mode, dev);
-  t9p_rtems_fs_info_t* fi = parentloc->mt_entry->fs_info;
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(parentloc);
-  /** This operation will immediately clunk the new fid */
-  int r = t9p_create(fi->c, NULL, n->h, name, mode, T9P_NOGID, 0);
-  if (r < 0) {
-    errno = -r;
-    return -1;
+  t9p_rtems_fs_info_t* fi = t9p_rtems_loc_get_fsinfo(parentloc);
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(parentloc);
+
+  int r;
+  if (S_ISREG(mode)) {
+    /** This operation will immediately clunk the new fid */
+    if ((r = t9p_create(fi->c, NULL, n->h, name, mode, T9P_NOGID, 0)) < 0)
+      rtems_set_errno_and_return_minus_one(-r);
   }
+  /** Use mkdir for dirs. No fid is allocated for mkdir */
+  else if (S_ISDIR(mode)) {
+    if ((r = t9p_mkdir(n->c, n->h, name, mode, T9P_NOGID, NULL)) < 0)
+      rtems_set_errno_and_return_minus_one(-r);
+  }
+  /** Other file types not supported via mknod */
+  else
+    rtems_set_errno_and_return_minus_one(ENOTSUP);
+
   return 0;
 }
 
@@ -1096,9 +1173,17 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
 #endif
 {
   TRACE("loc=%p", loc);
-  t9p_rtems_fs_info_t* fi = loc->mt_entry->fs_info;
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
-  t9p_close_handle(fi->c, n->h);
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
+
+  if (t9p_rtems_loc_get_root_node(loc) == n) {
+    printf("Tried to free root node??\n");
+    return -1;
+  }
+
+  /** Funky; see comment in t9p_rtems_fs_rmnod. We may have clunked the fid elsewhere */
+  if (n->h)
+    t9p_close_handle(n->c, n->h);
+
   n->h = NULL;
   n->c = NULL;
   free(n);
@@ -1109,22 +1194,25 @@ t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t* loc)
 {
   TRACE("loc=%p", loc);
 
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
+  const t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
 
   /** Duplicate the existing node to avoid double frees.
-    * FIXME: We could use ref counting here instead!! */
-  t9p_rtems_node_t* nn = calloc(sizeof(t9p_rtems_node_t), 1);
-  *nn = *n;
-  loc->node_access = nn;
+    * TODO: Ref counting? */
+  t9p_rtems_node_t* newnode = calloc(sizeof(t9p_rtems_node_t), 1);
+  *newnode = *n;
 
-  t9p_handle_t nh;
+  t9p_handle_t newhandle;
   int r;
-  if ((r = t9p_dup(n->c, nn->h, &nh)) < 0) {
+  if ((r = t9p_dup(n->c, n->h, &newhandle)) < 0) {
     errno = -r;
+    free(newnode);
     return -1;
   }
-  nn->h = nh;
-  nn->size = -1;
+  newnode->h = newhandle;
+  newnode->size = -1;
+
+  loc->node_access = newnode;
+
   return 0;
 }
 
@@ -1145,7 +1233,14 @@ static int t9p_rtems_fs_link(
 #endif
 {
   TRACE("parentloc=%p, targetloc=%p, name=%s", parentloc, targetloc, name);
-  return -1;
+
+  t9p_rtems_node_t* tgtnode = t9p_rtems_loc_get_node(targetloc);
+  t9p_rtems_node_t* parnode = t9p_rtems_loc_get_node(parentloc);
+
+  int r;
+  if ((r = t9p_link(tgtnode->c, parnode->h, tgtnode->h, name)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
+  return 0;
 }
 
 #if __RTEMS_MAJOR__ >= 6
@@ -1166,13 +1261,11 @@ t9p_rtems_fs_readlink(
 {
   TRACE("loc=%p, buf=%p, bufsz=%zu", loc, buf, bufsize);
   t9p_rtems_fs_info_t* fi = loc->mt_entry->fs_info;
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
 
-  int r = t9p_readlink(fi->c, n->h, buf, bufsize);
-  if (r < 0) {
-    errno = -r;
-    return -1;
-  }
+  int r;
+  if ((r = t9p_readlink(fi->c, n->h, buf, bufsize)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
 
@@ -1196,7 +1289,18 @@ t9p_rtems_fs_rename(
 {
   TRACE("oldparentloc=%p, oldloc=%p, newparentloc=%p, name=%s", oldparentloc,
     oldloc, newparentloc, name);
-  return -1;
+
+  const t9p_rtems_node_t* oldparnode = t9p_rtems_loc_get_node(oldparentloc);
+  const t9p_rtems_node_t* oldnode = t9p_rtems_loc_get_node(oldloc);
+  const t9p_rtems_node_t* newparnode = t9p_rtems_loc_get_node(newparentloc);
+
+  if (!oldparnode || !oldnode || !newparnode)
+    rtems_set_errno_and_return_minus_one(EIO);
+
+  int r;
+  if ((r = t9p_rename(oldnode->c, newparnode->h, oldnode->h, name)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
+  return 0;
 }
 
 #if __RTEMS_MAJOR__ >= 6
@@ -1208,12 +1312,11 @@ t9p_rtems_fs_chown(rtems_filesystem_location_info_t* loc, uid_t owner, gid_t gro
 #endif
 {
   TRACE("loc=%p, owner=%d, group=%d", loc, owner, group);
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
-  int r = t9p_chown(n->c, n->h, owner, group);
-  if (r < 0) {
-    errno = -r;
-    return -1;
-  }
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
+
+  int r;
+  if ((r = t9p_chown(n->c, n->h, owner, group)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
 
@@ -1221,12 +1324,11 @@ static int
 t9p_rtems_fs_fchmod(const rtems_filesystem_location_info_t* loc, mode_t mode)
 {
   TRACE("loc=%p, mode=%d", loc, (unsigned)mode);
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
-  int r = t9p_chmod(n->c, n->h, mode);
-  if (r < 0) {
-    errno = -r;
-    return -1;
-  }
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
+
+  int r;
+  if ((r = t9p_chmod(n->c, n->h, mode)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
 
@@ -1238,10 +1340,8 @@ t9p_rtems_dir_read(rtems_libio_t* iop, void* buffer, size_t count)
 
   t9p_scandir_ctx_t sc = {.offset = iop->offset};
   ssize_t bytesTrans = t9p_readdir_dirents(n->c, n->h, &sc, buffer, count);
-  if (bytesTrans < 0) {
-    errno = -bytesTrans;
-    return -1;
-  }
+  if (bytesTrans < 0)
+    rtems_set_errno_and_return_minus_one(-bytesTrans);
   iop->offset = sc.offset;
   return bytesTrans;
 }
@@ -1249,7 +1349,7 @@ t9p_rtems_dir_read(rtems_libio_t* iop, void* buffer, size_t count)
 static int
 t9p_rtems_dir_fstat(const rtems_filesystem_location_info_t* loc, struct stat* buf)
 {
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
   return -1;
 }
 
@@ -1264,8 +1364,9 @@ t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t 
   TRACE("iop=%p, path=%s, oflag=0x%X, mode=0x%X", iop, path, (unsigned)oflag, (unsigned)mode);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
 
-  if (t9p_open(n->c, n->h, T9P_OREADONLY) < 0)
-    return -1;
+  int r;
+  if ((r = t9p_open(n->c, n->h, T9P_OREADONLY)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
 
@@ -1298,15 +1399,6 @@ t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t
     return -1;
   }
   n->size = ta.fsize;
-
-  #if 0
-  if (S_ISDIR(ta.mode)) {
-    iop->handlers = &t9p_dir_ops;
-  }
-  else {
-    iop->handlers = &t9p_file_ops;
-  }
-  #endif
 
   return 0;
 }
@@ -1423,14 +1515,12 @@ t9p_rtems_file_fstat(rtems_filesystem_location_info_t* loc, struct stat* buf)
 #endif
 {
   TRACE("loc=%p, buf=%p", loc, buf);
-  t9p_rtems_node_t* n = t9p_rtems_fs_get_node(loc);
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
 
   struct t9p_getattr ta;
-  int r = t9p_getattr(n->c, n->h, &ta, T9P_GETATTR_ALL);
-  if (r < 0) {
-    errno = -r;
-    return -1;
-  }
+  int r;
+  if ((r = t9p_getattr(n->c, n->h, &ta, T9P_GETATTR_ALL)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
 
   buf->st_dev = 0;
   buf->st_ino = t9p_get_qid(n->h).path;
@@ -1457,11 +1547,9 @@ t9p_rtems_file_ftruncate(rtems_libio_t* iop, off_t length)
   TRACE("iop=%p, length=%llu", iop, length);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
 
-  int r = t9p_truncate(n->c, n->h, length);
-  if (r < 0) {
-    errno = -r;
-    return -1;
-  }
+  int r;
+  if ((r = t9p_truncate(n->c, n->h, length)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
 
@@ -1470,31 +1558,30 @@ t9p_rtems_file_fsync(rtems_libio_t* iop)
 {
   TRACE("iop=%p", iop);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
-  int r = t9p_fsync(n->c, n->h);
-  if (r < 0) {
-    errno = -r;
-    return -1;
-  }
+  int r;
+  if ((r = t9p_fsync(n->c, n->h)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
-
 
 static int
 t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer)
 {
   TRACE("iop=%p, req=%lu, buf=%p", iop, req, buffer);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
-  if (!buffer) {
-    errno = EINVAL;
-    return -1;
-  }
+  if (!buffer)
+    rtems_set_errno_and_return_minus_one(EINVAL);
 
   int* ll = buffer;
   uint32_t* u = buffer;
+  void** pp = buffer;
+  qid_t* q = buffer;
 
   switch (req)
   {
   case T9P_RTEMS_IOCTL_GET_FID:
+    *u = t9p_get_fid(n->h);
+    break;
   case T9P_RTEMS_IOCTL_GET_FID_COUNT:
     break;
   case T9P_RTEMS_IOCTL_GET_IOUNIT:
@@ -1503,6 +1590,14 @@ t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer)
   case T9P_RTEMS_IOCTL_GET_LOG_LEVEL:
     *ll = t9p_get_log_level(n->c);
     break;
+  case T9P_RTEMS_IOCTL_GET_CONTEXT:
+    *pp = n->c;
+    break;
+  case T9P_RTEMS_IOCTL_GET_QID:
+    *q = t9p_get_qid(n->h);
+    break;
+  default:
+    return -1;
   }
   return 0;
 }
