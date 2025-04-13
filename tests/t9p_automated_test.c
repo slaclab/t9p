@@ -336,6 +336,7 @@ t9p_run_rename_test(const char* path)
   }
 
   result_banner(fails);
+  return fails;
 }
 
 #ifdef HAVE_CEXP

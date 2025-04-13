@@ -26,7 +26,11 @@ add_library(
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g2 -Werror=implicit-function-declaration -Wno-strict-prototypes")
+set(WARN_FLAGS
+    "-Wreturn-type -Werror=return-type -Wno-strict-prototypes -Werror=implicit-function-declaration"
+)
+
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g2 ${WARN_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g2")
 
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")

@@ -239,7 +239,7 @@ static const struct _rtems_filesystem_operations_table t9p_fs_ops = {
   .rename_h = t9p_rtems_fs_rename,
   .statvfs_h = NULL,
 #if __RTEMS_MAJOR__ >= 6
-  .are_nodes_equal_h = t9p_rtems_fs_are_nodes_equal
+  .are_nodes_equal_h = t9p_rtems_fs_are_nodes_equal,
   .fchmod_h = t9p_rtems_fs_fchmod,
   .clonenod_h = t9p_rtems_fs_clonenode,
   .rmnod_h = t9p_rtems_fs_rmnod,
@@ -527,7 +527,11 @@ t9p_rtems_iop_get_ctx(const rtems_libio_t* iop)
 t9p_rtems_node_t*
 t9p_rtems_loc_get_root_node(const rtems_filesystem_location_info_t* loc)
 {
+#if __RTEMS_MAJOR__ <= 4
   return loc->mt_entry->mt_fs_root.node_access;
+#else
+  return loc->mt_entry->mt_fs_root->location.node_access;
+#endif
 }
 
 t9p_rtems_fs_info_t*
@@ -750,6 +754,10 @@ t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry)
   pthread_mutex_destroy(&fi->mutex);
   pthread_mutexattr_destroy(&fi->mutattr);
   t9p_shutdown(fi->c);
+  
+#if __RTEMS_MAJOR__ <= 4
+  return 0;
+#endif
 }
 
 static void
@@ -1177,7 +1185,11 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
 
   if (t9p_rtems_loc_get_root_node(loc) == n) {
     printf("Tried to free root node??\n");
+  #if __RTEMS_MAJOR__ <= 4
     return -1;
+  #else
+    return;
+  #endif
   }
 
   /** Funky; see comment in t9p_rtems_fs_rmnod. We may have clunked the fid elsewhere */
@@ -1187,6 +1199,10 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
   n->h = NULL;
   n->c = NULL;
   free(n);
+  
+#if __RTEMS_MAJOR__ <= 4
+  return 0;
+#endif
 }
 
 static int
