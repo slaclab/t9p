@@ -130,6 +130,11 @@ static int t9p_rtems_fs_utimens(
   struct timespec times[2]
 );
 
+static int t9p_rtems_fs_statvfs(
+  const rtems_filesystem_location_info_t *loc,
+  struct statvfs *buf
+);
+
 #else
 
 static int t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry);
@@ -209,6 +214,11 @@ static int t9p_rtems_fs_unlink(
   rtems_filesystem_location_info_t *pathloc
 );
 
+static int t9p_rtems_fs_statvfs(
+  rtems_filesystem_location_info_t *loc,
+  struct statvfs *buf
+);
+
 #endif // RTEMS_MAJOR >= 6
 
 static int t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry);
@@ -237,7 +247,7 @@ static const struct _rtems_filesystem_operations_table t9p_fs_ops = {
   .symlink_h = t9p_rtems_fs_symlink,
   .readlink_h = t9p_rtems_fs_readlink,
   .rename_h = t9p_rtems_fs_rename,
-  .statvfs_h = NULL,
+  .statvfs_h = t9p_rtems_fs_statvfs,
 #if __RTEMS_MAJOR__ >= 6
   .are_nodes_equal_h = t9p_rtems_fs_are_nodes_equal,
   .fchmod_h = t9p_rtems_fs_fchmod,
@@ -1376,6 +1386,38 @@ t9p_rtems_dir_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t 
   int r;
   if ((r = t9p_open(n->c, n->h, T9P_OREADONLY)) < 0)
     rtems_set_errno_and_return_minus_one(-r);
+  return 0;
+}
+
+#if __RTEMS_MAJOR__ >= 6
+static int
+t9p_rtems_fs_statvfs(const rtems_filesystem_location_info_t *loc, struct statvfs *buf)
+#else
+static int
+t9p_rtems_fs_statvfs(rtems_filesystem_location_info_t *loc, struct statvfs *buf)
+#endif
+{
+  TRACE("loc=%p,buf=%p", loc, buf);
+
+  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
+
+  struct t9p_statfs stat;
+  int r;
+  if ((r = t9p_statfs(n->c, n->h, &stat)) < 0)
+    rtems_set_errno_and_return_minus_one(-r);
+
+  buf->f_bsize = stat.bsize;
+  buf->f_frsize = stat.bsize; /** TODO: Is this correct? glibc does this if driver
+                                * returns 0 for this field */
+  buf->f_blocks = stat.blocks;
+  buf->f_bfree = stat.bfree;
+  buf->f_bavail = stat.bavail;
+  buf->f_files = stat.files;
+  buf->f_ffree = stat.ffree;
+  buf->f_favail = stat.ffree - stat.files;
+  buf->f_fsid = stat.fsid;
+  buf->f_flag = 0; /** TODO: Set this properly */
+  buf->f_namemax = stat.namelen;
   return 0;
 }
 
