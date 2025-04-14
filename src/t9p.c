@@ -2525,8 +2525,8 @@ _t9p_thread_proc(void* param)
     rtems_event_set es;
     rtems_event_receive(T9P_WAKE_EVENT, RTEMS_EVENT_ANY | RTEMS_WAIT, _get_wait_duration(), &es);
   #else
-    /** Interruptible sleep */
-    event_wait(c->trans_pool.recv_ev, 1);
+    /** Interruptible sleep; formerly.. we set timeout on the socket on Linux */
+    /**event_wait(c->trans_pool.recv_ev, 1);*/
   #endif
   }
 
@@ -2568,6 +2568,18 @@ t9p_tcp_init(void)
   if (setsockopt(ctx->sock, SOL_SOCKET, SO_KEEPALIVE, &o, sizeof(o)) < 0) {
     perror("setsockopt");
   }
+  
+#ifdef __linux__
+  /** On Linux, set recv timeout */
+  struct timeval to;
+  to.tv_usec = 1000;
+  if (setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
+    perror("t9p_tcp_init: setsockopt(SO_RECVTIMEO)");
+    close(ctx->sock);
+    free(ctx);
+    return NULL;
+  }
+#endif
 
   return ctx;
 }

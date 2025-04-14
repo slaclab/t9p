@@ -22,9 +22,19 @@
 #include <sys/time.h>
 #include <time.h>
 
+#if __RTEMS_MAJOR__ >= 6
+#include <sys/limits.h>
+#endif
+
 #ifdef HAVE_CEXP
 #include <cexpsh.h>
 #endif
+
+#define CHECK(_x, ...) \
+  if ((r = (_x)(__VA_ARGS__)) < 0) { \
+    printf("*** %s:%u: %s: %s", __FUNCTION__, __LINE__, #_x , strerror(r)); \
+    ++fails; \
+  }
 
 static void
 result_banner(int f)
@@ -98,6 +108,7 @@ run_hog(void* param)
 int
 t9p_run_trunc_test(const char* path)
 {
+  int r;
   if (!path) {
     printf("USAGE: t9p_run_trunc_test PATH\n");
     return -1;
@@ -121,16 +132,11 @@ t9p_run_trunc_test(const char* path)
     close(fd);
   }
 
-  if (truncate(path, 128) < 0) {
-    perror("*** truncate failed");
-    fails++;
-  }
-
+  CHECK(truncate, path, 128);
+  
   struct stat st = {0};
-  if (stat(path, &st) < 0) {
-    perror("*** stat failed");
-    fails++;
-  }
+  
+  CHECK(stat, path, &st);
 
   if (st.st_size != 128) {
     printf("*** truncate failed."
@@ -143,11 +149,9 @@ t9p_run_trunc_test(const char* path)
     perror("*** open with O_TRUNC failed");
     fails++;
   }
+  
+  CHECK(fstat, fd, &st);
 
-  if (fstat(fd, &st) < 0) {
-    perror("*** fstat failed");
-    fails++;
-  }
   if (st.st_size != 0) {
     printf("*** O_TRUNC did not truncate?\n");
     fails++;
@@ -237,6 +241,7 @@ CEXP_HELP_TAB_END
 int
 t9p_run_create_test(const char* path)
 {
+  int r;
   if (!path) {
     printf("USAGE: %s PATH\n", __FUNCTION__);
     return -1;
@@ -247,12 +252,8 @@ t9p_run_create_test(const char* path)
   int fails = 0;
 
   struct stat st;
-  if (stat(path, &st) >= 0) {
-    if (unlink(path) < 0) {
-      perror("*** unlink failed");
-      ++fails;
-    }
-  }
+  if (stat(path, &st) >= 0)
+    CHECK(unlink, path);
 
   int fd = open(path, O_RDWR | O_CREAT, 0644);
   if (fd < 0) {
@@ -261,22 +262,15 @@ t9p_run_create_test(const char* path)
   }
 
   /** Check mode */
-  if (stat(path, &st) >= 0) {
-    if (st.st_mode != 0644) {
-      printf("*** Mode mistmatch. Expected %o, got %o\n", 0644, (unsigned)st.st_mode);
-    }
-  }
-  else {
-    perror("*** stat");
+  CHECK(stat, path, &st);
+  if (st.st_mode != 0644) {
+    printf("*** Mode mistmatch. Expected %o, got %o\n", 0644, (unsigned)st.st_mode);
     ++fails;
   }
 
   close(fd);
 
-  if (stat(path, &st) < 0) {
-    perror("*** stat failed, even though the file should exist");
-    ++fails;
-  }
+  CHECK(stat, path, &st);
 
   result_banner(fails);
   return fails;
@@ -294,6 +288,7 @@ CEXP_HELP_TAB_END
 int
 t9p_run_rename_test(const char* path)
 {
+  int r;
   if (!path) {
     printf("USAGE: %s PATH\n", __FUNCTION__);
     return -1;
@@ -312,10 +307,7 @@ t9p_run_rename_test(const char* path)
       ++fails;
     }
     
-    if (write(fd, "hello world", strlen("hello world")) < 0) {
-      perror("*** write failed");
-      ++fails;
-    }
+    CHECK(write, fd, "hello world", strlen("hello world"));
 
     close(fd);
   }
@@ -324,16 +316,10 @@ t9p_run_rename_test(const char* path)
   snprintf(newname, sizeof(newname), "%s.1", path);
 
   /** Rename! */
-  if (rename(path, newname) < 0) {
-    perror("*** rename failed");
-    ++fails;
-  }
+  CHECK(rename, path, newname);
 
   /** Remove it */
-  if (unlink(newname) < 0) {
-    perror("*** unlink failed");
-    ++fails;
-  }
+  CHECK(unlink, newname);
 
   result_banner(fails);
   return fails;
@@ -351,6 +337,7 @@ CEXP_HELP_TAB_END
 int
 t9p_run_chmod_chown_test(const char* path)
 {
+  int r, fails = 0;
   if (!path) {
     printf("USAGE: %s PATH\n", path);
     return -1;
@@ -358,50 +345,30 @@ t9p_run_chmod_chown_test(const char* path)
 
   printf("===============> CHMOD/CHOWN TEST <===============\n");
 
-  int fails=0;
-
   /** Create file if it doesnt exist already */
   struct stat st;
   if (stat(path, &st) < 0) {
-    if (creat(path, 0644) < 0) {
-      perror("*** creat failed");
-      result_banner(1);
-      return -1;
-    }
+    CHECK(creat, path, 0644);
   }
 
-  if (chmod(path, 0777) < 0) {
-    perror("*** chmod failed");
+  CHECK(chmod, path, 0777);
+
+  CHECK(stat, path, &st);
+  if ((st.st_mode & 0777) != 0777) {
+    printf("*** expected %o mode, got %o\n", 0777, (unsigned)(st.st_mode&0777));
+    fails++;
+  }
+
+  CHECK(chmod, path, 0444);
+
+  CHECK(stat, path, &st);
+  if ((st.st_mode & 0777) != 0444) {
+    printf("*** expected %o mode, got %o\n", 0444, (unsigned)(st.st_mode&0777));
     ++fails;
   }
-
-  if (stat(path, &st) < 0) {
-    perror("*** stat");
-    ++fails;
-  }
-  else {
-    if ((st.st_mode & 0777) != 0777) {
-      printf("*** expected %o mode, got %o\n", 0777, (unsigned)(st.st_mode&0777));
-    }
-  }
-
-  if (chmod(path, 0444) < 0) {
-    perror("*** chmod failed");
-    ++fails;
-  }
-
-  if (stat(path, &st) < 0) {
-    perror("*** stat");
-    ++fails;
-  }
-  else {
-    if ((st.st_mode & 0777) != 0444) {
-      printf("*** expected %o mode, got %o\n", 0444, (unsigned)(st.st_mode&0777));
-    }
-  }
-
+  
   /** Make it writable for the next test in the list */
-  chmod(path, 0644);
+  CHECK(chmod, path, 0644);
 
 #if 0 /** Not really a good way to test this in a portable manner */
   if (chown(path, 8412, 2211) < 0) {
@@ -446,7 +413,7 @@ t9p_run_dir_test(const char* path)
     return -1;
   }
 
-  int fails = 0;
+  int fails = 0, r;
 
   printf("===============> DIR TEST <===============\n");
 
@@ -457,36 +424,23 @@ t9p_run_dir_test(const char* path)
   snprintf(filePath, sizeof(filePath), "%s/myfile.txt", dirPath);
 
   if (file_exists(filePath))
-    if (unlink(filePath) < 0)
-      perror("*** unlink failed");
+    CHECK(unlink, filePath);
 
   /** Remove pre-existing dir or file */
   struct stat st;
   if (stat(dirPath, &st) >= 0) {
     if (S_ISDIR(st.st_mode)) {
-      if (rmdir(dirPath) < 0) {
-        perror("*** rmdir failed");
-        ++fails;
-      }
+      CHECK(rmdir, path);
     }
     else {
-      if (unlink(dirPath) < 0) {
-        perror("*** unlink failed");
-        ++fails;
-      }
+      CHECK(unlink, dirPath);
     }
   }
 
-  if (mkdir(dirPath, 0777) < 0) {
-    perror("*** mkdir failed");
-    ++fails;
-  }
+  CHECK(mkdir, dirPath, 0777);
 
   /** Create in the subdir */
-  if (creat(filePath, 0644) < 0) {
-    perror("*** creat failed");
-    ++fails;
-  }
+  CHECK(creat, filePath, 0644);
 
   /** Attempt to actually do I/O */
   int fd = open(filePath, O_TRUNC | O_RDWR);

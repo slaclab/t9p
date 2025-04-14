@@ -150,8 +150,8 @@ event_wait(event_t* ev, uint64_t timeout_ms)
   pthread_mutex_lock(&ev->mutex);
   int r = 0;
   do {
-  } while ((r = pthread_cond_timedwait(&ev->cond, &ev->mutex, &tv)) != 0 &&
-           (r == EAGAIN || r == EINTR));
+    r = pthread_cond_timedwait(&ev->cond, &ev->mutex, &tv);
+  } while (r == EAGAIN || r == EINTR);
 
   pthread_mutex_unlock(&ev->mutex); // Dont need to hold this mutex
 
