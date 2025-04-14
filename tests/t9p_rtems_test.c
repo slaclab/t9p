@@ -217,10 +217,10 @@ POSIX_Init(void* arg)
 
     if (b == 'a') {
       if (run_auto_test(10) < 0) {
-        printf("auto test fail\n");
+        printf("\n!!! SOME TESTS FAILED !!!\n");
       }
       else {
-        printf("auto test passed\n");
+        printf("\nAll tests passed\n");
       }
     }
 

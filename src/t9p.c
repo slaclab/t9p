@@ -2627,11 +2627,11 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
     return -1;
   }
 
-#if __RTEMS_MAJOR__ < 5
+#ifdef RTEMS_LEGACY_STACK
   /** Nonblock for RTEMS legacy networking */
   int noblock = 1;
   assert(ioctl(ctx->sock, FIONBIO, &noblock) == 0);
-#else
+#elif defined(__RTEMS_MAJOR__)
   /** Set nonblock */
   if (fcntl(ctx->sock, F_SETFL, O_NONBLOCK) < 0) {
     perror("Failed to set O_NONBLOCK on socket");

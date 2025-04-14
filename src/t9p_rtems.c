@@ -275,7 +275,6 @@ typedef struct t9p_rtems_node
 {
   t9p_context_t* c;
   t9p_handle_t h;
-  ssize_t size;
 } t9p_rtems_node_t;
 
 typedef struct t9p_rtems_fs_info
@@ -552,7 +551,6 @@ t9p_rtems_clone_node(const t9p_rtems_node_t* old, int dupFid)
       free(n);
       return NULL;
     }
-    n->size = -1;
   }
 
   return n;
@@ -707,7 +705,6 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   /** Setup root node info */
   t9p_rtems_node_t* root = calloc(sizeof(t9p_rtems_node_t), 1);
   root->c = fi->c;
-  root->size = -1;
   root->h = t9p_get_root(fi->c);
 #if __RTEMS_MAJOR__ >= 6
   mt_entry->mt_fs_root->location.node_access = root;
@@ -802,7 +799,6 @@ t9p_rtems_fs_evalpath(rtems_filesystem_eval_path_context_t* ctx)
   current->node_access = e;
   e->c = n->c;
   e->h = h;
-  e->size = -1;
 
   /** Configure handlers */
   if (t9p_is_dir(h)) {
@@ -876,7 +872,6 @@ t9p_rtems_fs_evalpath(
   /** Make a new node for pathloc, to replace the parent's */
   t9p_rtems_node_t* p = t9p_rtems_clone_node(pathloc->node_access, 0);
   p->h = nh;
-  p->size = -1;
   pathloc->node_access = p;
 
   /** NOTE: Do not need to free the old node_access */
@@ -935,7 +930,6 @@ t9p_rtems_fs_eval_for_make(
   /** Allocate new node */
   t9p_rtems_node_t* newnode = t9p_rtems_clone_node(node, 0);
   newnode->h = nh;
-  newnode->size = -1;
 
   pathloc->ops = &t9p_fs_ops;
   pathloc->node_access = newnode;
@@ -1225,7 +1219,6 @@ t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t* loc)
     return -1;
   }
   newnode->h = newhandle;
-  newnode->size = -1;
 
   loc->node_access = newnode;
 
@@ -1414,7 +1407,6 @@ t9p_rtems_file_open(rtems_libio_t* iop, const char* path, uint32_t oflag, mode_t
     errno = -r;
     return -1;
   }
-  n->size = ta.fsize;
 
   return 0;
 }
@@ -1435,12 +1427,6 @@ t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
   ssize_t off = iop->offset;
   uint8_t* p = buffer;
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
-
-  n->size = t9p_stat_size(n->c, n->h);
-  /** Need to truncate this because 9p will give us nothing if we ask for too much 
-    *... I think. TODO: verify */
-  if (count > n->size)
-    count = n->size;
 
   /** Break reads into pieces in case iounit is smaller than the requested read size */
   const size_t iounit = t9p_get_iounit(n->h);
@@ -1490,10 +1476,6 @@ t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count)
   #if __RTEMS_MAJOR__ >= 6
     iop->offset += ret;
   #endif
-
-    /** Should we update size from the server? */
-    if (iop->offset >= n->size)
-      n->size = iop->offset+1;
   }
   return count;
 }
@@ -1503,7 +1485,7 @@ t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence)
 {
   TRACE("iop=%p, off=%llu, whence=%d", iop, offset, whence);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
-  n->size = t9p_stat_size(n->c, n->h);
+  ssize_t sz = t9p_stat_size(n->c, n->h);
 
   switch (whence) {
   case SEEK_SET:
@@ -1513,11 +1495,11 @@ t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence)
     iop->offset += offset;
     break;
   case SEEK_END:
-    iop->offset = n->size-1;
+    iop->offset = sz-1;
     break;
   }
 
-  if (iop->offset >= n->size) iop->offset = n->size-1;
+  if (iop->offset >= sz) iop->offset = sz-1;
   if (iop->offset < 0) iop->offset = 0;
   return iop->offset;
 }
