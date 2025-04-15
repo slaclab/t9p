@@ -923,7 +923,6 @@ t9p_rtems_fs_eval_for_make(
     (*name)++; /** Skip past the '/' */
 
   t9p_rtems_node_t* node = t9p_rtems_loc_get_node(pathloc);
-  const t9p_rtems_node_t* rootn = t9p_rtems_loc_get_root_node(pathloc);
 
   /** Determine parent dir */
   char parentPath[PATH_MAX];
@@ -932,7 +931,7 @@ t9p_rtems_fs_eval_for_make(
   printf("parentPath=%s\n", parentPath);
 
   /** Open handle to the parent dir */
-  t9p_handle_t nh = t9p_open_handle(rootn->c, rootn->h, parentPath);
+  t9p_handle_t nh = t9p_open_handle(node->c, node->h, parentPath);
   if (nh == NULL) {
     return -1;
   }

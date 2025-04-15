@@ -26,13 +26,9 @@
 #include <sys/limits.h>
 #endif
 
-#ifdef HAVE_CEXP
-#include <cexpsh.h>
-#endif
-
 #define CHECK(_x, ...) \
   if ((r = (_x)(__VA_ARGS__)) < 0) { \
-    printf("*** %s:%u: %s: %s", __FUNCTION__, __LINE__, #_x , strerror(r)); \
+    printf("*** %s:%u: %s: %s\n", __FUNCTION__, __LINE__, #_x , strerror(errno)); \
     ++fails; \
   }
 
@@ -163,16 +159,6 @@ t9p_run_trunc_test(const char* path)
   return fails;
 }
 
-#ifdef HAVE_CEXP
-CEXP_HELP_TAB_BEGIN(t9p_run_trunc_test)
-	HELP(
-"Run O_TRUNC/ftruncate/truncate unit test\n"
-	int, t9p_run_trunc_test,  (const char* path)
-	),
-CEXP_HELP_TAB_END
-#endif
-
-
 #define BLOCK_SIZE 16384
 
 int
@@ -229,15 +215,6 @@ t9p_run_write_perf_test(const char* path)
   return fails;
 }
 
-#ifdef HAVE_CEXP
-CEXP_HELP_TAB_BEGIN(t9p_run_write_perf_test)
-	HELP(
-"Run write performance unit test\n"
-	int, t9p_run_write_perf_test,  (const char* path)
-	),
-CEXP_HELP_TAB_END
-#endif
-
 int
 t9p_run_create_test(const char* path)
 {
@@ -275,15 +252,6 @@ t9p_run_create_test(const char* path)
   result_banner(fails);
   return fails;
 }
-
-#ifdef HAVE_CEXP
-CEXP_HELP_TAB_BEGIN(t9p_run_create_test)
-	HELP(
-"Run file create/unlink test\n"
-	int, t9p_run_create_test,  (const char* path)
-	),
-CEXP_HELP_TAB_END
-#endif
 
 int
 t9p_run_rename_test(const char* path)
@@ -324,15 +292,6 @@ t9p_run_rename_test(const char* path)
   result_banner(fails);
   return fails;
 }
-
-#ifdef HAVE_CEXP
-CEXP_HELP_TAB_BEGIN(t9p_run_rename_test)
-	HELP(
-"Run file rename/unlink test\n"
-	int, t9p_run_rename_test,  (const char* path)
-	),
-CEXP_HELP_TAB_END
-#endif
 
 int
 t9p_run_chmod_chown_test(const char* path)
@@ -395,15 +354,6 @@ t9p_run_chmod_chown_test(const char* path)
   result_banner(fails);
   return fails;
 }
-
-#ifdef HAVE_CEXP
-CEXP_HELP_TAB_BEGIN(t9p_run_chmod_chown_test)
-	HELP(
-"Run file own/chmod test\n"
-	int, t9p_run_chmod_chown_test,  (const char* path)
-	),
-CEXP_HELP_TAB_END
-#endif
 
 int
 t9p_run_dir_test(const char* path)
@@ -471,6 +421,49 @@ t9p_run_dir_test(const char* path)
 
     close(fd);
   }
+  
+  CHECK(unlink, filePath);
+  CHECK(rmdir, dirPath);
+
+  result_banner(fails);
+  return fails;
+}
+
+int
+t9p_run_chdir_test(const char* path)
+{
+  int fails = 0, r;
+  if (!path) {
+    printf("USAGE: %s PATH\n", __FUNCTION__);
+    return -1;
+  }
+
+  printf("===============> CHDIR TEST <===============\n");
+  
+  char dirPath[PATH_MAX];
+  snprintf(dirPath, sizeof(dirPath), "%s/testdir", path);
+  
+  char filePath[PATH_MAX];
+  snprintf(filePath, sizeof(filePath), "%s/myfile.txt", dirPath);
+  
+  if (!file_exists(dirPath))
+    CHECK(mkdir, dirPath, 0777);
+  
+  CHECK(chdir, dirPath);
+  
+  if (file_exists("myfile.txt"))
+    CHECK(unlink, "myfile.txt");
+
+  CHECK(creat, "myfile.txt", 0777);
+  if (!file_exists(filePath)) {
+    printf("*** %s not found!\n", filePath);
+    fails++;
+  }
+
+  /** Cleanup */
+  CHECK(unlink, "myfile.txt");
+  CHECK(chdir, path);
+  CHECK(rmdir, dirPath);
 
   result_banner(fails);
   return fails;
@@ -493,6 +486,9 @@ run_auto_test(int iters)
     ok = 0;
 
   if (t9p_run_dir_test("/test") != 0)
+    ok = 0;
+
+  if (t9p_run_chdir_test("/test") != 0)
     ok = 0;
 
   return ok ? 0 : -1;

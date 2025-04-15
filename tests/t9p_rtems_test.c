@@ -210,7 +210,7 @@ POSIX_Init(void* arg)
   b = getchar();
   if (b == 's' || b == 'a') {
     mkdir("/test", 0777);
-    const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID ",trace";
+    const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID "";
     mount(
       "10.0.2.2:10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
