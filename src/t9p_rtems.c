@@ -45,21 +45,10 @@
 
 #define TRACE(...) \
   if (s_do_trace) { \
-  printf("%s(", __FUNCTION__); \
-  printf(__VA_ARGS__); \
-  printf(")\n"); \
+  fprintf(stderr,"%s(", __FUNCTION__); \
+  fprintf(stderr,__VA_ARGS__); \
+  fprintf(stderr,")\n"); \
 }
-
-typedef struct t9p_rtems_ctx_node {
-  struct t9p_rtems_ctx_node* next;
-  struct t9p_context* c;
-  char* apath;
-  char* mntpt;
-  char* ip;
-} t9p_rtems_ctx_node_t;
-
-static mutex_t* s_ctx_mutex;
-static t9p_rtems_ctx_node_t* s_ctxts = NULL; 
 
 static int s_do_trace = 0;
 
@@ -279,12 +268,18 @@ static const rtems_filesystem_limits_and_options_t t9p_fs_opts = {
   .posix_vdisable = 0,           /* special char processing, 0=no, 1=yes */
 };
 
+/**
+ * Holds per-node info. These should be unique per each individiual fsloc/iop node
+ */
 typedef struct t9p_rtems_node
 {
   t9p_context_t* c;
   t9p_handle_t h;
 } t9p_rtems_node_t;
 
+/**
+ * Global structure defining fs info for the entire mount.
+ */
 typedef struct t9p_rtems_fs_info
 {
   t9p_context_t* c;
@@ -292,6 +287,7 @@ typedef struct t9p_rtems_fs_info
   pthread_mutex_t mutex;
   pthread_mutexattr_t mutattr;
   char mntpt[PATH_MAX];
+  char apath[PATH_MAX];
 } t9p_rtems_fs_info_t;
 
 /**************************************************************************************
@@ -387,7 +383,6 @@ static const rtems_filesystem_file_handlers_r t9p_dir_ops = {
 int
 t9p_rtems_register(void)
 {
-  s_ctx_mutex = mutex_create();
   return rtems_filesystem_register(RTEMS_FILESYSTEM_TYPE_9P, t9p_rtems_fsmount_me);
 }
 
@@ -461,26 +456,36 @@ CEXP_HELP_TAB_BEGIN(p9Mount)
 CEXP_HELP_TAB_END
 #endif
 
+static bool
+t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void* p)
+{
+  if (strcmp(mt_entry->type, RTEMS_FILESYSTEM_TYPE_9P))
+    return true;
+
+  int* n = p;
+  struct t9p_rtems_fs_info* fsi = mt_entry->fs_info;
+
+  t9p_opts_t opts = t9p_get_opts(fsi->c);
+  t9p_stats_t stats = t9p_get_stats(fsi->c);
+  printf("%s\n", fsi->opts.ip);
+  printf("  apath=%s,mntpt=%s,uid=%d,gid=%d\n", fsi->apath, mt_entry->target,
+    (int)opts.uid, (int)opts.gid);
+  printf("   bytesSend=%u bytesRecv=%u\n", (unsigned)stats.total_bytes_recv,
+    (unsigned)stats.total_bytes_recv);
+  printf("   sendCnt=%u, sendErrCnt=%u\n", (unsigned)stats.send_cnt,
+    (unsigned)stats.send_errs);
+  printf("   recvCnt=%u, recvErrCnt=%u\n\n", (unsigned)stats.recv_cnt,
+  (unsigned)stats.recv_errs);
+
+  (*n)++;
+  return true;
+}
+
 int
 p9Stats()
 {
-  mutex_lock(s_ctx_mutex);
   int n = 0;
-  for (t9p_rtems_ctx_node_t* c = s_ctxts; c; c = c->next, n++) {
-    t9p_opts_t opts = t9p_get_opts(c->c);
-    t9p_stats_t stats = t9p_get_stats(c->c);
-    printf("%s\n", c->ip);
-    printf("  apath=%s,mntpt=%s,uid=%d,gid=%d\n", c->apath, c->mntpt,
-      (int)opts.uid, (int)opts.gid);
-    printf("   bytesSend=%u bytesRecv=%u\n", (unsigned)stats.total_bytes_recv,
-      (unsigned)stats.total_bytes_recv);
-    printf("   sendCnt=%u, sendErrCnt=%u\n", (unsigned)stats.send_cnt,
-      (unsigned)stats.send_errs);
-    printf("   recvCnt=%u, recvErrCnt=%u\n\n", (unsigned)stats.recv_cnt,
-    (unsigned)stats.recv_errs);
-  }
-  mutex_unlock(s_ctx_mutex);
-
+  rtems_filesystem_mount_iterate(t9p_iterate_fs_stats, &n);
   printf("\n%d total 9P mounts\n", n);
   return 0;
 }
@@ -696,6 +701,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   fi->opts.opts.log_level = loglevel;
   strcpy(fi->opts.ip, ip);
   strcpy(fi->opts.opts.user, user);
+  strcpy(fi->apath, apath);
 
   /** Init the 9p FS */
   t9p_transport_t t;
@@ -719,17 +725,6 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     return -1;
 
   printf("Mounted 9P %s:%s at %s\n", ip, apath, mt_entry->target);
-
-  /** Global list, just for debugging ... */
-  mutex_lock(s_ctx_mutex);
-  t9p_rtems_ctx_node_t* cn = calloc(1, sizeof(t9p_rtems_ctx_node_t));
-  cn->next = s_ctxts;
-  cn->c = fi->c;
-  cn->apath = strdup(apath);
-  cn->mntpt = strdup(mt_entry->target);
-  cn->ip = strdup(ip);
-  s_ctxts = cn;
-  mutex_unlock(s_ctx_mutex);
 
   /** Setup root node info */
   t9p_rtems_node_t* root = calloc(sizeof(t9p_rtems_node_t), 1);
@@ -758,24 +753,6 @@ t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry)
 {
   TRACE("mt_entry=%p", mt_entry);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
-
-  /** Remove from context list */
-  mutex_lock(s_ctx_mutex);
-  for (t9p_rtems_ctx_node_t* c = s_ctxts, *p = NULL; c; c = c->next) {
-    if (c->c != fi->c) {
-      p = c;
-     continue;
-    }
-
-    free(c->ip);
-    free(c->apath);
-    free(c->mntpt);
-    if (p)
-      p->next = c->next;
-    free(c);
-    break;
-  }
-  mutex_unlock(s_ctx_mutex);
 
   pthread_mutex_destroy(&fi->mutex);
   pthread_mutexattr_destroy(&fi->mutattr);
@@ -1492,7 +1469,7 @@ t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
   const size_t iounit = t9p_get_iounit(n->h);
   ssize_t rem = count, ret = 0;
   while (rem > 0) {
-    const ssize_t toRead = min(iounit, rem < count ? rem : count);
+    const uint32_t toRead = min(iounit, rem);
     ret = t9p_read(n->c, n->h, off, toRead, p);
     if (ret < 0) {
       errno = -ret;
@@ -1510,6 +1487,8 @@ t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
     if (ret != toRead)
       break;
   }
+
+  TRACE("read num=%lu", (uintptr_t)p - (uintptr_t)buffer);
   return (uintptr_t)p - (uintptr_t)buffer;
 }
 
@@ -1543,7 +1522,7 @@ t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count)
 static off_t
 t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence)
 {
-  TRACE("iop=%p, off=%llu, whence=%d", iop, offset, whence);
+  TRACE("iop=%p, off=%lld, whence=%d", iop, offset, whence);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   ssize_t sz = t9p_stat_size(n->c, n->h);
 
@@ -1555,11 +1534,11 @@ t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence)
     iop->offset += offset;
     break;
   case SEEK_END:
-    iop->offset = sz-1;
+    iop->offset = sz + offset;
     break;
   }
 
-  if (iop->offset >= sz) iop->offset = sz-1;
+  //if (iop->offset >= sz) iop->offset = sz-1;
   if (iop->offset < 0) iop->offset = 0;
   return iop->offset;
 }

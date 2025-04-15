@@ -2333,7 +2333,7 @@ _t9p_thread_proc(void* param)
         if (node->tr.hdata) {
           struct TRcommon com;
           decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
-          printf(
+          fprintf(stderr,
             "send: (header) type=%d(%s), len=%u, tag=%d\n",
             com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
           );
@@ -2341,7 +2341,7 @@ _t9p_thread_proc(void* param)
         else if (node->tr.data) {
           struct TRcommon com;
           decode_TRcommon(&com, node->tr.data, node->tr.size);
-          printf(
+          fprintf(stderr,
             "send: type=%d(%s), len=%u, tag=%d\n",
             com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
           );
@@ -2394,7 +2394,7 @@ _t9p_thread_proc(void* param)
       }
 
       if (c->opts.log_level <= T9P_LOG_TRACE) {
-        printf("recv: type=%d(%s), tag=%d, size=%u\n",
+        fprintf(stderr, "recv: type=%d(%s), tag=%d, size=%u\n",
           com.type, t9p_type_string(com.type), com.tag, (unsigned)com.size);
       }
 
