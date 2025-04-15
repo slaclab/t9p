@@ -64,8 +64,6 @@
 #include "t9p.h"
 #include "t9proto.h"
 
-// #define DO_TRACE
-
 #define T9P_TARGET_VERSION "9P2000.L"
 
 #define PACKET_BUF_SIZE 8192

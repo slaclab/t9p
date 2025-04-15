@@ -43,16 +43,12 @@
 
 #define TESTING
 
-#define DO_TRACE
-#ifdef DO_TRACE
-#define TRACE(...) do { \
+#define TRACE(...) \
+  if (s_do_trace) { \
   printf("%s(", __FUNCTION__); \
   printf(__VA_ARGS__); \
   printf(")\n"); \
-} while(0);
-#else
-#define TRACE(...)
-#endif
+}
 
 typedef struct t9p_rtems_ctx_node {
   struct t9p_rtems_ctx_node* next;
@@ -64,6 +60,8 @@ typedef struct t9p_rtems_ctx_node {
 
 static mutex_t* s_ctx_mutex;
 static t9p_rtems_ctx_node_t* s_ctxts = NULL; 
+
+static int s_do_trace = 0;
 
 /**************************************************************************************
  * File System Operations
@@ -415,6 +413,11 @@ p9Mount(const char* ip, const char* srvpath, const char* mntpt, const char* othe
     strcat(opts, ",");
     strcat(opts, otheropts);
   }
+  
+  /* Check if they want to enable tracing */
+  if (strstr(otheropts, "trace")) {
+    s_do_trace = 1;
+  }
 
   /** Ensure the mount point actually exists */
   struct stat st;
@@ -491,6 +494,26 @@ CEXP_HELP_TAB_BEGIN(p9Stats)
 CEXP_HELP_TAB_END
 #endif
 
+void
+p9SetTrace(int doTrace)
+{
+  printf("9p tracing %s\n", doTrace ? "enabled" : "disabled");
+  s_do_trace = doTrace;
+}
+
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(p9SetTrace)
+	HELP(
+"Enable or disable tracing\n"
+	void, p9SetTrace,  ()
+	),
+CEXP_HELP_TAB_END
+#endif
+
+/**************************************************************************************
+ * Utilities
+ **************************************************************************************/
+
 #define WR_FLAGS (S_IWUSR | S_IWGRP | S_IWOTH)
 #define RD_FLAGS (S_IRUSR | S_IRGRP | S_IROTH)
 #define EX_FLAGS (S_IXUSR | S_IXGRP | S_IXOTH)
@@ -510,10 +533,6 @@ min(int x, int y)
 {
   return x < y ? x : y;
 }
-
-/**************************************************************************************
- * Utilities
- **************************************************************************************/
 
 static t9p_rtems_node_t*
 t9p_rtems_loc_get_node(const rtems_filesystem_location_info_t* loc)
