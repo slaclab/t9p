@@ -24,7 +24,16 @@
 
 #if __RTEMS_MAJOR__ >= 6
 #include <sys/limits.h>
+#else
+#include <rtems/score/heap.h>
+#include <rtems/score/wkspace.h>
+#include <rtems/score/apimutex.h>
+#include <rtems/score/protectedheap.h>
+#include <rtems/libcsupport.h>
+#include <rtems.h>
 #endif
+
+#include "../src/t9p_platform.h"
 
 #define CHECK(_x, ...) \
   if ((r = (_x)(__VA_ARGS__)) < 0) { \
@@ -196,6 +205,19 @@ t9p_run_write_perf_test(const char* path)
       continue;
     }
     xfer += l;
+    usleep(1000);
+  }
+
+  for (int i = 0; i < BLOCK_SIZE; ++i) {
+    lseek(fd, 0, SEEK_SET);
+    ssize_t l = read(fd, buf, BLOCK_SIZE / 2);
+    if (l < 0) {
+      fails++;
+      perror("read failed");
+      continue;
+    }
+    xfer += l;
+    usleep(1000);
   }
 
   struct timespec end;
@@ -213,6 +235,30 @@ t9p_run_write_perf_test(const char* path)
   close(fd);
   result_banner(fails);
   return fails;
+}
+
+static void*
+t9p_threaded_write_perf_proc(void* p)
+{
+  printf("Starting hog...\n");
+  t9p_run_write_perf_test(p);
+  return NULL;
+}
+
+int
+t9p_run_threaded_write_test()
+{
+  thread_t* threads[] = {
+    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile1.txt", 50),
+    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile2.txt", 51),
+    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile3.txt", 52),
+  };
+
+  for (int i = 0; i < sizeof(threads)/sizeof(*threads); ++i) {
+    thread_join(threads[i]);
+  }
+
+  return 0;
 }
 
 int
@@ -472,6 +518,12 @@ t9p_run_chdir_test(const char* path)
 int
 run_auto_test(int iters)
 {
+  extern rtems_id RTEMS_Malloc_Heap;
+  Heap_Information_block sib;
+  rtems_region_get_information(RTEMS_Malloc_Heap, &sib);
+
+  //t9p_run_threaded_write_test();
+
   int ok = 1;
   if (t9p_run_trunc_test("/test/myfile.txt") != 0)
     ok = 0;
@@ -490,6 +542,15 @@ run_auto_test(int iters)
 
   if (t9p_run_chdir_test("/test") != 0)
     ok = 0;
+
+  Heap_Information_block eib;
+  rtems_region_get_information(RTEMS_Malloc_Heap, &eib);
+
+  printf("Mem use at start: %.2fK/%.2fK\n", (sib.Used.total) / 1024.f, (sib.Used.total + sib.Free.total) / 1024.f);
+  printf("Mem use at end: %.2fK/%2.fK\n", (eib.Used.total) / 1024.f, (eib.Used.total + eib.Free.total) / 1024.f);
+
+  _Heap_Get_information(&_Workspace_Area, &sib);
+  printf("Workspace usage: %2.fK/%.2fK\n", sib.Used.total / 1024.f, (sib.Used.total+sib.Free.total) / 1024.f);
 
   return ok ? 0 : -1;
 }
