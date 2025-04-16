@@ -94,6 +94,7 @@
 
 #ifdef __rtems__
 #define T9P_WAKE_EVENT RTEMS_EVENT_31
+#define T9P_NODE_EVENT RTEMS_EVENT_30
 #endif
 
 /** POSIX-style events are only used on Linux */
@@ -451,7 +452,7 @@ tr_signal(struct trans_node* n)
 #ifdef USE_POSIX_EVENTS
   event_signal(n->event);
 #else
-  int r = rtems_event_send(n->task, T9P_WAKE_EVENT);
+  int r = rtems_event_send(n->task, T9P_NODE_EVENT);
   if (r != RTEMS_SUCCESSFUL)
     assert(0);
 #endif
@@ -468,7 +469,7 @@ tr_wait(struct trans_node* n, int timeout)
   return event_wait(n->event, timeout);
 #else
   rtems_event_set es;
-  return rtems_event_receive(T9P_WAKE_EVENT, RTEMS_EVENT_ALL | RTEMS_WAIT,
+  return rtems_event_receive(T9P_NODE_EVENT, RTEMS_EVENT_ALL | RTEMS_WAIT,
     t9p_rt_ms_to_ticks(timeout), &es);
 #endif
 }

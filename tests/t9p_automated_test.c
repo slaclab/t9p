@@ -61,6 +61,14 @@ file_exists(const char* path)
   return 1;
 }
 
+static double
+time_now()
+{
+  struct timespec tp;
+  clock_gettime(CLOCK_MONOTONIC, &tp);
+  return tp.tv_sec + tp.tv_nsec / 1e9;
+}
+
 static int
 run_hog(void* param)
 {
@@ -168,7 +176,7 @@ t9p_run_trunc_test(const char* path)
   return fails;
 }
 
-#define BLOCK_SIZE 16384
+#define BLOCK_SIZE 4096
 
 int
 t9p_run_write_perf_test(const char* path)
@@ -193,43 +201,51 @@ t9p_run_write_perf_test(const char* path)
     buf[i] = "1234567890ABCDEF"[rand() & 0xF];
   }
 
-  double xfer = 0;
-  struct timespec start;
-  clock_gettime(CLOCK_MONOTONIC, &start);
-  for (int i = 0; i < 1000; ++i) {
-    lseek(fd, 0, SEEK_SET);
-    ssize_t l = write(fd, buf, BLOCK_SIZE);
-    if (l < 0) {
-      fails++;
-      perror("write failed");
-      continue;
+  double cumWr = 0, cumRd = 0;
+  double xferWr = 0, xferRd = 0;
+
+  /** 1000 iterations of write */
+  for (int j = 0; j < 100; ++j) {
+    double start = time_now();
+
+    for (int i = 0; i < 10; ++i) {
+      lseek(fd, 0, SEEK_SET);
+      ssize_t l = write(fd, buf, BLOCK_SIZE);
+      if (l < 0) {
+        fails++;
+        perror("write failed");
+        continue;
+      }
+      xferWr += l;
     }
-    xfer += l;
+
+    cumWr += time_now() - start;
     usleep(1000);
   }
 
-  for (int i = 0; i < BLOCK_SIZE; ++i) {
-    lseek(fd, 0, SEEK_SET);
-    ssize_t l = read(fd, buf, BLOCK_SIZE / 2);
-    if (l < 0) {
-      fails++;
-      perror("read failed");
-      continue;
+  /** 1000 iterations of read */
+  for (int j = 0; j < 100; ++j) {
+    double start = time_now();
+
+    for (int i = 0; i < 10; ++i) {
+      lseek(fd, 0, SEEK_SET);
+      ssize_t l = read(fd, buf, BLOCK_SIZE);
+      if (l < 0) {
+        fails++;
+        perror("read failed");
+        continue;
+      }
+      xferRd += l;
     }
-    xfer += l;
+
+    cumRd += time_now() - start;
     usleep(1000);
   }
 
-  struct timespec end;
-  clock_gettime(CLOCK_MONOTONIC, &end);
+  xferRd /= 1000000.;
+  xferWr /= 1000000.;
 
-  double dend = (double)end.tv_sec + (end.tv_nsec / 1e9);
-  double dstart = start.tv_sec + (start.tv_nsec / 1e9);
-  double elapsed = dend-dstart;
-
-  printf("Transferred %.2f MiB in %.2f seconds (%.2f MiB/s)\n", xfer / (1024. * 1024.), elapsed,
-    (xfer/(1024.*1024.)) / elapsed);
-
+  printf("Wrote %.2f MB (%.2f MB/s). Read %.2f MB (%.2f MB/s)\n", xferWr, xferWr / cumWr, xferRd, xferRd / cumRd);
 
   free(buf);
   close(fd);
@@ -254,7 +270,7 @@ t9p_run_threaded_write_test()
     thread_create(t9p_threaded_write_perf_proc, "/test/threadfile3.txt", 52),
   };
 
-  for (int i = 0; i < sizeof(threads)/sizeof(*threads); ++i) {
+  for (int i = 0; i < sizeof(threads)/sizeof(threads[0]); ++i) {
     thread_join(threads[i]);
   }
 
@@ -522,7 +538,7 @@ run_auto_test(int iters)
   Heap_Information_block sib;
   rtems_region_get_information(RTEMS_Malloc_Heap, &sib);
 
-  //t9p_run_threaded_write_test();
+  t9p_run_threaded_write_test();
 
   int ok = 1;
   if (t9p_run_trunc_test("/test/myfile.txt") != 0)
