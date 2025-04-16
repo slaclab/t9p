@@ -1524,22 +1524,28 @@ t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence)
 {
   TRACE("iop=%p, off=%lld, whence=%d", iop, offset, whence);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
-  ssize_t sz = t9p_stat_size(n->c, n->h);
 
+  rtems_off64_t newoff = iop->offset;
   switch (whence) {
   case SEEK_SET:
-    iop->offset = offset;
+    newoff = offset;
     break;
   case SEEK_CUR:
-    iop->offset += offset;
+    newoff += offset;
     break;
-  case SEEK_END:
-    iop->offset = sz + offset;
-    break;
+  case SEEK_END: {
+      ssize_t sz = t9p_stat_size(n->c, n->h);
+      newoff = sz + offset;
+      break;
+    }
+  default:
+    rtems_set_errno_and_return_minus_one(EINVAL);
   }
 
-  //if (iop->offset >= sz) iop->offset = sz-1;
-  if (iop->offset < 0) iop->offset = 0;
+  if (newoff < 0)
+    rtems_set_errno_and_return_minus_one(EINVAL);
+
+  iop->offset = newoff;
   return iop->offset;
 }
 
