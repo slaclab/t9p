@@ -93,7 +93,12 @@
 #define ERROR(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
 
 #ifdef __rtems__
-#define T9P_WAKE_EVENT RTEMS_EVENT_1
+#define T9P_WAKE_EVENT RTEMS_EVENT_31
+#endif
+
+/** POSIX-style events are only used on Linux */
+#ifndef __rtems__
+#define USE_POSIX_EVENTS
 #endif
 
 struct trans_pool
@@ -200,6 +205,16 @@ strNcpy(char* dest, const char* src, size_t dmax)
 }
 #define strncpy strNcpy
 
+#ifdef __rtems__
+static rtems_interval
+t9p_rt_ms_to_ticks(uint32_t ms)
+{
+  rtems_interval i = ms * rtems_clock_get_ticks_per_second() / 1000;
+  if (!i) i = 1;
+  return i;
+}
+#endif
+
 /********************************************************************/
 /*                                                                  */
 /*            T R A N S A C T I O N        P O O L                  */
@@ -213,6 +228,8 @@ struct trans_node;
 struct trans_node* tr_enqueue(struct t9p_context* ctx, struct trans_pool* q,
   struct trans_node* tr);
 void tr_release(struct trans_pool* q, struct trans_node* tn);
+static void tr_signal(struct trans_node* n);
+static int tr_wait(struct trans_node* n, int timeo);
 
 #define TR_FLAGS_NONE 0x0
 
@@ -240,7 +257,11 @@ struct trans_node
   struct trans tr;
 
   uint8_t sent;   /**< Set once we've been sent */
+#if __rtems__
+  rtems_id task;  /**< Originator of the request. Used with rtems_event_send */
+#else
   event_t* event; /**< Signaled when the response to this is receieved */
+#endif
   uint16_t tag;   /**< Tag for this transaction node; For now, each node will have its
                        own associated tag. Somewhat sucks, but good enough for now. */
 
@@ -278,7 +299,9 @@ tr_pool_init(struct trans_pool* q, uint32_t num)
   for (int i = 0; i < num; ++i) {
     struct trans_node* on = q->freehead;
     q->freehead = calloc(1, sizeof(*on));
+  #ifdef USE_POSIX_EVENTS
     q->freehead->event = event_create();
+  #endif
     q->freehead->next = on;
     q->freehead->tag = tag++;
   }
@@ -299,7 +322,9 @@ tr_pool_destroy(struct trans_pool* q)
   /** Free the nodes */
   for (struct trans_node* n = q->freehead; n;) {
     struct trans_node* b = n->next;
+  #ifdef USE_POSIX_EVENTS
     event_destroy(n->event);
+  #endif
     free(n);
     n = b;
   }
@@ -347,6 +372,10 @@ tr_get_node(struct trans_pool* q)
 struct trans_node*
 tr_enqueue(struct t9p_context* c, struct trans_pool* q, struct trans_node* us)
 {
+#if __rtems__
+  us->task = rtems_task_self();
+#endif
+
   /** Send it to the I/O thread */
   if (msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
     printf("Error while sending to message queue\n");
@@ -392,13 +421,11 @@ tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr)
   n->tr = *tr;
 
   n = tr_enqueue(c, &c->trans_pool, n);
-  if (n == NULL) {
-    // tr_release(&c->trans_pool, n);
+  if (n == NULL)
     return -ENOMEM;
-  }
 
   /** Wait until serviced (or timeout) */
-  if ((r = event_wait(n->event, c->opts.recv_timeo)) != 0) {
+  if ((r = tr_wait(n, c->opts.recv_timeo)) != 0) {
     /** Add the timed out node to the dead list. It is now the I/O thread's responsibility to
       * release the node and discard its data. */
     mutex_lock(c->trans_pool.guard);
@@ -413,6 +440,37 @@ tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr)
   uint32_t status = n->tr.status;
   tr_release(&c->trans_pool, n); /** Release the transaction back into the pool */
   return status;
+}
+
+/**
+ * Signal a node's event. Shorthand to avoid code duplication.
+ */
+static void
+tr_signal(struct trans_node* n)
+{
+#ifdef USE_POSIX_EVENTS
+  event_signal(n->event);
+#else
+  int r = rtems_event_send(n->task, T9P_WAKE_EVENT);
+  if (r != RTEMS_SUCCESSFUL)
+    assert(0);
+#endif
+}
+
+/**
+ * Waits on a node's event for the specified timeout time.
+ * \returns 0 on success, error val on failure
+ */
+static int
+tr_wait(struct trans_node* n, int timeout)
+{
+#ifdef USE_POSIX_EVENTS
+  return event_wait(n->event, timeout);
+#else
+  rtems_event_set es;
+  return rtems_event_receive(T9P_WAKE_EVENT, RTEMS_EVENT_ALL | RTEMS_WAIT,
+    t9p_rt_ms_to_ticks(timeout), &es);
+#endif
 }
 
 static int
@@ -1300,7 +1358,7 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
    * even if the remove fails */
   _release_handle_by_fid(c, h);
 
-  if (event_wait(n->event, c->opts.recv_timeo) != 0) {
+  if (tr_wait(n, c->opts.recv_timeo) != 0) {
     ERROR(c, "%s: timed out\n", __FUNCTION__);
     tr_release(&c->trans_pool, n); // FIXME:!!!!!!!!!!! USE AFTER FREE IN WORKER THREAD
     return 0; /** TODO: Returning -1 here and releasing the file handle would be inconsistent with
@@ -2440,7 +2498,7 @@ _t9p_thread_proc(void* param)
         if (n->tr.rdata)
           memcpy(n->tr.rdata, &err, MIN(sizeof(err), n->tr.rsize));
         _discard(c, &com);
-        event_signal(n->event);
+        tr_signal(n);
         requests[n->tag] = NULL;
         continue;
       }
@@ -2450,7 +2508,7 @@ _t9p_thread_proc(void* param)
         ERROR(c, "recv: Expected msg type '%u' but got '%d'; discarding!\n", (unsigned)n->tr.rtype, com.type);
         _discard(c, &com);
         n->tr.status = -1;
-        event_signal(n->event);
+        tr_signal(n);
         requests[n->tag] = NULL;
         atomic_add32(&c->stats.recv_errs, 1);
         continue;
@@ -2499,7 +2557,7 @@ _t9p_thread_proc(void* param)
       /** Set status accordingly */
       n->tr.status = l < 0 ? -errno : nread;
 
-      event_signal(n->event);
+      tr_signal(n);
       requests[n->tag] = NULL;
       continue;
     }
