@@ -2517,6 +2517,7 @@ _t9p_thread_proc(void* param)
       c->trans_pool.freehead = n;
       n = nn;
     }
+    c->trans_pool.deadhead = NULL;
     mutex_unlock(c->trans_pool.guard);
 
   #ifdef __rtems__
