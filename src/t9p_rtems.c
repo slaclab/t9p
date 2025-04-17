@@ -1181,9 +1181,10 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
 {
   TRACE("loc=%p", loc);
   t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
+  assert(n);
 
   if (t9p_rtems_loc_get_root_node(loc) == n) {
-    printf("Tried to free root node??\n");
+    printf("%s: Tried to free root node??\n", __FUNCTION__);
   #if __RTEMS_MAJOR__ <= 4
     return -1;
   #else
@@ -1197,6 +1198,7 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
 
   n->h = NULL;
   n->c = NULL;
+  loc->node_access = NULL;
   free(n);
   
 #if __RTEMS_MAJOR__ <= 4
@@ -1460,7 +1462,7 @@ t9p_rtems_file_close(rtems_libio_t* iop)
 static ssize_t
 t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
 {
-  TRACE("iop=%p,buffer=%p,count=%zu,iop->off=%llu", iop, buffer, count, iop->offset);
+  TRACE("iop=%p,buffer=%p,count=%zu,iop->off=%lld", iop, buffer, count, iop->offset);
   ssize_t off = iop->offset;
   uint8_t* p = buffer;
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
@@ -1525,27 +1527,14 @@ t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence)
   TRACE("iop=%p, off=%lld, whence=%d", iop, offset, whence);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
 
-  rtems_off64_t newoff = iop->offset;
-  switch (whence) {
-  case SEEK_SET:
-    newoff = offset;
-    break;
-  case SEEK_CUR:
-    newoff += offset;
-    break;
-  case SEEK_END: {
-      ssize_t sz = t9p_stat_size(n->c, n->h);
-      newoff = sz + offset;
-      break;
-    }
-  default:
-    rtems_set_errno_and_return_minus_one(EINVAL);
+  if (whence == SEEK_END) {
+    iop->offset = t9p_stat_size(n->c, n->h);
   }
 
-  if (newoff < 0)
+  /** FIXME: Why doesn't higher-level lseek handle this? am I doing something wrong? */
+  if (iop->offset < 0)
     rtems_set_errno_and_return_minus_one(EINVAL);
 
-  iop->offset = newoff;
   return iop->offset;
 }
 
@@ -1697,6 +1686,22 @@ msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 }
 
 #endif
+
+int
+bb_printf(const char* fmt, ...)
+{
+  va_list va;
+  va_start(va, fmt);
+
+  char message[4096];
+  vsnprintf(message, sizeof(message), fmt, va);
+
+  va_end(va);
+
+  for (char* p = message; *p; p++)
+    BSP_output_char_via_serial(*p);
+}
+
 
 #if defined(TESTING) && defined(HAVE_GESYS)
 

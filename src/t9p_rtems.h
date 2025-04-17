@@ -47,3 +47,8 @@ typedef struct t9p_rtems_mount_opts
  * \brief Registers the t9p file system
  */
 int t9p_rtems_register();
+
+/**
+ * Black box printf (direct printing to serial console)
+ */
+int bb_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
