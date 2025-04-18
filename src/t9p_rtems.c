@@ -337,10 +337,11 @@ static const rtems_filesystem_file_handlers_r t9p_file_ops = {
   .writev_h = rtems_filesystem_default_writev,
   .mmap_h = rtems_filesystem_default_mmap,
 #else
-  .fcntl_h = t9p_rtems_file_fcntl,
   .rmnod_h = t9p_rtems_file_rmnod,
   .fchmod_h = t9p_rtems_file_fchmod,
-  .fpathconf_h = t9p_rtems_file_fpathconf,
+  /** Leave these NULL until you implement them!! I learned the hard way. */
+  /**.fcntl_h = t9p_rtems_file_fcntl,*/
+  /**.fpathconf_h = t9p_rtems_file_fpathconf,*/
 #endif
 };
 
@@ -1116,6 +1117,7 @@ t9p_rtems_fs_rmnod(
   int r;
   if ((r = t9p_remove(n->c, n->h)) < 0)
     rtems_set_errno_and_return_minus_one(-r);
+  n->h = NULL; /** fid got clunked by Tremove */
   return 0;
 }
 
@@ -1181,7 +1183,6 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
 {
   TRACE("loc=%p", loc);
   t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
-  assert(n);
 
   if (t9p_rtems_loc_get_root_node(loc) == n) {
     printf("%s: Tried to free root node??\n", __FUNCTION__);
@@ -1591,7 +1592,7 @@ t9p_rtems_file_fsync(rtems_libio_t* iop)
   TRACE("iop=%p", iop);
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   int r;
-  if ((r = t9p_fsync(n->c, n->h)) < 0)
+  if ((r = t9p_fsync(n->c, n->h, 0)) < 0)
     rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
@@ -1686,22 +1687,6 @@ msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 }
 
 #endif
-
-int
-bb_printf(const char* fmt, ...)
-{
-  va_list va;
-  va_start(va, fmt);
-
-  char message[4096];
-  vsnprintf(message, sizeof(message), fmt, va);
-
-  va_end(va);
-
-  for (char* p = message; *p; p++)
-    BSP_output_char_via_serial(*p);
-}
-
 
 #if defined(TESTING) && defined(HAVE_GESYS)
 
