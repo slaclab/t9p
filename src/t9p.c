@@ -154,22 +154,15 @@ struct t9p_context
 struct t9p_handle
 {
   int32_t fid;         /**< Also the index into the fh table in t9p_context */
-  uint32_t valid_mask; /**< Determines what is and isn't valid */
-  qid_t qid;           /**< qid of this object. Only valid if valid_mask says so */
   uint32_t iounit;     /**< Returned by Rlopen after the file is opened */
+  uint16_t valid_mask; /**< Determines what is and isn't valid */
+  qid_t qid;           /**< qid of this object. Only valid if valid_mask says so */
 };
 
 struct t9p_handle_node
 {
   struct t9p_handle_node* next;
-  struct t9p_handle_node* prev;
   struct t9p_handle h;
-  int active;
-};
-
-struct t9p_requestor
-{
-  uint16_t tag;
 };
 
 /********************************************************************/
@@ -762,7 +755,6 @@ t9p_init(
   for (int i = 0; i < c->fhl_max; ++i) {
     struct t9p_handle_node* n = &c->fhl[i];
     n->next = c->fhl_free;
-    n->prev = prev;
     n->h.fid = i;
     c->fhl_free = n;
     prev = c->fhl_free;
@@ -2148,6 +2140,12 @@ t9p_get_fid(t9p_handle_t h)
   return ~0U;
 }
 
+uint32_t
+t9p_get_msize(t9p_context_t* c)
+{
+  return c->msize;
+}
+
 void
 t9p_free_dirs(t9p_dir_info_t* head)
 {
@@ -2234,7 +2232,7 @@ _alloc_handle(struct t9p_context* c)
   }
   /** Unlink from free list */
   c->fhl_free = n->next;
-  n->prev = n->next = NULL;
+  n->next = NULL;
 
   /** Mark used */
   n->h.valid_mask = T9P_HANDLE_ACTIVE;
@@ -2255,7 +2253,7 @@ _release_handle(struct t9p_context* c, struct t9p_handle_node* h)
   h->h.valid_mask = 0;
 
   /** Link into free list */
-  h->next = h->prev = NULL;
+  h->next = NULL;
   h->next = c->fhl_free;
   c->fhl_free = h;
 

@@ -527,6 +527,13 @@ uint32_t t9p_get_iounit(t9p_handle_t h);
 qid_t t9p_get_qid(t9p_handle_t h);
 
 /**
+ * Returns the max message size of the context
+ * \param c Context
+ * \returns Max message size
+ */
+uint32_t t9p_get_msize(t9p_context_t* c);
+
+/**
  * Access the fid for the handle. Provided for debugging/informational reasons!
  * \param h A valid file handle
  * \returns The fid, or 0xFFFFFFFF h is invalid

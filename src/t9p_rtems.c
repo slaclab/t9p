@@ -461,7 +461,7 @@ static bool
 t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void* p)
 {
   if (strcmp(mt_entry->type, RTEMS_FILESYSTEM_TYPE_9P))
-    return true;
+    return false;
 
   int* n = p;
   struct t9p_rtems_fs_info* fsi = mt_entry->fs_info;
@@ -471,7 +471,8 @@ t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void*
   printf("%s\n", fsi->opts.ip);
   printf("  apath=%s,mntpt=%s,uid=%d,gid=%d\n", fsi->apath, mt_entry->target,
     (int)opts.uid, (int)opts.gid);
-  printf("   bytesSend=%u bytesRecv=%u\n", (unsigned)stats.total_bytes_recv,
+  printf("   msize=%u\n", (unsigned)t9p_get_msize(fsi->c));
+  printf("   bytesSent=%u bytesRecv=%u\n", (unsigned)stats.total_bytes_send,
     (unsigned)stats.total_bytes_recv);
   printf("   sendCnt=%u, sendErrCnt=%u\n", (unsigned)stats.send_cnt,
     (unsigned)stats.send_errs);
@@ -479,7 +480,7 @@ t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void*
   (unsigned)stats.recv_errs);
 
   (*n)++;
-  return true;
+  return false;
 }
 
 int
