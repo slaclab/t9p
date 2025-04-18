@@ -454,9 +454,10 @@ struct T9P_PACKED Tfsync
 {
   T9P_COMMON_FIELDS
   uint32_t fid;
+  uint32_t datasync;
 };
 
-int encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
+int encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t datasync);
 
 struct T9P_PACKED Rfsync{T9P_COMMON_FIELDS};
 

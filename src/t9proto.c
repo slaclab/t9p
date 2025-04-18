@@ -575,7 +575,7 @@ encode_Tremove(void* buf, size_t buflen, uint16_t tag, uint32_t fid)
 }
 
 int
-encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid)
+encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t datasync)
 {
   if (buflen < sizeof(struct Tfsync))
     return -1;
@@ -584,6 +584,7 @@ encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid)
   tf->fid = BSWAP32(fid);
   tf->size = BSWAP32(sizeof(struct Tfsync));
   tf->tag = BSWAP16(tag);
+  tf->datasync = BSWAP32(datasync);
   tf->type = T9P_TYPE_Tfsync;
 
   return sizeof(struct Tfsync);
