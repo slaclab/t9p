@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <dirent.h>
+#include <bsp.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -469,8 +470,9 @@ tr_wait(struct trans_node* n, int timeout)
   return event_wait(n->event, timeout);
 #else
   rtems_event_set es;
-  return rtems_event_receive(T9P_NODE_EVENT, RTEMS_EVENT_ALL | RTEMS_WAIT,
+  rtems_status_code r = rtems_event_receive(T9P_NODE_EVENT, RTEMS_EVENT_ALL | RTEMS_WAIT,
     t9p_rt_ms_to_ticks(timeout), &es);
+  return r == RTEMS_SUCCESSFUL ? 0 : -ETIMEDOUT;
 #endif
 }
 
@@ -668,17 +670,17 @@ error:
 static int
 _clunk_sync(struct t9p_context* c, int fid)
 {
-  char buf[1024];
+  char buf[128];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
-    return -1;
+    return -ENOMEM;
 
   int l;
   if ((l = encode_Tclunk(buf, sizeof(buf), n->tag, fid)) < 0) {
     ERROR(c, "Failed to encode Tclunk\n");
     tr_release(&c->trans_pool, n);
-    return -1;
+    return -EPROTO;
   }
 
   struct trans tr = {
@@ -692,17 +694,6 @@ _clunk_sync(struct t9p_context* c, int fid)
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
     ERROR(c, "%s: Tclunk failed\n", __FUNCTION__);
     return l;
-  }
-
-  if (l < sizeof(struct TRcommon)) {
-    ERROR(c, "%s: Tclunk failed: short packet\n", __FUNCTION__);
-    return -1;
-  }
-
-  struct TRcommon* tc = (struct TRcommon*)buf;
-  if (_iserror(tc)) {
-    _perror(c, "Rclunk failed", tc);
-    return -1;
   }
   return 0;
 }
@@ -935,6 +926,7 @@ t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
   /** If the number of comps we requested earlier doesn't match the number of qids we have,
     * we have failed to open the full path. Just clunk and return error */
   if (nwcount != rw.nwqid) {
+    _clunk_sync(c, fh->h.fid);
     free(qids);
     goto error;
   }
@@ -1372,7 +1364,7 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
 }
 
 int
-t9p_fsync(t9p_context_t* c, t9p_handle_t file)
+t9p_fsync(t9p_context_t* c, t9p_handle_t file, uint32_t datasync)
 {
   TRACE(c, "t9p_fsync(h=%p)\n", file);
   char packet[PACKET_BUF_SIZE];
@@ -1384,7 +1376,7 @@ t9p_fsync(t9p_context_t* c, t9p_handle_t file)
     return -ENOMEM;
 
   int l;
-  if ((l = encode_Tfsync(packet, sizeof(packet), n->tag, file->fid)) < 0) {
+  if ((l = encode_Tfsync(packet, sizeof(packet), n->tag, file->fid, datasync)) < 0) {
     ERROR(c, "%s: Unable to encode Tfsync\n", __FUNCTION__);
     tr_release(&c->trans_pool, n);
     return -EINVAL;
@@ -2522,7 +2514,8 @@ _t9p_thread_proc(void* param)
         l = c->trans.recv(c->conn, n->tr.rheader, MIN(n->tr.rheadersz, com.size), 0);
         /** Check if any data was recieved, substract from the remaining packet size */
         if (l > 0) {
-          com.size -= l;
+          if (l > com.size) com.size = 0;
+          else com.size -= l;
           nread += l;
         }
         else {
@@ -2530,6 +2523,10 @@ _t9p_thread_proc(void* param)
           goto recv_done;
         }
       }
+
+      /** Check if the header data covers everything */
+      if (!com.size)
+        goto recv_done;
 
       /** No result data space? well, discard... */
       if (!n->tr.rdata || n->tr.rsize == 0)

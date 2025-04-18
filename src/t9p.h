@@ -386,7 +386,7 @@ int t9p_mkdir(
  * \param file File to fsync
  * \return < 0 on error
  */
-int t9p_fsync(t9p_context_t* c, t9p_handle_t file);
+int t9p_fsync(t9p_context_t* c, t9p_handle_t file, uint32_t datasync);
 
 /**
  * Duplicates a file handle
