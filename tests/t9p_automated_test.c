@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <time.h>
+#include <assert.h>
 
 #if __RTEMS_MAJOR__ >= 6
 #include <sys/limits.h>
@@ -176,7 +177,7 @@ t9p_run_trunc_test(const char* path)
   return fails;
 }
 
-#define BLOCK_SIZE 4096
+#define BLOCK_SIZE 512
 
 int
 t9p_run_write_perf_test(const char* path)
@@ -221,6 +222,8 @@ t9p_run_write_perf_test(const char* path)
 
     cumWr += time_now() - start;
     usleep(1000);
+
+    fsync(fd);
   }
 
   /** 1000 iterations of read */
@@ -240,6 +243,8 @@ t9p_run_write_perf_test(const char* path)
 
     cumRd += time_now() - start;
     usleep(1000);
+
+    fsync(fd);
   }
 
   xferRd /= 1000000.;
@@ -531,12 +536,57 @@ t9p_run_chdir_test(const char* path)
   return fails;
 }
 
+
+int
+run_c_api_test(const char* path)
+{
+  if (!path) {
+    printf("USAGE: run_c_api_test PATH\n");
+    return -1;
+  }
+
+  char srcF[256], dstF[256];
+  snprintf(srcF, sizeof(srcF), "%s/myfile.1", path);
+  snprintf(dstF, sizeof(dstF), "%s/myfile.2", path);
+
+  unlink(srcF);
+  unlink(dstF);
+
+  FILE* fp = fopen(srcF, "wb");
+  assert(fp);
+  for (int i = 0; i < 65536; ++i) {
+    fputc("0123456789abcdef"[rand() & 0xF], fp);
+  }
+  fclose(fp);
+  
+  int fd = open(srcF, O_RDONLY);
+  assert(fd >= 0);
+  
+  fp = fdopen(fd, "rb");
+  assert(fp);
+  
+  fclose(fp);
+  
+  fd = open(dstF, O_TRUNC | O_RDWR | O_CREAT, 0644);
+  assert(fd >= 0);
+  
+  fp = fdopen(fd, "wb");
+  assert(fp);
+  
+  fclose(fp);
+
+  unlink(dstF);
+  return 0;
+}
+
 int
 run_auto_test(int iters)
 {
   extern rtems_id RTEMS_Malloc_Heap;
   Heap_Information_block sib;
   rtems_region_get_information(RTEMS_Malloc_Heap, &sib);
+
+  run_c_api_test("/test");
 
   t9p_run_threaded_write_test();
 
