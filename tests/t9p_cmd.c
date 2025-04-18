@@ -299,10 +299,9 @@ getattr_cmd(int argc, const char* const* argv)
   if (t9p_getattr(ctx, h, &a, T9P_GETATTR_ALL) < 0) {
     printf("getattr failed\n");
   } else {
-    char mode[4];
-    printf(" mode:          %d\n", a.mode);
-    printf(" uid:           %d\n", a.uid);
-    printf(" gid:           %d\n", a.gid);
+    printf(" mode:          %d\n", (int)a.mode);
+    printf(" uid:           %d\n", (int)a.uid);
+    printf(" gid:           %d\n", (int)a.gid);
     printf(" nlink:         %" PRIu64 "\n", a.nlink);
     printf(" rdev:          %" PRIu64 "\n", a.rdev);
     printf(" fsize:         %" PRIu64 "\n", a.fsize);
@@ -526,10 +525,10 @@ statfs_cmd(int argc, const char* const* argv)
   printf("blocks:  %" PRIu64 "\n", statfs.blocks);
   printf("fsid:    %" PRIu64 "\n", statfs.fsid);
   printf("ffree:   %" PRIu64 "\n", statfs.ffree);
-  printf("namelen: %d\n", statfs.namelen);
+  printf("namelen: %d\n", (int)statfs.namelen);
   printf("files:   %" PRIu64 "\n", statfs.files);
-  printf("type:    %d\n", statfs.type);
-  printf("bsize:   %d\n", statfs.bsize);
+  printf("type:    %d\n", (int)statfs.type);
+  printf("bsize:   %d\n", (int)statfs.bsize);
 
   t9p_close_handle(ctx, h);
 }
@@ -730,17 +729,17 @@ stats_cmd(int argc, const char* const* argv)
     return;
   
   struct t9p_stats st = t9p_get_stats(ctx);
-  printf("send_cnt: %d\n", st.send_cnt);
-  printf("send_errs: %d\n", st.send_errs);
-  printf("recv_cnt: %d\n", st.recv_cnt);
-  printf("recv_errs: %d\n", st.recv_errs);
-  printf("total_bytes_sent: %llu\n", st.total_bytes_send);
-  printf("total_bytes_recv: %llu\n", st.total_bytes_recv);
+  printf("send_cnt: %d\n", (int)st.send_cnt);
+  printf("send_errs: %d\n", (int)st.send_errs);
+  printf("recv_cnt: %d\n", (int)st.recv_cnt);
+  printf("recv_errs: %d\n", (int)st.recv_errs);
+  printf("total_bytes_sent: %llu\n", (unsigned long long)st.total_bytes_send);
+  printf("total_bytes_recv: %llu\n", (unsigned long long)st.total_bytes_recv);
   printf("message counts:\n");
   for (int i = 0; i < T9P_TYPE_Tmax; ++i) {
     const char* n = t9p_type_string(i);
     if (n)
-      printf(" %s: %d\n", n, st.msg_counts[i]);
+      printf(" %s: %d\n", n, (int)st.msg_counts[i]);
   }
 }
 
