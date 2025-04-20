@@ -93,6 +93,21 @@
 #define WARN(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
 #define ERROR(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
 
+#if __RTEMS_MAJOR__ == 4
+
+#define HEAP_CHECK() \
+  do { \
+    /*fprintf(stderr, "%s:%u\n", __FILE__, __LINE__);*/ \
+    Heap_Information_block info; \
+    _Protected_heap_Get_information(&_Workspace_Area, &info); \
+  } while(0)
+
+#else
+
+#define HEAP_CHECK()
+
+#endif
+
 #ifdef __rtems__
 #define T9P_WAKE_EVENT RTEMS_EVENT_31
 #define T9P_NODE_EVENT RTEMS_EVENT_30
@@ -2512,7 +2527,6 @@ _t9p_thread_proc(void* param)
 
       /** Read into header space if there is any */
       if (n->tr.rheader) {
-        fprintf(stderr, "recv rheader: (tag=%d) rheader=%p, size=%ld\n", com.tag, n->tr.rheader, (long)MIN(n->tr.rheadersz, com.size));
         l = c->trans.recv(c->conn, n->tr.rheader, MIN(n->tr.rheadersz, com.size), 0);
         /** Check if any data was recieved, substract from the remaining packet size */
         if (l > 0) {
@@ -2534,7 +2548,6 @@ _t9p_thread_proc(void* param)
       if (!n->tr.rdata || n->tr.rsize == 0)
         _discard(c, &com);
       else {
-        fprintf(stderr, "W: %p, %ld\n", n->tr.rdata, MIN(n->tr.rsize, com.size));
         /** Read off what we can */
         l = c->trans.recv(c->conn, n->tr.rdata, MIN(n->tr.rsize, com.size), 0);
         if (l > 0) {
@@ -2562,6 +2575,8 @@ _t9p_thread_proc(void* param)
       tr_signal(n);
       continue;
     }
+
+    HEAP_CHECK();
 
     mutex_unlock(c->socket_lock);
 
