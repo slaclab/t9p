@@ -40,6 +40,8 @@
 #include <linux/limits.h>
 #elif defined(__rtems__)
 #include <rtems/score/cpuopts.h>
+#include <rtems/score/wkspace.h>
+#include <rtems/score/protectedheap.h>
 #if __RTEMS_MAJOR__ >= 6
 #include <sys/limits.h>
 #include <rtems/rtems/types.h>
@@ -66,8 +68,6 @@
 #include "t9proto.h"
 
 #define T9P_TARGET_VERSION "9P2000.L"
-
-#define PACKET_BUF_SIZE 8192
 
 #define MAX_PATH_COMPONENTS 256
 
@@ -397,6 +397,7 @@ tr_release(struct trans_pool* q, struct trans_node* tn)
 
   tn->next = q->freehead;
   q->freehead = tn;
+  memset(&tn->tr, 0, sizeof(tn->tr));
 
   mutex_unlock(q->guard);
 }
@@ -429,7 +430,7 @@ tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr)
     mutex_unlock(c->trans_pool.guard);
 
     printf("event_wait: %s\n", _t9p_strerror(r));
-    return -1;
+    return r;
   }
 
   uint32_t status = n->tr.status;
@@ -884,7 +885,7 @@ t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
     return NULL;
   }
 
-  char packet[PACKET_BUF_SIZE];
+  char packet[1024];
   int l = 0;
   if ((l = encode_Twalk(
          packet, sizeof(packet), n->tag, parent->fid, fh->h.fid, nwcount, (const char* const*)comps
@@ -961,8 +962,8 @@ t9p_get_root(t9p_context_t* c)
 int
 t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
 {
-  TRACE(c, "t9p_open(h=%p,mode=0x%X)\n", h, (unsigned)mode);
-  char packet[PACKET_BUF_SIZE];
+  TRACE(c, "t9p_open(c=%p,h=%p,mode=0x%X)\n", c, h, (unsigned)mode);
+  char packet[128];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
@@ -1016,7 +1017,7 @@ ssize_t
 t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
 {
   TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, (unsigned)num, outbuffer);
-  char packet[PACKET_BUF_SIZE];
+  char packet[128];
   char rheader[sizeof(struct Rread)];
   int status = 0;
 
@@ -1067,7 +1068,7 @@ ssize_t
 t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
 {
   TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, (unsigned)num, inbuffer);
-  char packet[PACKET_BUF_SIZE];
+  char packet[128];
 
   if (!_can_rw_fid(h, 1))
     return -1;
@@ -1111,7 +1112,7 @@ int
 t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t mask)
 {
   TRACE(c, "t9p_getattr(h=%p,mask=%" PRIx64 ")\n", h, mask);
-  char packet[PACKET_BUF_SIZE];
+  char packet[256];
 
   if (!t9p_is_valid(h))
     return -EBADF;
@@ -1177,7 +1178,7 @@ t9p_create(
 {
   TRACE(c, "t9p_create(parent=%p,nh=%p,name=%s,mode=0x%X,gid=%d,flags=0x%X)\n", parent, newhandle,
     name, (unsigned)mode, (unsigned)gid, (unsigned)flags);
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
@@ -1251,7 +1252,7 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
 {
   assert(c);
   TRACE(c, "t9p_dup(todup=%p,out=%p)\n", todup, outhandle);
-  char packet[PACKET_BUF_SIZE];
+  char packet[128];
 
   *outhandle = NULL;
   if (!t9p_is_valid(todup))
@@ -1309,7 +1310,7 @@ int
 t9p_remove(t9p_context_t* c, t9p_handle_t h)
 {
   TRACE(c, "t9p_remove(h=%p)\n", h);
-  char packet[PACKET_BUF_SIZE];
+  char packet[128];
   if (!t9p_is_valid(h))
     return -EBADF;
 
@@ -1359,7 +1360,7 @@ int
 t9p_fsync(t9p_context_t* c, t9p_handle_t file, uint32_t datasync)
 {
   TRACE(c, "t9p_fsync(h=%p)\n", file);
-  char packet[PACKET_BUF_SIZE];
+  char packet[128];
   if (!t9p_is_open(file))
     return -EBADF;
 
@@ -1394,7 +1395,7 @@ t9p_mkdir(
 {
   TRACE(c, "t9p_mkdir(p=%p,name=%s,mode=0x%X,gid=%d)\n", parent, name, (unsigned)mode, 
     (unsigned)gid);
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
   if (!t9p_is_valid(parent))
     return -1;
 
@@ -1442,7 +1443,7 @@ int
 t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs)
 {
   TRACE(c, "t9p_statfs(h=%p,st=%p)\n", h, statfs);
-  char packet[PACKET_BUF_SIZE];
+  char packet[256];
   int l;
   if (!t9p_is_valid(h))
     return -EBADF;
@@ -1493,7 +1494,7 @@ int
 t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize)
 {
   TRACE(c, "t9p_readlink(h=%p,op=%p,os=%zu)\n", h, outPath, outPathSize);
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
   int l;
   if (!t9p_is_valid(h))
     return -EBADF;
@@ -1536,7 +1537,7 @@ t9p_symlink(
 )
 {
   TRACE(c, "t9p_symlink(d=%p,dst=%s,src=%s,gid=%d,oqid=%p)\n", dir, dst, src, (unsigned)gid, oqid);
-  char packet[PACKET_BUF_SIZE];
+  char packet[768];
   int l;
   if (!t9p_is_valid(dir))
     dir = t9p_get_root(c);
@@ -1616,7 +1617,7 @@ _t9p_parse_dir_callback(void* param, struct Rreaddir_dir dir, const char* name)
 int
 t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
 {
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
   int l, status = 0;
   *outdirs = NULL;
   t9p_dir_info_t *prev = NULL, *head = NULL;
@@ -1740,7 +1741,7 @@ ssize_t
 t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
   void* buffer, size_t bufsize)
 {
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
   int l, status = 0;
 
   if (bufsize < sizeof(struct dirent))
@@ -1817,7 +1818,7 @@ error:
 int
 t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t flags)
 {
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
   ssize_t l;
 
   if (!t9p_is_valid(dir))
@@ -1861,7 +1862,7 @@ t9p_renameat(
   const char* newname
 )
 {
-  char packet[PACKET_BUF_SIZE];
+  char packet[768];
   ssize_t l;
 
   if (!t9p_is_valid(olddirfid) || !t9p_is_valid(newdirfid))
@@ -1907,7 +1908,7 @@ t9p_renameat(
 int
 t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_setattr* attr)
 {
-  char packet[PACKET_BUF_SIZE];
+  char packet[256];
   ssize_t l;
 
   if (!t9p_is_valid(h))
@@ -1948,7 +1949,7 @@ t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_se
 int
 t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newname)
 {
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
   ssize_t l;
 
   if (!t9p_is_valid(dir) || !t9p_is_valid(h))
@@ -1983,7 +1984,7 @@ t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newna
 int
 t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
 {
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
   ssize_t l = 0;
 
   if (!t9p_is_valid(dir) || !t9p_is_valid(h))
@@ -2018,7 +2019,7 @@ int
 t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, uint32_t major,
   uint32_t minor, uint32_t gid, qid_t* outqid)
 {
-  char packet[PACKET_BUF_SIZE];
+  char packet[512];
   ssize_t l = 0;
 
   if (!t9p_is_valid(dir))
@@ -2377,6 +2378,8 @@ _t9p_thread_proc(void* param)
         continue;
       }
 
+      assert(node->tag < MAX_TAGS);
+
       /** Trace level logging for sent packets */
       if (c->opts.log_level <= T9P_LOG_TRACE) {
         if (node->tr.hdata) {
@@ -2489,8 +2492,8 @@ _t9p_thread_proc(void* param)
         if (n->tr.rdata)
           memcpy(n->tr.rdata, &err, MIN(sizeof(err), n->tr.rsize));
         _discard(c, &com);
-        tr_signal(n);
         requests[n->tag] = NULL;
+        tr_signal(n);
         continue;
       }
 
@@ -2499,9 +2502,9 @@ _t9p_thread_proc(void* param)
         ERROR(c, "recv: Expected msg type '%u' but got '%d'; discarding!\n", (unsigned)n->tr.rtype, com.type);
         _discard(c, &com);
         n->tr.status = -1;
-        tr_signal(n);
         requests[n->tag] = NULL;
         atomic_add32(&c->stats.recv_errs, 1);
+        tr_signal(n);
         continue;
       }
 
@@ -2509,6 +2512,7 @@ _t9p_thread_proc(void* param)
 
       /** Read into header space if there is any */
       if (n->tr.rheader) {
+        fprintf(stderr, "recv rheader: (tag=%d) rheader=%p, size=%ld\n", com.tag, n->tr.rheader, (long)MIN(n->tr.rheadersz, com.size));
         l = c->trans.recv(c->conn, n->tr.rheader, MIN(n->tr.rheadersz, com.size), 0);
         /** Check if any data was recieved, substract from the remaining packet size */
         if (l > 0) {
@@ -2530,6 +2534,7 @@ _t9p_thread_proc(void* param)
       if (!n->tr.rdata || n->tr.rsize == 0)
         _discard(c, &com);
       else {
+        fprintf(stderr, "W: %p, %ld\n", n->tr.rdata, MIN(n->tr.rsize, com.size));
         /** Read off what we can */
         l = c->trans.recv(c->conn, n->tr.rdata, MIN(n->tr.rsize, com.size), 0);
         if (l > 0) {
@@ -2553,8 +2558,8 @@ _t9p_thread_proc(void* param)
       /** Set status accordingly */
       n->tr.status = l < 0 ? -errno : nread;
 
-      tr_signal(n);
       requests[n->tag] = NULL;
+      tr_signal(n);
       continue;
     }
 
@@ -2564,7 +2569,8 @@ _t9p_thread_proc(void* param)
     mutex_lock(c->trans_pool.guard);
     for (struct trans_node* n = c->trans_pool.deadhead; n;) {
       /** Purge from requests list */
-      requests[n->tag] = NULL;
+      if (requests[n->tag] == n)
+        requests[n->tag] = NULL;
 
       struct trans_node* nn = n->next;
       n->next = c->trans_pool.freehead;
