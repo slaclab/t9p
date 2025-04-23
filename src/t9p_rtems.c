@@ -496,8 +496,9 @@ t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void*
   printf("  apath=%s,mntpt=%s,uid=%d,gid=%d\n", fsi->apath, mt_entry->target,
     (int)opts.uid, (int)opts.gid);
   printf("   msize=%u\n", (unsigned)t9p_get_msize(fsi->c));
-  printf("   bytesSent=%u bytesRecv=%u\n", (unsigned)stats.total_bytes_send,
-    (unsigned)stats.total_bytes_recv);
+  printf("   bytesSent=%u (%.2fM) bytesRecv=%u (%.2fM)\n",
+    (unsigned)stats.total_bytes_send, stats.total_bytes_send / 1000000.f,
+    (unsigned)stats.total_bytes_recv, stats.total_bytes_recv / 1000000.f);
   printf("   sendCnt=%u, sendErrCnt=%u\n", (unsigned)stats.send_cnt,
     (unsigned)stats.send_errs);
   printf("   recvCnt=%u, recvErrCnt=%u\n\n", (unsigned)stats.recv_cnt,
@@ -948,7 +949,7 @@ t9p_rtems_fs_eval_for_make(
   char parentPath[PATH_MAX];
   t9p_get_parent_dir(path, parentPath, sizeof(parentPath));
 
-  printf("parentPath=%s\n", parentPath);
+  TRACE("parentPath=%s", parentPath);
 
   /** Open handle to the parent dir */
   t9p_handle_t nh = t9p_open_handle(node->c, node->h, parentPath);
@@ -1418,7 +1419,6 @@ t9p_rtems_dir_read(rtems_libio_t* iop, void* buffer, size_t count)
 static int
 t9p_rtems_dir_fstat(const rtems_filesystem_location_info_t* loc, struct stat* buf)
 {
-  t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
   return -1;
 }
 
