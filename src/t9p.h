@@ -301,6 +301,14 @@ t9p_context_t* t9p_init(
  */
 void t9p_shutdown(t9p_context_t* context);
 
+/**
+ * Opens a new handle to a file, directory or other file system object. Path is relative to the
+ * parent handle.
+ * \param c Context
+ * \param parent Parent handle
+ * \param path Path of the object, relative to the parent.
+ * \returns New handle, or NULL if failed
+ */
 t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path);
 
 /**
@@ -311,6 +319,16 @@ t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* 
  * \param h Handle
  */
 void t9p_close_handle(t9p_context_t* c, t9p_handle_t h);
+
+/**
+ * Attaches to a new remote path, returning the new handle for it.
+ * \param c Context
+ * \param apath The remote path on the server to attach to
+ * \param authfid The fid from a previous auth handshake. May be NULL
+ * \param outhandle Where to store the resulting handle. May be NULL
+ * \returns < 0 on error
+ */
+int t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t authfid, t9p_handle_t* outhandle);
 
 /**
  * \brief Opens a file for writing

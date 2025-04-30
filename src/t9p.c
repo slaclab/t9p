@@ -158,7 +158,7 @@ struct t9p_context
   struct t9p_stats stats;
 
 #ifdef __rtems__
-  rtems_id rtems_thr_ident;
+  rtems_id rtems_thr_ident;   /**< Used to wake the I/O thread when more data is ready */
 #endif
 };
 
@@ -166,6 +166,8 @@ struct t9p_context
 #define T9P_HANDLE_QID_VALID 0x2
 #define T9P_HANDLE_FID_VALID 0x4
 
+/** 24 bytes; let's keep it close to that.
+  * DEFAULT_MAX_FILES = 256, so we allocate 6144 bytes on context create */
 struct t9p_handle
 {
   int32_t fid;         /**< Also the index into the fh table in t9p_context */
@@ -253,10 +255,10 @@ struct trans {
                           this is ent before this->data is.
                           This is used to avoid unnecessary copies */
   size_t hsize;      /**< Optional; header data size */
-  int32_t status; /**< Combined status/length variable. If < 0, this represents
+  int32_t status;    /**< Combined status/length variable. If < 0, this represents
                      an error condition. If >= 0, it's the number of bytes
                      written to rdata. */
-  uint32_t rtype; /**< 9p meta; result message type. Set to 0 to accept any. */
+  uint32_t rtype;    /**< 9p meta; result message type. Set to 0 to accept any. */
   void *rheader;     /**< Optional; pointer to 'header' recv data */
   size_t rheadersz;  /**< Optional; size of the the recv 'header' buf. This should be the number
                           of bytes *expected* for the header. i.e. sizeof(Rread) */
@@ -975,6 +977,62 @@ t9p_get_root(t9p_context_t* c)
 }
 
 int
+t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t afid, t9p_handle_t* outhandle)
+{
+  TRACE(c, "t9p_attach(c=%p,path=%s,outhandle=%p)\n", c, apath, outhandle);
+
+  char packet[512];
+  ssize_t l = 0;
+
+  struct trans_node* n = tr_get_node(&c->trans_pool);
+  if (!n)
+    return -ENOMEM;
+
+  struct t9p_handle_node* h = _alloc_handle(c);
+  if (!h) {
+    tr_release(&c->trans_pool, n);
+    return -ENOMEM;
+  }
+
+  l = encode_Tattach(packet, sizeof(packet), n->tag, h->h.fid, afid ? afid->fid : T9P_NOFID,
+                     strlen(c->opts.user), (const uint8_t*)c->opts.user,
+                     strlen(apath), (const uint8_t*)apath, c->opts.uid);
+
+  if (l < 0) {
+    ERROR(c, "%s: unable to encode Tattach\n", __FUNCTION__);
+    tr_release(&c->trans_pool, n);
+    _release_handle(c, h);
+    return -EINVAL;
+  }
+
+  struct trans tr = {
+    .data = packet,
+    .size = l,
+    .rdata = packet,
+    .rsize = sizeof(packet),
+    .rtype = T9P_TYPE_Rattach,
+  };
+
+  if ((l = tr_send_recv(c, n, &tr)) < 0) {
+    ERROR(c, "%s: Tattach failed: %s\n", __FUNCTION__, _t9p_strerror(l));
+    _release_handle(c, h);
+    return l;
+  }
+
+  struct Rattach ra;
+  if ((l = decode_Rattach(&ra, packet, l)) < 0) {
+    ERROR(c, "%s: Rattach decode failed", __FUNCTION__);
+    _release_handle(c, h);
+    return -EPROTO;
+  }
+
+  if (outhandle)
+    *outhandle = &h->h;
+
+  return 0;
+}
+
+int
 t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
 {
   TRACE(c, "t9p_open(c=%p,h=%p,mode=0x%X)\n", c, h, (unsigned)mode);
@@ -986,7 +1044,7 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
 
   int l = 0;
   if ((l = encode_Tlopen(packet, sizeof(packet), n->tag, h->fid, mode)) < 0) {
-    ERROR(c, "%s: unable to encode Tlopen", __FUNCTION__);
+    ERROR(c, "%s: unable to encode Tlopen\n", __FUNCTION__);
     tr_release(&c->trans_pool, n);
     return -EINVAL;
   }
