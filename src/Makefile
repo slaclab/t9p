@@ -72,7 +72,6 @@ LDFLAGS   +=
 #  'make clobber' already includes 'make clean'
 #
 
-#CLEAN_ADDITIONS += xxx-your-debris-goes-here
 CLOBBER_ADDITIONS +=
 
 ifndef RTEMS_SITE_INSTALLDIR
@@ -86,12 +85,6 @@ endif
 
 %t9p.obj: %t9p.o %t9proto.o & %t9p.modini.o %t9p_rtems.o
 	$(LD) -r -o $@ $^
-
-#%rpcio.obj: %rpcio.o %sock_mbuf.o %xdr_mbuf.o %rpcio.modini.o
-#	$(LD) -r -o $@ $^
-
-#%dirutils.obj: %dirutils.o
-#	$(LD) -r -o $@ $^
 
 $(LIB): $(OBJS)
 	$(make-library)

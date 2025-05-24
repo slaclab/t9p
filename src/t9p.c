@@ -33,7 +33,6 @@
 #include <sys/types.h>
 #include <time.h>
 #include <dirent.h>
-#include <bsp.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -2705,6 +2704,7 @@ t9p_tcp_init(void)
   /** On Linux, set recv timeout */
   struct timeval to;
   to.tv_usec = 1000;
+  to.tv_sec = 0;
   if (setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
     perror("t9p_tcp_init: setsockopt(SO_RECVTIMEO)");
     close(ctx->sock);
