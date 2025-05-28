@@ -26,6 +26,8 @@
 #if __RTEMS_MAJOR__ >= 6
 #include <sys/limits.h>
 #else
+#include <rtems.h>
+#include <rtems/system.h>
 #include <rtems/score/heap.h>
 #include <rtems/score/wkspace.h>
 #include <rtems/score/apimutex.h>

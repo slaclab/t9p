@@ -39,8 +39,6 @@
 #include <linux/limits.h>
 #elif defined(__rtems__)
 #include <rtems/score/cpuopts.h>
-#include <rtems/score/wkspace.h>
-#include <rtems/score/protectedheap.h>
 #if __RTEMS_MAJOR__ >= 6
 #include <sys/limits.h>
 #include <rtems/rtems/types.h>
@@ -91,21 +89,6 @@
 #define DEBUG(_context, ...) LOG(_context, T9P_LOG_DEBUG, __VA_ARGS__)
 #define WARN(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
 #define ERROR(_context, ...) LOG(_context, T9P_LOG_WARN, __VA_ARGS__)
-
-#if __RTEMS_MAJOR__ == 4
-
-#define HEAP_CHECK() \
-  do { \
-    /*fprintf(stderr, "%s:%u\n", __FILE__, __LINE__);*/ \
-    Heap_Information_block info; \
-    _Protected_heap_Get_information(&_Workspace_Area, &info); \
-  } while(0)
-
-#else
-
-#define HEAP_CHECK()
-
-#endif
 
 #ifdef __rtems__
 #define T9P_WAKE_EVENT RTEMS_EVENT_31
@@ -2357,9 +2340,17 @@ _discard(struct t9p_context* c, struct TRcommon* com)
   char buf[256];
   ssize_t left = com->size;
   while (left > 0) {
-    size_t r = MIN(sizeof(buf), left);
-    if (c->trans.recv(c->conn, buf, r, 0) == -1)
-      return;
+    size_t r;
+  again:
+    r = MIN(sizeof(buf), left);
+    if (c->trans.recv(c->conn, buf, r, 0) == -1) {
+      /** If we hit EAGAIN, wait and retry. Not optimal, but this is a rather rare
+        * edge case. */
+      if (errno == EAGAIN) {
+        usleep(500);
+        goto again;
+      }
+    }
     left -= r;
   }
 }
@@ -2613,9 +2604,19 @@ _t9p_thread_proc(void* param)
 
           /** Discard the rest */
           while (rem > 0) {
-            ssize_t r = c->trans.recv(c->conn, buf, MIN(sizeof(buf), rem), 0);
-            if (r <= 0)
+            ssize_t r;
+            int tries = 5;
+          again:
+            r = c->trans.recv(c->conn, buf, MIN(sizeof(buf), rem), 0);
+            if (r <= 0) {
+              /** If we hit EAGAIN, wait and retry. Not optimal, but this is a rather rare
+                * edge case. */
+              if (r < 0 && errno == EAGAIN && tries-- > 0) {
+                usleep(500);
+                goto again;
+              }
               break;
+            }
             rem -= r;
           }
 
@@ -2632,8 +2633,6 @@ _t9p_thread_proc(void* param)
       tr_signal(n);
       continue;
     }
-
-    HEAP_CHECK();
 
     mutex_unlock(c->socket_lock);
 
