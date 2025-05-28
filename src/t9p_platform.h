@@ -18,6 +18,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __rtems__
+#include <rtems.h>
+#endif
+
 #define T9P_TARGET_POSIX 0
 #define T9P_TARGET_RTEMS4 1
 
@@ -25,33 +29,67 @@
 #ifdef __linux__
 #define T9P_TARGET T9P_TARGET_POSIX
 #elif defined(__rtems__)
-#define T9P_TARGETT9P_TARGET_RTEMS4
+#define T9P_TARGET T9P_TARGET_RTEMS4
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
 
+/**
+ * NOTE: The Coldfire ISA-A does not support atomic instructions. Instead, we
+ * either skip any form of synchronization (i.e. for load32, since it is
+ * inherently atomic) or we just disable interrupts and do our business.
+ */
+
 static inline uint32_t
 atomic_load32(uint32_t* p)
 {
+#if __mcoldfire__ == 1
+  return *p;
+#else
   return __atomic_load_n(p, __ATOMIC_SEQ_CST);
+#endif
 }
 
 static inline void
 atomic_store32(uint32_t* p, uint32_t val)
 {
+#if __mcoldfire__ == 1
+  *p = val;
+#else
   __atomic_store_n(p, val, __ATOMIC_SEQ_CST);
+#endif
 }
 
 static inline int
 atomic_compare_exchange32(uint32_t* p, uint32_t expected, uint32_t newval)
 {
+#if __mcoldfire__ == 1
+  rtems_interrupt_level l;
+  int r = 0;
+  rtems_interrupt_disable(l);
+  if (*p == expected)
+    r = 1, *p = newval;
+  rtems_interrupt_enable(l);
+  return r;
+#else
   return __atomic_compare_exchange(p, &expected, &newval, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);
+#endif
 }
 
 static inline uint32_t
 atomic_add32(uint32_t* p, uint32_t v)
 {
+#if __mcoldfire__ == 1
+  uint32_t r;
+  rtems_interrupt_level l;
+  rtems_interrupt_disable(l);
+  (*p) += v;
+  r = *p;
+  rtems_interrupt_enable(l);
+  return r;
+#else
   return __atomic_add_fetch(p, v, __ATOMIC_SEQ_CST);
+#endif
 }
 
 #endif
