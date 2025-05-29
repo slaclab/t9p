@@ -2396,12 +2396,14 @@ _config_rtems_socket(int sock)
 #endif
 }
 
+#define SLEEP_DURATION_MS 1
+
 static rtems_interval
 _get_wait_duration(void)
 {
   static rtems_interval rti = 0; 
   if (rti == 0)
-    rti = rtems_clock_get_ticks_per_second() / 1000;
+    rti = (rtems_clock_get_ticks_per_second() * 1000LL * SLEEP_DURATION_MS) / 1000000LL;
   if (rti == 0)
     rti = 1;
   return rti;

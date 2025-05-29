@@ -24,6 +24,7 @@ typedef enum t9p_rtems_trans
   T9P_RTEMS_TRANS_TCP = 0,
 } t9p_rtems_trans_t;
 
+/** For use with ioctl on a 9P mount or fd. Portable way to query info. */
 typedef enum t9p_rtems_ioctl
 {
   T9P_RTEMS_IOCTL_GET_LOG_LEVEL = 0,/** int */
