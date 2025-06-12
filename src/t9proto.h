@@ -21,6 +21,8 @@
 #if defined(__GNUC__) || defined(__clang__)
 #undef T9P_PACKED
 #define T9P_PACKED __attribute__((packed))
+#undef T9P_NODISCARD
+#define T9P_NODISCARD __attribute__((__warn_unused_result__))
 #else
 #error Unsupported compiler
 #endif
@@ -116,7 +118,7 @@ typedef struct T9P_PACKED qid_s
 
 struct T9P_PACKED TRcommon{T9P_COMMON_FIELDS};
 
-int decode_TRcommon(struct TRcommon* com, const void* buf, size_t len);
+T9P_NODISCARD int decode_TRcommon(struct TRcommon* com, const void* buf, size_t len);
 
 struct T9P_PACKED Tversion
 {
@@ -126,7 +128,7 @@ struct T9P_PACKED Tversion
   uint8_t version[];
 };
 
-int encode_Tversion(
+T9P_NODISCARD int encode_Tversion(
   void* pout, size_t outsize, uint16_t tag, uint32_t msize, uint16_t version_len,
   const uint8_t* version
 );
@@ -139,7 +141,7 @@ struct T9P_PACKED Rversion
   uint8_t version[];
 };
 
-int decode_Rversion(struct Rversion** out, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rversion(struct Rversion** out, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tauth
 {
@@ -170,7 +172,7 @@ struct T9P_PACKED Rlerror
   uint32_t ecode;
 };
 
-int decode_Rlerror(struct Rlerror* rl, const void* buf, size_t len);
+T9P_NODISCARD int decode_Rlerror(struct Rlerror* rl, const void* buf, size_t len);
 
 struct T9P_PACKED Tflush
 {
@@ -192,7 +194,7 @@ struct T9P_PACKED Tattach
   /* uint32_t uid */
 };
 
-int encode_Tattach(
+T9P_NODISCARD int encode_Tattach(
   void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint32_t afid, uint16_t uname_len,
   const uint8_t* uname, uint16_t aname_len, const uint8_t* aname, uint32_t uid
 );
@@ -203,7 +205,7 @@ struct T9P_PACKED Rattach
   qid_t qid;
 };
 
-int decode_Rattach(struct Rattach* out, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rattach(struct Rattach* out, const void* buf, size_t buflen);
 
 struct T9P_PACKED Topen
 {
@@ -226,7 +228,7 @@ struct T9P_PACKED Tlopen
   uint32_t flags;
 };
 
-int encode_Tlopen(void* buf, size_t outusize, uint16_t tag, uint32_t fid, uint32_t flags);
+T9P_NODISCARD int encode_Tlopen(void* buf, size_t outusize, uint16_t tag, uint32_t fid, uint32_t flags);
 
 struct T9P_PACKED Rlopen
 {
@@ -235,7 +237,7 @@ struct T9P_PACKED Rlopen
   uint32_t iounit;
 };
 
-int decode_Rlopen(struct Rlopen* out, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rlopen(struct Rlopen* out, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tcreate
 {
@@ -262,7 +264,7 @@ struct T9P_PACKED Tread
   uint32_t count;
 };
 
-int encode_Tread(
+T9P_NODISCARD int encode_Tread(
   void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count
 );
 
@@ -273,7 +275,7 @@ struct T9P_PACKED Rread
   uint8_t data[];
 };
 
-int decode_Rread(struct Rread* out, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rread(struct Rread* out, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tclunk
 {
@@ -281,7 +283,7 @@ struct T9P_PACKED Tclunk
   uint32_t fid;
 };
 
-int encode_Tclunk(void* buf, size_t outsize, uint16_t tag, uint32_t fid);
+T9P_NODISCARD int encode_Tclunk(void* buf, size_t outsize, uint16_t tag, uint32_t fid);
 
 struct T9P_PACKED Rclunk{T9P_COMMON_FIELDS};
 
@@ -291,7 +293,7 @@ struct T9P_PACKED Tremove
   uint32_t fid;
 };
 
-int encode_Tremove(void* buf, size_t outsize, uint16_t tag, uint32_t fid);
+T9P_NODISCARD int encode_Tremove(void* buf, size_t outsize, uint16_t tag, uint32_t fid);
 
 struct T9P_PACKED Rremove{T9P_COMMON_FIELDS};
 
@@ -301,7 +303,7 @@ struct T9P_PACKED Tstat
   uint32_t fid;
 };
 
-int encode_Tstat(void* buf, size_t bufsize, uint16_t tag, uint32_t fid);
+T9P_NODISCARD int encode_Tstat(void* buf, size_t bufsize, uint16_t tag, uint32_t fid);
 
 struct T9P_PACKED Rstat
 {
@@ -329,7 +331,7 @@ struct T9P_PACKED Twalk
   /*nwname*(wname[s])*/
 };
 
-int encode_Twalk(
+T9P_NODISCARD int encode_Twalk(
   void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint32_t newfid, uint16_t nwnamecount,
   const char* const* names
 );
@@ -341,7 +343,7 @@ struct T9P_PACKED Rwalk
   /*nwqid*(qid[13])*/
 };
 
-int decode_Rwalk(struct Rwalk* rw, const void* buf, size_t outsize, qid_t** outqids);
+T9P_NODISCARD int decode_Rwalk(struct Rwalk* rw, const void* buf, size_t outsize, qid_t** outqids);
 
 struct T9P_PACKED Tgetattr
 {
@@ -350,7 +352,7 @@ struct T9P_PACKED Tgetattr
   uint64_t request_mask;
 };
 
-int encode_Tgetattr(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t request_mask);
+T9P_NODISCARD int encode_Tgetattr(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t request_mask);
 
 struct T9P_PACKED Rgetattr
 {
@@ -377,7 +379,7 @@ struct T9P_PACKED Rgetattr
   uint64_t data_version;
 };
 
-int decode_Rgetattr(struct Rgetattr* attr, const void* buf, size_t bufsize);
+T9P_NODISCARD int decode_Rgetattr(struct Rgetattr* attr, const void* buf, size_t bufsize);
 
 struct T9P_PACKED Twrite
 {
@@ -389,7 +391,7 @@ struct T9P_PACKED Twrite
 };
 
 /** Encodes the start of a Twrite message. Does not encode the data part */
-int encode_Twrite(
+T9P_NODISCARD int encode_Twrite(
   void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count
 );
 
@@ -399,7 +401,7 @@ struct T9P_PACKED Rwrite
   uint32_t count;
 };
 
-int decode_Rwrite(struct Rwrite* out, const void* buf, size_t len);
+T9P_NODISCARD int decode_Rwrite(struct Rwrite* out, const void* buf, size_t len);
 
 struct T9P_PACKED Tstatfs
 {
@@ -407,7 +409,7 @@ struct T9P_PACKED Tstatfs
   uint32_t fid;
 };
 
-int encode_Tstatfs(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
+T9P_NODISCARD int encode_Tstatfs(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
 
 struct T9P_PACKED Rstatfs
 {
@@ -423,7 +425,7 @@ struct T9P_PACKED Rstatfs
   uint32_t namelen;
 };
 
-int decode_Rstatfs(struct Rstatfs* st, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rstatfs(struct Rstatfs* st, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tlcreate
 {
@@ -436,7 +438,7 @@ struct T9P_PACKED Tlcreate
   /*gid[4]*/
 };
 
-int encode_Tlcreate(
+T9P_NODISCARD int encode_Tlcreate(
   void* buf, size_t buflen, uint16_t tag, uint32_t fid, const char* name, uint32_t flags,
   uint32_t mode, uint32_t gid
 );
@@ -448,7 +450,7 @@ struct T9P_PACKED Rlcreate
   uint32_t iounit;
 };
 
-int decode_Rlcreate(struct Rlcreate* rl, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rlcreate(struct Rlcreate* rl, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tfsync
 {
@@ -457,11 +459,11 @@ struct T9P_PACKED Tfsync
   uint32_t datasync;
 };
 
-int encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t datasync);
+T9P_NODISCARD int encode_Tfsync(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t datasync);
 
 struct T9P_PACKED Rfsync{T9P_COMMON_FIELDS};
 
-int decode_Rfsync(struct Rfsync* rf, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rfsync(struct Rfsync* rf, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tmkdir
 {
@@ -472,7 +474,7 @@ struct T9P_PACKED Tmkdir
   /*uint32_t gid*/
 };
 
-int encode_Tmkdir(
+T9P_NODISCARD int encode_Tmkdir(
   void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name, uint32_t mode,
   uint32_t gid
 );
@@ -483,7 +485,7 @@ struct T9P_PACKED Rmkdir
   qid_t qid;
 };
 
-int decode_Rmkdir(struct Rmkdir* rm, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rmkdir(struct Rmkdir* rm, const void* buf, size_t buflen);
 
 struct T9P_PACKED Treadlink
 {
@@ -491,7 +493,7 @@ struct T9P_PACKED Treadlink
   uint32_t fid;
 };
 
-int encode_Treadlink(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
+T9P_NODISCARD int encode_Treadlink(void* buf, size_t buflen, uint16_t tag, uint32_t fid);
 
 struct T9P_PACKED Rreadlink
 {
@@ -502,11 +504,11 @@ struct T9P_PACKED Rreadlink
 #endif
 };
 
-int decode_Rreadlink(
+T9P_NODISCARD int decode_Rreadlink(
   struct Rreadlink* rl, char* linkPath, size_t linkPathSize, const void* buf, size_t buflen
 );
 
-int encode_Tsymlink(
+T9P_NODISCARD int encode_Tsymlink(
   void* buf, size_t buflen, uint16_t tag, uint32_t fid, const char* dst, const char* src,
   uint32_t gid
 );
@@ -517,7 +519,7 @@ struct T9P_PACKED Rsymlink
   qid_t qid;
 };
 
-int decode_Rsymlink(struct Rsymlink* rs, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rsymlink(struct Rsymlink* rs, const void* buf, size_t buflen);
 
 struct T9P_PACKED Treaddir
 {
@@ -527,7 +529,7 @@ struct T9P_PACKED Treaddir
   uint32_t count;
 };
 
-int encode_Treaddir(
+T9P_NODISCARD int encode_Treaddir(
   void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count
 );
 
@@ -552,7 +554,7 @@ struct T9P_PACKED Rreaddir
  * Unlike other encode/decode functions, this one uses a callback pattern to avoid unnecessary
  * memory allocations.
  */
-int decode_Rreaddir(
+ T9P_NODISCARD int decode_Rreaddir(
   struct Rreaddir* rd, const void* buf, size_t buflen,
   void (*parse_dir_callback)(void*, struct Rreaddir_dir, const char*), void* param
 );
@@ -566,13 +568,13 @@ struct T9P_PACKED Tunlinkat
   /*uint32_t flags*/ /* Why is this after the name? Really? */
 };
 
-int encode_Tunlinkat(
+T9P_NODISCARD int encode_Tunlinkat(
   void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name, uint32_t flags
 );
 
 struct T9P_PACKED Runlinkat{T9P_COMMON_FIELDS};
 
-int decode_Runlinkat(struct Runlinkat* ru, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Runlinkat(struct Runlinkat* ru, const void* buf, size_t buflen);
 
 struct T9P_PACKED Trenameat
 {
@@ -584,14 +586,14 @@ struct T9P_PACKED Trenameat
   /*newname[s]*/
 };
 
-int encode_Trenameat(
+T9P_NODISCARD int encode_Trenameat(
   void* buf, size_t buflen, uint16_t tag, uint32_t olddirfd, const char* oldname, uint32_t newdirfd,
   const char* newname
 );
 
 struct T9P_PACKED Rrenameat{T9P_COMMON_FIELDS};
 
-int decode_Rrenameat(struct Rrenameat* ra, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rrenameat(struct Rrenameat* ra, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tsetattr
 {
@@ -608,14 +610,14 @@ struct T9P_PACKED Tsetattr
   uint64_t mtime_nsec;
 };
 
-int encode_Tsetattr(
+T9P_NODISCARD int encode_Tsetattr(
   void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t valid,
   const struct t9p_setattr* attr
 );
 
 struct T9P_PACKED Rsetattr{T9P_COMMON_FIELDS};
 
-int decode_Rsetattr(struct Rsetattr* rs, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rsetattr(struct Rsetattr* rs, const void* buf, size_t buflen);
 
 struct T9P_PACKED Tlink
 {
@@ -626,7 +628,7 @@ struct T9P_PACKED Tlink
   char name[];
 };
 
-int encode_Tlink(void* buf, size_t buflen, uint16_t tag, uint32_t dfid,
+T9P_NODISCARD int encode_Tlink(void* buf, size_t buflen, uint16_t tag, uint32_t dfid,
   uint32_t fid, const char* name);
 
 struct Rlink
@@ -634,7 +636,7 @@ struct Rlink
   T9P_COMMON_FIELDS
 };
 
-int decode_Rlink(struct Rlink* rl, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rlink(struct Rlink* rl, const void* buf, size_t buflen);
 
 struct T9P_PACKED Trename
 {
@@ -645,7 +647,7 @@ struct T9P_PACKED Trename
   char name[];
 };
 
-int encode_Trename(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t dfid,
+T9P_NODISCARD int encode_Trename(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t dfid,
   const char* name);
 
 struct T9P_PACKED Rrename
@@ -653,9 +655,9 @@ struct T9P_PACKED Rrename
   T9P_COMMON_FIELDS
 };
 
-int decode_Rrename(struct Rrename* rn, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rrename(struct Rrename* rn, const void* buf, size_t buflen);
 
-int encode_Tmknod(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name,
+T9P_NODISCARD int encode_Tmknod(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name,
   uint32_t mode, uint32_t majopr, uint32_t minor, uint32_t gid);
 
 struct T9P_PACKED Rmknod
@@ -664,4 +666,4 @@ struct T9P_PACKED Rmknod
   qid_t qid;
 };
 
-int decode_Rmknod(struct Rmknod* rm, const void* buf, size_t buflen);
+T9P_NODISCARD int decode_Rmknod(struct Rmknod* rm, const void* buf, size_t buflen);

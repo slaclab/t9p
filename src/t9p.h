@@ -289,7 +289,7 @@ void t9p_opts_init(struct t9p_opts* opts);
  * \param mntpoint Mount point
  * \returns Context pointer, or NULL if there was an error during connection
  */
-t9p_context_t* t9p_init(
+T9P_NODISCARD t9p_context_t* t9p_init(
   t9p_transport_t* transport, const t9p_opts_t* opts, const char* apath, const char* addr,
   const char* mntpoint
 );
@@ -309,7 +309,7 @@ void t9p_shutdown(t9p_context_t* context);
  * \param path Path of the object, relative to the parent.
  * \returns New handle, or NULL if failed
  */
-t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path);
+T9P_NODISCARD t9p_handle_t t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path);
 
 /**
  * \brief Closes a handle
@@ -489,7 +489,7 @@ typedef struct t9p_scandir_ctx {
  *   of sizeof(dirent).
  * \returns < 0 on error, on success returns the number of bytes written into buffer
  */
-ssize_t t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
+T9P_NODISCARD ssize_t t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
   void* buffer, size_t bufsize);
 
 
