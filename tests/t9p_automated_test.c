@@ -28,13 +28,13 @@
 #else
 #include <rtems.h>
 #include <rtems/system.h>
+#include <rtems/libcsupport.h>
+#endif
+
 #include <rtems/score/heap.h>
 #include <rtems/score/wkspace.h>
 #include <rtems/score/apimutex.h>
 #include <rtems/score/protectedheap.h>
-#include <rtems/libcsupport.h>
-#include <rtems.h>
-#endif
 
 #include "../src/t9p_platform.h"
 

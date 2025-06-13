@@ -34,6 +34,15 @@
 
 #if defined(__GNUC__) || defined(__clang__)
 
+#define CC_MFENCE asm volatile ("" : : : "memory")
+
+#ifdef __powerpc__
+#define MFENCE_REL asm volatile ("lwsync" : : : "memory")
+#elif defined(__i386__)
+#define MFENCE_REL asm volatile ("mfence" : : : "memory") /* not really needed on x86... */
+#else
+#define MFENCE_REL asm volatile ("" : : : "memory")
+#endif
 /**
  * NOTE: The Coldfire ISA-A does not support atomic instructions. Instead, we
  * either skip any form of synchronization (i.e. for load32, since it is
@@ -41,7 +50,7 @@
  */
 
 static inline uint32_t
-atomic_load32(uint32_t* p)
+atomic_load_u32(uint32_t* p)
 {
 #if __mcoldfire__ == 1
   return *p;
@@ -51,7 +60,7 @@ atomic_load32(uint32_t* p)
 }
 
 static inline void
-atomic_store32(uint32_t* p, uint32_t val)
+atomic_store_u32(uint32_t* p, uint32_t val)
 {
 #if __mcoldfire__ == 1
   *p = val;
@@ -61,7 +70,7 @@ atomic_store32(uint32_t* p, uint32_t val)
 }
 
 static inline int
-atomic_compare_exchange32(uint32_t* p, uint32_t expected, uint32_t newval)
+atomic_compare_exchange_u32(uint32_t* p, uint32_t expected, uint32_t newval)
 {
 #if __mcoldfire__ == 1
   rtems_interrupt_level l;
@@ -77,7 +86,7 @@ atomic_compare_exchange32(uint32_t* p, uint32_t expected, uint32_t newval)
 }
 
 static inline uint32_t
-atomic_add32(uint32_t* p, uint32_t v)
+atomic_add_u32(uint32_t* p, uint32_t v)
 {
 #if __mcoldfire__ == 1
   uint32_t r;
@@ -89,6 +98,22 @@ atomic_add32(uint32_t* p, uint32_t v)
   return r;
 #else
   return __atomic_add_fetch(p, v, __ATOMIC_SEQ_CST);
+#endif
+}
+
+static inline uint32_t
+atomic_sub_u32(uint32_t* p, uint32_t v)
+{
+#if __mcoldfire__ == 1
+  uint32_t r;
+  rtems_interrupt_level l;
+  rtems_interrupt_disable(l);
+  (*p) -= v;
+  r = *p;
+  rtems_interrupt_enable(l);
+  return r;
+#else
+  return __atomic_sub_fetch(p, v, __ATOMIC_SEQ_CST);
 #endif
 }
 

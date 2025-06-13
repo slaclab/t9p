@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <dirent.h>
+#include <stdbool.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -139,6 +140,9 @@ struct t9p_context
   
   struct t9p_stats stats;
 
+  uint32_t serial;            /**< Serial number of the context. Must match fid, otherwise triggers recovery */
+  bool broken;                /**< Indicates if the pipe was broken or not */
+  
 #ifdef __rtems__
   rtems_id rtems_thr_ident;   /**< Used to wake the I/O thread when more data is ready */
 #endif
@@ -148,12 +152,22 @@ struct t9p_context
 #define T9P_HANDLE_QID_VALID 0x2
 #define T9P_HANDLE_FID_VALID 0x4
 
-/** 24 bytes; let's keep it close to that.
-  * DEFAULT_MAX_FILES = 256, so we allocate 6144 bytes on context create */
+struct t9p_string
+{
+  uint32_t rc;
+  uint16_t len;
+  char string[];
+};
+
+/** 32 bytes; let's keep it close to that.
+  * DEFAULT_MAX_FILES = 256, so we allocate 8192 bytes on context create */
 struct t9p_handle
 {
+  struct t9p_string* str; /**< Path of the file */
   int32_t fid;         /**< Also the index into the fh table in t9p_context */
+  uint32_t serial;     /**< Serial number. Must match context. Used for recovery */
   uint32_t iounit;     /**< Returned by Rlopen after the file is opened */
+  uint32_t obits;      /**< Flags used to open the file. used for recovery */
   uint16_t valid_mask; /**< Determines what is and isn't valid */
   qid_t qid;           /**< qid of this object. Only valid if valid_mask says so */
 };
@@ -179,10 +193,20 @@ static int _clunk_sync(struct t9p_context* c, int fid);
 static int _can_rw_fid(t9p_handle_t h, int write);
 static const char* _t9p_strerror(int e);
 
+/** String methods */
+T9P_NODISCARD static struct t9p_string* _string_release(struct t9p_string* str);
+static void _string_acquire(struct t9p_string* str);
+T9P_NODISCARD static struct t9p_string* _string_new_path(const char* dname, const char* fname);
+T9P_NODISCARD static struct t9p_string* _string_copy(struct t9p_string* str);
+
 /** t9p_context 'methods' */
-static struct t9p_handle_node* _alloc_handle(struct t9p_context* c);
+T9P_NODISCARD static struct t9p_handle_node* _alloc_handle(struct t9p_context* c,
+  t9p_handle_t parent, const char* fname);
+T9P_NODISCARD static struct t9p_handle_node* _copy_handle(struct t9p_context* c, t9p_handle_t h);
 static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h);
 static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h);
+static int _maybe_recover(struct t9p_context* c, t9p_handle_t h);
+static struct t9p_handle_node* _handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 
 static void* _t9p_thread_proc(void* param);
 
@@ -604,7 +628,7 @@ _attach_root(struct t9p_context* c)
   uint16_t tag = 0;
   uint32_t uid = *c->opts.user ? T9P_NOUID : c->opts.uid;
 
-  struct t9p_handle_node* h = _alloc_handle(c);
+  struct t9p_handle_node* h = c->root ? c->root : _alloc_handle(c, NULL, c->apath);
   if (!h) {
     ERROR(c, "Rattach failed: unable to allocate handle\n");
     goto error;
@@ -691,6 +715,63 @@ _clunk_sync(struct t9p_context* c, int fid)
   return 0;
 }
 
+/**
+ * Releases the string, decrementing the ref count.
+ * If the ref count is 0 after decrementing, the string is destroyed
+ * and this function returns NULL. Otherwise, it returns the parameter
+ * you passed in.
+ */
+T9P_NODISCARD static struct t9p_string*
+_string_release(struct t9p_string* str)
+{
+  uint32_t r = atomic_sub_u32(&str->rc,1);
+  if (r == 0) {
+    free(str);
+    return NULL;
+  }
+  /** we've likely underflowed and this is a bug! */
+  else if (r == UINT32_MAX) {
+    assert(0);
+  }
+  return str;
+}
+
+static void
+_string_acquire(struct t9p_string* str)
+{
+  atomic_add_u32(&str->rc, 1);
+}
+
+/**
+ * Allocate new ref counted string
+ * Always starts with a rc of 1, do not addref to this!
+ */
+T9P_NODISCARD static struct t9p_string*
+_string_new_path(const char* dname, const char* fname)
+{
+  const size_t dl = strlen(dname);
+  const size_t fl = strlen(fname);
+  
+  const size_t tl = dl + fl + 2; /* +1 for NUL, +1 for path sep */
+  struct t9p_string* s = calloc(sizeof(struct t9p_string) + tl, 1);
+  s->len = tl;
+  s->rc = 1; /* always start with 1 ref */
+  strNcpy(s->string, dname, dl+1);
+  s->string[dl] = '/';
+  strNcpy(s->string + dl + 1, fname, fl+1);
+  return s;
+}
+
+/**
+ * "copies" the string. Just increments refcount and returns it.
+ */
+T9P_NODISCARD static struct t9p_string*
+_string_copy(struct t9p_string* str)
+{
+  _string_acquire(str);
+  return str;
+}
+
 /********************************************************************/
 /*                                                                  */
 /*                      P U B L I C    A P I                        */
@@ -751,13 +832,11 @@ t9p_init(
   c->fhl_max = opts->max_fids;
   c->fhl_count = 0;
   c->fhl_free = NULL;
-  struct t9p_handle_node* prev = NULL;
   for (int i = 0; i < c->fhl_max; ++i) {
     struct t9p_handle_node* n = &c->fhl[i];
     n->next = c->fhl_free;
     n->h.fid = i;
     c->fhl_free = n;
-    prev = c->fhl_free;
   }
 
   if (!(c->fhl_mutex = mutex_create())) {
@@ -848,12 +927,13 @@ t9p_shutdown(t9p_context_t* c)
   free(c);
 }
 
-t9p_handle_t
-t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
+int
+t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path, t9p_handle_t myhandle, t9p_handle_t* outhandle)
 {
   TRACE(c, "t9p_open_handle(p=%p,path=%s)\n", parent, path);
   char p[T9P_PATH_MAX];
   strNcpy(p, path, sizeof(p));
+  *outhandle = NULL;
 
   /** Default parent is the root handle */
   if (!parent)
@@ -875,13 +955,15 @@ t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n) {
     ERROR(c, "%s: out of nodes\n", __FUNCTION__);
-    return NULL;
+    return -ENOMEM;
   }
 
-  struct t9p_handle_node* fh = _alloc_handle(c);
+  struct t9p_handle_node* fh = myhandle ? _handle_by_fid(c, myhandle)
+    : _alloc_handle(c, parent, path);
+  
   if (!fh) {
     ERROR(c, "%s: out of handles\n", __FUNCTION__);
-    return NULL;
+    return -ENOMEM;
   }
 
   char packet[1024];
@@ -910,7 +992,7 @@ t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
 
   struct Rwalk rw;
   qid_t* qids = NULL;
-  if (decode_Rwalk(&rw, packet, l, &qids) < 0) {
+  if ((l = decode_Rwalk(&rw, packet, l, &qids)) < 0) {
     ERROR(c, "%s: Rwalk decode failed\n", __FUNCTION__);
     goto error;
   }
@@ -931,10 +1013,24 @@ t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
   fh->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
   free(qids);
 
-  return &fh->h;
+  *outhandle = &fh->h;
+  return 0;
 error:
-  _release_handle(c, fh);
-  return NULL;
+  if (!myhandle) /* only release handles we create */
+    _release_handle(c, fh);
+  return -l;
+}
+
+t9p_handle_t
+t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
+{
+  if (_maybe_recover(c, parent) < 0)
+    return NULL;
+
+  t9p_handle_t h;
+  if (t9p_open_handle_internal(c, parent, path, NULL, &h) < 0)
+    return NULL;
+  return h;
 }
 
 void
@@ -970,7 +1066,7 @@ t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t afid, t9p_handle_t*
   if (!n)
     return -ENOMEM;
 
-  struct t9p_handle_node* h = _alloc_handle(c);
+  struct t9p_handle_node* h = _alloc_handle(c, afid, apath);
   if (!h) {
     tr_release(&c->trans_pool, n);
     return -ENOMEM;
@@ -1018,6 +1114,9 @@ int
 t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
 {
   TRACE(c, "t9p_open(c=%p,h=%p,mode=0x%X)\n", c, h, (unsigned)mode);
+  if (_maybe_recover(c, h) < 0)
+    return -EBADF;
+
   char packet[128];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1053,6 +1152,7 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
   h->qid = rl.qid;
   h->valid_mask |= T9P_HANDLE_QID_VALID;
   h->iounit = rl.iounit;
+  h->obits = mode;
   /** If the server is telling us 'whatever', iounit becomes a derivative of msize.
     * We cannot exceed msize even if iounit is 0. */
   if (h->iounit == 0) {
@@ -1072,6 +1172,9 @@ ssize_t
 t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
 {
   TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, (unsigned)num, outbuffer);
+  if (_maybe_recover(c, h) < 0)
+    return -EBADF;
+
   char packet[128];
   char rheader[sizeof(struct Rread)];
   int status = 0;
@@ -1123,6 +1226,9 @@ ssize_t
 t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
 {
   TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, (unsigned)num, inbuffer);
+  if (_maybe_recover(c, h) < 0)
+    return -EBADF;
+
   char packet[128];
 
   if (!_can_rw_fid(h, 1))
@@ -1170,6 +1276,9 @@ t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t
   char packet[256];
 
   if (!t9p_is_valid(h))
+    return -EBADF;
+
+  if (_maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1233,6 +1342,10 @@ t9p_create(
 {
   TRACE(c, "t9p_create(parent=%p,nh=%p,name=%s,mode=0x%X,gid=%d,flags=0x%X)\n", parent, newhandle,
     name, (unsigned)mode, (unsigned)gid, (unsigned)flags);
+
+  if (_maybe_recover(c, parent) < 0)
+    return -EBADF;
+
   char packet[512];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1261,7 +1374,11 @@ t9p_create(
   }
 
   struct trans tr = {
-    .data = packet, .size = l, .rdata = packet, .rsize = sizeof(packet), .rtype = T9P_TYPE_Rlcreate
+    .data = packet,
+    .size = l,
+    .rdata = packet,
+    .rsize = sizeof(packet),
+    .rtype = T9P_TYPE_Rlcreate
   };
 
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
@@ -1313,7 +1430,10 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
   if (!t9p_is_valid(todup))
     return -EBADF;
 
-  struct t9p_handle_node* h = _alloc_handle(c);
+  if (_maybe_recover(c, todup) < 0)
+    return -EBADF;
+
+  struct t9p_handle_node* h = _copy_handle(c, todup);
   if (!h) {
     ERROR(c, "%s: unable to alloc new handle\n", __FUNCTION__);
     return -ENOMEM;
@@ -1368,6 +1488,8 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
   char packet[128];
   if (!t9p_is_valid(h))
     return -EBADF;
+  if (_maybe_recover(c, h) < 0)
+    return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
@@ -1416,6 +1538,8 @@ t9p_fsync(t9p_context_t* c, t9p_handle_t file, uint32_t datasync)
 {
   TRACE(c, "t9p_fsync(h=%p)\n", file);
   char packet[128];
+  if (!t9p_is_valid(file) || _maybe_recover(c, file) < 0)
+    return -EBADF;
   if (!t9p_is_open(file))
     return -EBADF;
 
@@ -1450,9 +1574,13 @@ t9p_mkdir(
 {
   TRACE(c, "t9p_mkdir(p=%p,name=%s,mode=0x%X,gid=%d)\n", parent, name, (unsigned)mode, 
     (unsigned)gid);
+
   char packet[512];
+
   if (!t9p_is_valid(parent))
-    return -1;
+    return -EBADF;
+  if (_maybe_recover(c, parent) < 0)
+    return -EBADF;
 
   if (gid == T9P_NOGID) {
     gid = c->opts.gid;
@@ -1500,7 +1628,10 @@ t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs)
   TRACE(c, "t9p_statfs(h=%p,st=%p)\n", h, statfs);
   char packet[256];
   int l;
+
   if (!t9p_is_valid(h))
+    return -EBADF;
+  if (_maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1551,7 +1682,10 @@ t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize
   TRACE(c, "t9p_readlink(h=%p,op=%p,os=%zu)\n", h, outPath, outPathSize);
   char packet[512];
   int l;
+
   if (!t9p_is_valid(h))
+    return -EBADF;
+  if (_maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1594,8 +1728,12 @@ t9p_symlink(
   TRACE(c, "t9p_symlink(d=%p,dst=%s,src=%s,gid=%d,oqid=%p)\n", dir, dst, src, (unsigned)gid, oqid);
   char packet[768];
   int l;
+
   if (!t9p_is_valid(dir))
     dir = t9p_get_root(c);
+
+  if (_maybe_recover(c, dir) < 0)
+    return -EBADF;
 
   if (gid == T9P_NOGID)
     gid = c->opts.gid;
@@ -1679,6 +1817,9 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
 
   /** fid must be valid AND open */
   if (!t9p_is_valid(dir) || !t9p_is_open(dir))
+    return -EBADF;
+
+  if (_maybe_recover(c, dir) < 0)
     return -EBADF;
 
   /** Only work on dirs.. */
@@ -1806,6 +1947,9 @@ t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
   if (!t9p_is_valid(dir) || !t9p_is_open(dir))
     return -EBADF;
 
+  if (_maybe_recover(c, dir) < 0)
+    return -EBADF;
+
   /** Only work on dirs.. */
   if (!(dir->qid.type & T9P_QID_DIR))
     return -ENOTDIR;
@@ -1879,6 +2023,9 @@ t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t flag
   if (!t9p_is_valid(dir))
     return -EBADF;
 
+  if (_maybe_recover(c, dir) < 0)
+    return -EBADF;
+
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
     return -ENOMEM;
@@ -1921,6 +2068,9 @@ t9p_renameat(
   ssize_t l;
 
   if (!t9p_is_valid(olddirfid) || !t9p_is_valid(newdirfid))
+    return -EBADF;
+
+  if (_maybe_recover(c, olddirfid) < 0 || _maybe_recover(c, newdirfid) < 0)
     return -EBADF;
 
   if (!t9p_is_dir(olddirfid) || !t9p_is_dir(newdirfid))
@@ -1969,6 +2119,9 @@ t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_se
   if (!t9p_is_valid(h))
     return -EBADF;
 
+  if (_maybe_recover(c, h) < 0)
+    return -EBADF;
+
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
     return -ENOMEM;
@@ -2010,6 +2163,9 @@ t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newna
   if (!t9p_is_valid(dir) || !t9p_is_valid(h))
     return -EBADF;
 
+  if (_maybe_recover(c, dir) < 0 || _maybe_recover(c, h) < 0)
+    return -EBADF;
+
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
     return -ENOMEM;
@@ -2033,6 +2189,10 @@ t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newna
     return l;
   }
 
+  /* Update the file path for the node */
+  (void)_string_release(h->str);
+  h->str = _string_new_path(dir ? dir->str->string : "", newname);
+
   return 0;
 }
 
@@ -2044,7 +2204,10 @@ t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
 
   if (!t9p_is_valid(dir) || !t9p_is_valid(h))
     return -EBADF;
-  
+
+  if (_maybe_recover(c, dir) < 0 || _maybe_recover(c, h) < 0)
+    return -EBADF;
+
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
     return -ENOMEM;
@@ -2080,6 +2243,9 @@ t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, u
   if (!t9p_is_valid(dir))
     return -EBADF;
 
+  if (_maybe_recover(c, dir) < 0)
+    return -EBADF;
+
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
     return -ENOMEM;
@@ -2109,7 +2275,7 @@ int
 t9p_truncate(t9p_context_t* c, t9p_handle_t h, uint64_t size)
 {
   if (!t9p_is_file(h))
-    return -EBADF; /** FIXME: what error?? */
+    return -EBADF; /** FIXME: what error to use here?? */
 
   struct t9p_setattr sa = {
     .size = size,
@@ -2278,7 +2444,7 @@ t9p_get_opts(t9p_context_t* c)
 
 /** Alloc a new handle, locks fid table */
 static struct t9p_handle_node*
-_alloc_handle(struct t9p_context* c)
+_alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
 {
   mutex_lock(c->fhl_mutex);
   struct t9p_handle_node* n = c->fhl_free;
@@ -2293,7 +2459,27 @@ _alloc_handle(struct t9p_context* c)
   /** Mark used */
   n->h.valid_mask = T9P_HANDLE_ACTIVE;
 
+  bool is_parent_root = !parent || parent == &c->root->h;
+
+  /** If given a file name, associate it with the handle */
+  if (fname)
+    n->h.str = _string_new_path(is_parent_root ? "" : parent->str->string, fname);
+
   mutex_unlock(c->fhl_mutex);
+  return n;
+}
+
+/**
+ * Perform a 'copy' operation on the handle. Doesn't do much besides alloc
+ * a new handle and copy the string to it. Nothing else changes.
+ */
+static struct t9p_handle_node*
+_copy_handle(struct t9p_context* c, t9p_handle_t h)
+{
+  struct t9p_handle_node* n = _alloc_handle(c, NULL, NULL);
+  if (!n)
+    return NULL;
+  n->h.str = _string_copy(h->str);
   return n;
 }
 
@@ -2302,6 +2488,9 @@ static void
 _release_handle(struct t9p_context* c, struct t9p_handle_node* h)
 {
   mutex_lock(c->fhl_mutex);
+
+  /** Release the string */
+  h->h.str = _string_release(h->h.str);
 
   /** Clear data, but preserve fid */
   memset(&h->h.qid, 0, sizeof(h->h.qid));
@@ -2320,6 +2509,58 @@ static void
 _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h)
 {
   _release_handle(c, &c->fhl[h->fid]);
+}
+
+static struct t9p_handle_node*
+_handle_by_fid(struct t9p_context* c, t9p_handle_t h)
+{
+  return &c->fhl[h->fid];
+}
+
+/**
+ * Recovers a handle if its serial != context serial
+ */
+static int
+_maybe_recover(struct t9p_context* c, t9p_handle_t h)
+{
+  /* No recovery needed */
+  if (!h || c->serial == h->serial || &c->root->h == h)
+    return 0;
+
+  /* Also no recovery needed, just update serial to current value */
+  if (!(h->valid_mask & T9P_HANDLE_ACTIVE)) {
+    h->serial = c->serial;
+    return 0;
+  }
+
+  /* if the connection is still broken, we can't recover yet. But let's start to get our
+   * ducks in a row. Clear the valid flags */
+  h->valid_mask = T9P_HANDLE_ACTIVE;
+  if (c->broken)
+    return 0;
+
+  h->serial = c->serial;
+
+  int r;
+  t9p_handle_t unused;
+  if ((r = t9p_open_handle_internal(c, NULL, h->str->string, h, &unused)) < 0) {
+    ERROR(c, "_recover_handle_if_needed: Recovery of fid %d failed: %s\n", 
+      (int)h->fid, _t9p_strerror(r));
+    return -1;
+  }
+
+  /* Open again if it was open previously */
+  if (h->iounit) {
+    if ((r = t9p_open(c, h, h->obits)) < 0) {
+      ERROR(c, "_recover_handle_if_needed: Recovery of fid %d failed due to open error: %s\n",
+        (int)h->fid, _t9p_strerror(r));
+      /** FIXME: AAAAAA clunk the fid!!!! */
+    }
+  }
+
+  LOG(c, T9P_LOG_TRACE, "_recover_handle_if_needed: Successfully recovered fid %d\n", (int)h->fid);
+
+  return 0;
 }
 
 /** Can we read/write to a fid? */
@@ -2411,6 +2652,56 @@ _get_wait_duration(void)
 
 #endif
 
+/** Handle tasks when the connection is broken */
+static void
+_t9p_conn_broken(t9p_context_t* c)
+{
+  if (c->broken)
+    return; /* already handled the error case */
+
+  c->broken = 1;
+
+  /* Report broken only once */
+  ERROR(c, "t9p: Connection to %s broken, attempting to recover...\n", c->addr);
+}
+
+/**
+ * Called periodically to attempt a reconnect, if required
+ * Returns -1 for connect failure
+ */
+static int
+_t9p_try_reconnect(t9p_context_t* c)
+{
+  LOG(c, T9P_LOG_TRACE, "Attempting to re-establish connection with server...\n");
+  if (c->trans.reconnect(c->conn, c->addr) < 0)
+    return -1;
+
+  /* Attach to root again, requires we hold the socket lock */
+  if (_attach_root(c) < 0)
+    return -1;
+
+  LOG(c, T9P_LOG_TRACE, "Connection with server re-established!\n");
+  c->serial++;
+  MFENCE_REL;
+  c->broken = 0;
+  return 0;
+}
+
+/** TODO: we can probably devise some way of recovering these without timing 
+  * them out, but that's probably more work than it's worth. Losing connection
+  * to the 9P server is an exceptionally rare case, especially since we have
+  * reliable transport with TCP */
+static void
+_t9p_timeout_all(struct trans_node** nodes, size_t num)
+{
+  for (int i = 0; i < num; ++i) {
+    if (!nodes[i]) continue;
+    nodes[i]->tr.status = -ETIMEDOUT;
+    tr_signal(nodes[i]);
+    nodes[i] = NULL;
+  }
+}
+
 static void*
 _t9p_thread_proc(void* param)
 {
@@ -2428,10 +2719,28 @@ _t9p_thread_proc(void* param)
   }
 #endif
 
+#ifdef __linux__
+#endif
+
   while (c->thr_run) {
     struct trans_node* node = NULL;
     size_t size = sizeof(node);
     ssize_t l, nread;
+
+    /* Timeout all active nodes if we lost connection */
+    if (c->broken)
+      _t9p_timeout_all(requests, MAX_TAGS);
+
+    /* Attempt a reconnect every 5 seconds */
+    while (c->broken) {
+      mutex_lock(c->socket_lock);
+      if (_t9p_try_reconnect(c) == 0) {
+        mutex_unlock(c->socket_lock);
+        break;
+      }
+      mutex_unlock(c->socket_lock);
+      sleep(1);
+    }
 
     mutex_lock(c->socket_lock);
 
@@ -2467,27 +2776,30 @@ _t9p_thread_proc(void* param)
 
       /** FIXME: This is pretty ugly and may cause issues in the future */
       if (node->tr.hdata)
-        atomic_add32(&c->stats.msg_counts[((struct TRcommon*)node->tr.hdata)->type], 1);
+      atomic_add_u32(&c->stats.msg_counts[((struct TRcommon*)node->tr.hdata)->type], 1);
       else if (node->tr.data)
-        atomic_add32(&c->stats.msg_counts[((struct TRcommon*)node->tr.data)->type], 1);
+      atomic_add_u32(&c->stats.msg_counts[((struct TRcommon*)node->tr.data)->type], 1);
 
-      atomic_add32(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
-      atomic_add32(&c->stats.send_cnt, 1);
+      atomic_add_u32(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
+      atomic_add_u32(&c->stats.send_cnt, 1);
 
       /** Send any header data first */
       if (node->tr.hdata && (l = c->trans.send(c->conn, node->tr.hdata, node->tr.hsize, 0)) < 0) {
-        atomic_add32(&c->stats.send_errs, 1);
-        if (errno == EAGAIN) {
+        atomic_add_u32(&c->stats.send_errs, 1);
+        if (l == -EAGAIN) {
           continue; /** Just try again next iteration */
         }
-        ERROR(c, "send: Failed to send header data: %s\n", _t9p_strerror(errno));
+        if (l == -EPIPE || l == -ECONNRESET)
+          _t9p_conn_broken(c);
+        else
+          ERROR(c, "send: Failed to send header data: %s\n", _t9p_strerror(l));
         continue;
       }
 
       /** Send "body" data */
       if ((l = c->trans.send(c->conn, node->tr.data, node->tr.size, 0)) < 0) {
-        atomic_add32(&c->stats.send_errs, 1);
-        ERROR(c, "send: Failed to send data: %s\n", _t9p_strerror(errno));
+        atomic_add_u32(&c->stats.send_errs, 1);
+        ERROR(c, "send: Failed to send data: %s\n", _t9p_strerror(l));
         continue;
       }
 
@@ -2500,13 +2812,13 @@ _t9p_thread_proc(void* param)
 
     /** Recv pending transactions */
     while ((l = c->trans.recv(c->conn, buf, sizeof(buf), T9P_RECV_PEEK)) > 0) {
-      atomic_add32(&c->stats.recv_cnt, 1);
+      atomic_add_u32(&c->stats.recv_cnt, 1);
 
       struct TRcommon com = {0};
       if (decode_TRcommon(&com, buf, l) < 0) {
         ERROR(c, "recv: Unable to decode common header; discarding!\n");
         c->trans.recv(c->conn, buf, sizeof(buf), 0); /** Discard */
-        atomic_add32(&c->stats.recv_errs, 1);
+        atomic_add_u32(&c->stats.recv_errs, 1);
         continue;
       }
 
@@ -2515,13 +2827,13 @@ _t9p_thread_proc(void* param)
           com.type, t9p_type_string(com.type), com.tag, (unsigned)com.size);
       }
 
-      atomic_add32(&c->stats.total_bytes_recv, com.size);
+      atomic_add_u32(&c->stats.total_bytes_recv, com.size);
 
       /** Check if tag is out of range */
       if (com.tag >= MAX_TAGS) {
         ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", com.tag);
         _discard(c, &com);
-        atomic_add32(&c->stats.recv_errs, 1);
+        atomic_add_u32(&c->stats.recv_errs, 1);
         continue;
       }
 
@@ -2529,7 +2841,7 @@ _t9p_thread_proc(void* param)
       if (com.type >= T9P_TYPE_Tmax) {
         ERROR(c, "recv: Out of range type (%d); discarding!\n", com.type);
         _discard(c, &com);
-        atomic_add32(&c->stats.recv_errs, 1);
+        atomic_add_u32(&c->stats.recv_errs, 1);
         continue;
       }
 
@@ -2538,12 +2850,12 @@ _t9p_thread_proc(void* param)
       if (!n) {
         ERROR(c, "recv: Tag '%d' not found in request list; discarding!\n", com.tag);
         _discard(c, &com);
-        atomic_add32(&c->stats.recv_errs, 1);
+        atomic_add_u32(&c->stats.recv_errs, 1);
         continue;
       }
       
       /** Track count of messages recv'ed */
-      atomic_add32(&c->stats.msg_counts[com.type], 1);
+      atomic_add_u32(&c->stats.msg_counts[com.type], 1);
 
       /** Handle error responses */
       if (com.type == T9P_TYPE_Rlerror) {
@@ -2551,7 +2863,7 @@ _t9p_thread_proc(void* param)
         if (decode_Rlerror(&err, buf, l) < 0)
           err.ecode = -1;
 
-        atomic_add32(&c->stats.recv_errs, 1);
+        atomic_add_u32(&c->stats.recv_errs, 1);
         n->tr.status = err.ecode < 0 ? err.ecode : -err.ecode;
 
         if (n->tr.rdata)
@@ -2568,7 +2880,7 @@ _t9p_thread_proc(void* param)
         _discard(c, &com);
         n->tr.status = -1;
         requests[n->tag] = NULL;
-        atomic_add32(&c->stats.recv_errs, 1);
+        atomic_add_u32(&c->stats.recv_errs, 1);
         tr_signal(n);
         continue;
       }
@@ -2636,6 +2948,11 @@ _t9p_thread_proc(void* param)
       continue;
     }
 
+    /** Check for broken pipe, dispatch handling code */
+    if (l == -EPIPE || l == -ECONNRESET) {
+      _t9p_conn_broken(c);
+    }
+
     mutex_unlock(c->socket_lock);
 
     /** Cleanup timed out nodes */
@@ -2656,9 +2973,6 @@ _t9p_thread_proc(void* param)
   #ifdef __rtems__
     rtems_event_set es;
     rtems_event_receive(T9P_WAKE_EVENT, RTEMS_EVENT_ANY | RTEMS_WAIT, _get_wait_duration(), &es);
-  #else
-    /** Interruptible sleep; formerly.. we set timeout on the socket on Linux */
-    /**event_wait(c->trans_pool.recv_ev, 1);*/
   #endif
   }
 
@@ -2684,20 +2998,19 @@ struct tcp_context
   int sock;
 };
 
-void*
-t9p_tcp_init(void)
+static int
+t9p_tcp_newsock()
 {
-  struct tcp_context* ctx = calloc(1, sizeof(struct tcp_context));
-  ctx->sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (ctx->sock < 0) {
-    perror("t9p_tcp_init: failed to create socket");
-    free(ctx);
-    return NULL;
+  int sock;
+  sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (sock < 0) {
+    perror("socket");
+    return -1;
   }
 
   /** Keep connections alive */
   int o = 1;
-  if (setsockopt(ctx->sock, SOL_SOCKET, SO_KEEPALIVE, &o, sizeof(o)) < 0) {
+  if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &o, sizeof(o)) < 0) {
     perror("setsockopt");
   }
   
@@ -2706,14 +3019,24 @@ t9p_tcp_init(void)
   struct timeval to;
   to.tv_usec = 1000;
   to.tv_sec = 0;
-  if (setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
-    perror("t9p_tcp_init: setsockopt(SO_RECVTIMEO)");
-    close(ctx->sock);
+  if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
+    perror("setsockopt(SO_RECVTIMEO)");
+    close(socket);
+    return -1;
+  }
+#endif
+  return sock;
+}
+
+void*
+t9p_tcp_init(void)
+{
+  struct tcp_context* ctx = calloc(1, sizeof(struct tcp_context));
+
+  if ((ctx->sock = t9p_tcp_newsock()) < 0) {
     free(ctx);
     return NULL;
   }
-#endif
-
   return ctx;
 }
 
@@ -2769,11 +3092,26 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
   if (fcntl(ctx->sock, F_SETFL, O_NONBLOCK) < 0) {
     perror("Failed to set O_NONBLOCK on socket");
     close(ctx->sock);
-    return 1;
+    return -1;
   }
 #endif
 
   return 0;
+}
+
+int
+t9p_tcp_reconnect(void* context, const char* addr_or_file)
+{
+  struct tcp_context* ctx = context;
+
+  shutdown(ctx->sock, SHUT_RDWR);
+  close(ctx->sock);
+
+  if ((ctx->sock = t9p_tcp_newsock()) < 0) {
+    return -1;
+  }
+
+  return t9p_tcp_connect(context, addr_or_file);
 }
 
 void
@@ -2803,7 +3141,10 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
   // if (flags & T9P_RECV_READ)
   //     return read(pc->sock, data, len);
   // else
-  return recv(pc->sock, data, len, rflags);
+  ssize_t r = recv(pc->sock, data, len, rflags);
+  if (r < 0)
+    r = -errno;
+  return r;
 }
 
 int
@@ -2826,6 +3167,7 @@ t9p_init_tcp_transport(t9p_transport_t* tp)
   tp->send = t9p_tcp_send;
   tp->disconnect = t9p_tcp_disconnect;
   tp->getsock = t9p_tcp_getsock;
+  tp->reconnect = t9p_tcp_reconnect;
   return 0;
 #else
   return -1;
