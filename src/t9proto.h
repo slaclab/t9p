@@ -23,6 +23,12 @@
 #define T9P_PACKED __attribute__((packed))
 #undef T9P_NODISCARD
 #define T9P_NODISCARD __attribute__((__warn_unused_result__))
+#ifdef __STDC_VERSION__
+#if __STDC_VERSION__ >= 202000
+#undef T9P_NODISCARD
+#define T9P_NODISCARD [[nodiscard]]
+#endif
+#endif
 #else
 #error Unsupported compiler
 #endif
