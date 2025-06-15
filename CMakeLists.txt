@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.10)
 project(t9p C)
 
 set(CMAKE_C_STANDARD 99)
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
+if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
+    include(rtems-tools/cmake/rtems.cmake)
+    rtems_cmake_init()
+endif()
 
 set(T9P_SOURCES
     "src/t9p.c"
@@ -23,8 +29,6 @@ add_library(
     t9p STATIC
     ${T9P_SOURCES}
 )
-
-set(CMAKE_VERBOSE_MAKEFILE ON)
 
 set(WARN_FLAGS
     "-Wreturn-type -Werror=return-type -Wno-strict-prototypes -Werror=implicit-function-declaration"
