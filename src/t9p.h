@@ -126,7 +126,7 @@ typedef struct t9p_transport
 /**
  * Stats about the context
  */
-typedef struct t9p_stats {
+typedef struct T9P_ALIGNED(4) t9p_stats {
   uint32_t send_cnt;
   uint32_t send_errs;
   uint32_t recv_cnt;

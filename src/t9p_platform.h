@@ -151,3 +151,6 @@ extern msg_queue_t* msg_queue_create(const char* id, size_t msgSize, size_t maxM
 extern void msg_queue_destroy(msg_queue_t* q);
 extern int msg_queue_send(msg_queue_t* q, const void* data, size_t size);
 extern int msg_queue_recv(msg_queue_t* q, void* data, size_t* size);
+
+/** Dynamic memory helpers */
+extern void* aligned_zmalloc(size_t size, size_t align);

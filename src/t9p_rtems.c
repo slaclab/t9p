@@ -24,6 +24,7 @@
 #include <rtems/libio_.h>
 #include <rtems/seterr.h>
 #include <rtems/error.h>
+#include <rtems/malloc.h>
 #include <stdlib.h>
 #include <inttypes.h>
 #include <fcntl.h>
@@ -1645,6 +1646,16 @@ t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer)
 /**************************************************************************************
  * Platform abstraction
  **************************************************************************************/
+
+void*
+aligned_zmalloc(size_t size, size_t align)
+{
+  void* ptr = NULL;
+  rtems_memalign(&ptr, align, size);
+  if (ptr)
+    memset(ptr, 0, size);
+  return ptr;
+}
 
 #ifdef _T9P_NO_POSIX_MQ
 

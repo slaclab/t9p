@@ -166,7 +166,7 @@ event_signal(event_t* ev)
   pthread_mutex_unlock(&ev->mutex);
 }
 
-extern void
+void
 event_destroy(event_t* ev)
 {
   if (!ev)
@@ -177,6 +177,18 @@ event_destroy(event_t* ev)
   pthread_mutexattr_destroy(&ev->mutexattr);
   free(ev);
 }
+
+#ifndef __rtems__
+void*
+aligned_zmalloc(size_t size, size_t align)
+{
+  void* ptr = NULL;
+  posix_memalign(&ptr, align, size);
+  if (ptr)
+    memset(ptr, 0, size);
+  return ptr;
+}
+#endif
 
 /** Really dumb message queue because POSIX message queues don't quite cut the mustard... */
 

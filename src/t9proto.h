@@ -19,18 +19,27 @@
 #include <stdint.h>
 
 #if defined(__GNUC__) || defined(__clang__)
-#undef T9P_PACKED
-#define T9P_PACKED __attribute__((packed))
-#undef T9P_NODISCARD
-#define T9P_NODISCARD __attribute__((__warn_unused_result__))
-#ifdef __STDC_VERSION__
-#if __STDC_VERSION__ >= 202000
-#undef T9P_NODISCARD
-#define T9P_NODISCARD [[nodiscard]]
-#endif
-#endif
+# undef T9P_PACKED
+# define T9P_PACKED __attribute__((packed))
+# undef T9P_NODISCARD
+# define T9P_NODISCARD __attribute__((__warn_unused_result__))
+# undef T9P_ALIGNED
+# define T9P_ALIGNED(_x) __attribute__((aligned(_x)))
+# undef T9P_ALIGNOF
+# define T9P_ALIGNOF(_x) __alignof__(_x)
+# ifdef __STDC_VERSION__
+#   if __STDC_VERSION__ >= 202000
+#     undef T9P_NODISCARD
+#     define T9P_NODISCARD [[nodiscard]]
+#     undef T9P_ALIGNOF
+#     define T9P_ALIGNOF(_x) alignof(_x)
+#   elif __STDC_VERSION__ >= 201112L
+#     undef T9P_ALIGNOF
+#     define T9P_ALIGNOF(_x) _Alignof(_x)
+#   endif
+# endif
 #else
-#error Unsupported compiler
+# error Unsupported compiler
 #endif
 
 struct t9p_stat;

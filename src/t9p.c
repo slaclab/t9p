@@ -111,8 +111,12 @@ struct trans_pool
   event_t* recv_ev;
 };
 
-struct t9p_context
+struct T9P_ALIGNED(4) t9p_context
 {
+  uint32_t thr_run;
+  uint32_t serial;    /**< Serial number of the context. Must match fid, otherwise triggers recovery */
+  bool broken;        /**< Indicates if the pipe was broken or not */
+
   void* conn;
   t9p_transport_t trans;
   char mntpoint[PATH_MAX];
@@ -130,7 +134,6 @@ struct t9p_context
   /** I/O thread */
   thread_t* io_thread;
   event_t* recv_event; /**< Signaled when a new packet has been received */
-  int thr_run;
   mutex_t* socket_lock;
 
   struct trans_pool trans_pool;
@@ -139,9 +142,6 @@ struct t9p_context
   struct t9p_handle_node* fhl_free; /**< LL of free file handles */
   
   struct t9p_stats stats;
-
-  uint32_t serial;            /**< Serial number of the context. Must match fid, otherwise triggers recovery */
-  bool broken;                /**< Indicates if the pipe was broken or not */
   
 #ifdef __rtems__
   rtems_id rtems_thr_ident;   /**< Used to wake the I/O thread when more data is ready */
@@ -806,9 +806,10 @@ t9p_init(
   assert(transport->init);
   assert(transport->shutdown);
   assert(transport->getsock);
+  assert(transport->reconnect);
   assert(opts);
 
-  t9p_context_t* c = calloc(1, sizeof(t9p_context_t));
+  t9p_context_t* c = aligned_zmalloc(sizeof(struct t9p_context), T9P_ALIGNOF(struct t9p_context));
   strNcpy(c->mntpoint, mntpoint, sizeof(c->mntpoint));
   strNcpy(c->addr, addr, sizeof(c->addr));
   strNcpy(c->apath, apath, sizeof(c->apath));

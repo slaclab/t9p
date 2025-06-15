@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <rtems/bspcmdline.h>
 
 #ifdef RTEMS_BSD_STACK
 #include <machine/rtems-bsd-commands.h>
@@ -49,7 +50,7 @@ extern int main(int, char**);
 /** From t9p_automatest_test.c */
 extern int run_auto_test(int);
 
-#ifdef RTEMS_LEGACY_STACK
+#if defined(RTEMS_LEGACY_STACK) && defined(__i386__)
 /** From EPICS base: */
 int
 rtems_ne2kpci_driver_attach (struct rtems_bsdnet_ifconfig *config, int attach)
@@ -245,10 +246,13 @@ POSIX_Init(void* arg)
 
   /** Tokenize the BSP command line into something that can be consumed by t9p */
   char buf[1024];
-#if __i386__
+#ifdef __i386__
   strcpy(buf, bsp_cmdline());
-#else
+#elif defined(BSP_CMDLINE)
   strcpy(buf, BSP_CMDLINE);
+#else
+  if(rtems_bsp_cmdline_get())
+    strcpy(buf, rtems_bsp_cmdline_get());
 #endif
   int n = 0;
   for (char* s = strtok(buf, " "); s && n < MAX_ARGS; s = strtok(NULL, " ")) {
@@ -364,7 +368,9 @@ bsp_predriver_hook(void)
 
 #define CONFIGURE_SHELL_COMMANDS_INIT
 
+#if __RTEMS_MAJOR__ > 4
 #include <bsp/irq-info.h>
+#endif
 
 #if __RTEMS_MAJOR__ >= 6
 #include <rtems/netcmds-config.h>
