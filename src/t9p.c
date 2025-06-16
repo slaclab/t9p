@@ -1059,6 +1059,12 @@ t9p_get_root(t9p_context_t* c)
 }
 
 int
+t9p_is_root(t9p_context_t* c, t9p_handle_t h)
+{
+  return c->root->h.fid == h->fid;
+}
+
+int
 t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t afid, t9p_handle_t* outhandle)
 {
   TRACE(c, "t9p_attach(c=%p,path=%s,outhandle=%p)\n", c, apath, outhandle);
@@ -2492,7 +2498,7 @@ _alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
   /** Mark used */
   n->h.valid_mask = T9P_HANDLE_ACTIVE;
 
-  bool is_parent_root = !parent || parent == &c->root->h;
+  bool is_parent_root = !parent || t9p_is_root(c, parent);
 
   /** If given a file name, associate it with the handle */
   if (fname)
@@ -2557,7 +2563,7 @@ static int
 _maybe_recover(struct t9p_context* c, t9p_handle_t h)
 {
   /* No recovery needed */
-  if (!h || c->serial == h->serial || &c->root->h == h)
+  if (!h || c->serial == h->serial || t9p_is_root(c, h))
     return 0;
 
   /* Also no recovery needed, just update serial to current value */
@@ -3027,7 +3033,7 @@ struct tcp_context
 };
 
 static int
-t9p_tcp_newsock()
+_t9p_tcp_newsock()
 {
   int sock;
   sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -3061,7 +3067,7 @@ t9p_tcp_init(void)
 {
   struct tcp_context* ctx = calloc(1, sizeof(struct tcp_context));
 
-  if ((ctx->sock = t9p_tcp_newsock()) < 0) {
+  if ((ctx->sock = _t9p_tcp_newsock()) < 0) {
     free(ctx);
     return NULL;
   }
@@ -3135,7 +3141,7 @@ t9p_tcp_reconnect(void* context, const char* addr_or_file)
   shutdown(ctx->sock, SHUT_RDWR);
   close(ctx->sock);
 
-  if ((ctx->sock = t9p_tcp_newsock()) < 0) {
+  if ((ctx->sock = _t9p_tcp_newsock()) < 0) {
     return -1;
   }
 

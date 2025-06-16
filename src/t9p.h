@@ -672,6 +672,9 @@ t9p_opts_t t9p_get_opts(t9p_context_t* c);
  */
 struct t9p_stats t9p_get_stats(t9p_context_t* c);
 
+/** Returns TRUE if the handle is the root, FALSE otherwise */
+int t9p_is_root(t9p_context_t* c, t9p_handle_t h);
+
 /** Returns TRUE if open for I/O, FALSE otherwise */
 int t9p_is_open(t9p_handle_t h);
 
