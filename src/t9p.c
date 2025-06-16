@@ -159,8 +159,8 @@ struct t9p_string
   char string[];
 };
 
-/** 32 bytes; let's keep it close to that.
-  * DEFAULT_MAX_FILES = 256, so we allocate 8192 bytes on context create */
+/** 36 bytes; let's keep it close to that.
+  * DEFAULT_MAX_FILES = 256, so we allocate 9216 bytes on context create */
 struct t9p_handle
 {
   struct t9p_string* str; /**< Path of the file */
@@ -252,6 +252,7 @@ static int tr_wait(struct trans_node* n, int timeo);
 #define TR_FLAGS_NONE 0x0
 
 struct trans {
+  uint32_t ttype;    /**< Transmission type */
   uint32_t flags;    /**< Flags */
   const void *data;  /**< Outgoing data */
   size_t size;       /**< Outgoing data size */
@@ -701,6 +702,7 @@ _clunk_sync(struct t9p_context* c, int fid)
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tclunk,
     .data = buf,
     .size = l,
     .rtype = T9P_TYPE_Rclunk,
@@ -979,6 +981,7 @@ t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path
 
   /** Build transaction to send */
   struct trans tr = {
+    .ttype = T9P_TYPE_Twalk,
     .data = packet,
     .size = l,
     .rtype = T9P_TYPE_Rwalk,
@@ -1085,6 +1088,7 @@ t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t afid, t9p_handle_t*
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tattach,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -1132,6 +1136,7 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tlopen,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -1195,6 +1200,7 @@ t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* 
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tread,
     .data = packet,
     .size = l,
     .rdata = outbuffer,
@@ -1247,6 +1253,7 @@ t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Twrite,
     .hdata = packet,
     .hsize = l,
     .data = inbuffer,
@@ -1294,6 +1301,7 @@ t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tgetattr,
     .data = packet,
     .size = l,
     .rtype = T9P_TYPE_Rgetattr,
@@ -1375,6 +1383,7 @@ t9p_create(
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tlcreate,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -1453,6 +1462,7 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Twalk,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -1504,7 +1514,12 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
   }
 
   struct trans tr = {
-    .data = packet, .size = l, .rdata = packet, .rsize = sizeof(packet), .rtype = T9P_TYPE_Rremove
+    .ttype = T9P_TYPE_Tremove,
+    .data = packet,
+    .size = l,
+    .rdata = packet,
+    .rsize = sizeof(packet),
+    .rtype = T9P_TYPE_Rremove
   };
   n->tr = tr;
 
@@ -1556,7 +1571,12 @@ t9p_fsync(t9p_context_t* c, t9p_handle_t file, uint32_t datasync)
   }
 
   struct trans tr = {
-    .data = packet, .size = l, .rtype = T9P_TYPE_Rfsync, .rdata = packet, .rsize = sizeof(packet)
+    .ttype = T9P_TYPE_Tfsync,
+    .data = packet,
+    .size = l,
+    .rtype = T9P_TYPE_Rfsync,
+    .rdata = packet,
+    .rsize = sizeof(packet)
   };
 
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
@@ -1599,6 +1619,7 @@ t9p_mkdir(
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tmkdir,
     .data = packet,
     .size = l,
     .rtype = T9P_TYPE_Rmkdir,
@@ -1646,6 +1667,7 @@ t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs)
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tstatfs,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -1700,6 +1722,7 @@ t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Treadlink,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -1750,6 +1773,7 @@ t9p_symlink(
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tsymlink,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -1851,6 +1875,7 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
     }
 
     struct trans tr = {
+      .ttype = T9P_TYPE_Treaddir,
       .data = packet,
       .size = l,
       .rdata = packet,
@@ -1977,6 +2002,7 @@ t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
     }
 
     struct trans tr = {
+      .ttype = T9P_TYPE_Treaddir,
       .data = packet,
       .size = l,
       .rdata = packet,
@@ -2038,6 +2064,7 @@ t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t flag
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tunlinkat,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -2090,6 +2117,7 @@ t9p_renameat(
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Trenameat,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -2134,6 +2162,7 @@ t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_se
   }
 
   struct trans tr = {
+    .ttype = T9P_TYPE_Tsetattr,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -2178,6 +2207,7 @@ t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newna
   }
   
   struct trans tr = {
+    .ttype = T9P_TYPE_Trename,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -2220,6 +2250,7 @@ t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
   }
   
   struct trans tr = {
+    .ttype = T9P_TYPE_Tlink,
     .data = packet,
     .size = l,
     .rdata = packet,
@@ -2258,6 +2289,7 @@ t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, u
     }
   
     struct trans tr = {
+      .ttype = T9P_TYPE_Tmknod,
       .data = packet,
       .size = l,
       .rdata = packet,
@@ -2775,12 +2807,7 @@ _t9p_thread_proc(void* param)
         }
       }
 
-      /** FIXME: This is pretty ugly and may cause issues in the future */
-      if (node->tr.hdata)
-      atomic_add_u32(&c->stats.msg_counts[((struct TRcommon*)node->tr.hdata)->type], 1);
-      else if (node->tr.data)
-      atomic_add_u32(&c->stats.msg_counts[((struct TRcommon*)node->tr.data)->type], 1);
-
+      atomic_add_u32(&c->stats.msg_counts[node->tr.ttype], 1);
       atomic_add_u32(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
       atomic_add_u32(&c->stats.send_cnt, 1);
 
