@@ -37,11 +37,14 @@
 #define CC_MFENCE asm volatile ("" : : : "memory")
 
 #ifdef __powerpc__
-#define MFENCE_REL asm volatile ("lwsync" : : : "memory")
+#define MFENCE asm volatile ("lwsync" : : : "memory")
 #elif defined(__i386__)
-#define MFENCE_REL asm volatile ("mfence" : : : "memory") /* not really needed on x86... */
+#define MFENCE asm volatile ("mfence" : : : "memory") /* not really needed on x86... */
+#elif defined(__m68k__)
+/* nop performs full pipeline synchronization on CF */
+#define MFENCE asm volatile ("nop" : : : "memory")
 #else
-#define MFENCE_REL asm volatile ("" : : : "memory")
+#define MFENCE asm volatile ("" : : : "memory")
 #endif
 /**
  * NOTE: The Coldfire ISA-A does not support atomic instructions. Instead, we

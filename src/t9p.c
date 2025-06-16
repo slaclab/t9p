@@ -2715,7 +2715,7 @@ _t9p_try_reconnect(t9p_context_t* c)
 
   LOG(c, T9P_LOG_TRACE, "Connection with server re-established!\n");
   c->serial++;
-  MFENCE_REL;
+  MFENCE;
   c->broken = 0;
   return 0;
 }
