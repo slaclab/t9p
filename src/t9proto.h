@@ -2,7 +2,7 @@
  * ----------------------------------------------------------------------------
  * Company    : SLAC National Accelerator Laboratory
  * ----------------------------------------------------------------------------
- * Description: 9P/2000.L serialization library
+ * Description: 9P/2000.L protocol serialization library
  * ----------------------------------------------------------------------------
  * This file is part of 't9p'. It is subject to the license terms in the
  * LICENSE.txt file found in the top-level directory of this distribution,

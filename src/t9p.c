@@ -2758,9 +2758,6 @@ _t9p_thread_proc(void* param)
   }
 #endif
 
-#ifdef __linux__
-#endif
-
   while (c->thr_run) {
     struct trans_node* node = NULL;
     size_t size = sizeof(node);
