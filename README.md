@@ -1,52 +1,15 @@
 # t9p
 
-t9p is a tiny 9p client that implements most of 9p.2000L
-
-## Status
-
-| Call | Implemented? | Notes |
-|---|---|---|
-| version       | Y |   |
-| flush         |   |   |
-| walk          | Y |   |
-| read          | Y |   |
-| write         | Y |   |
-| clunk         | Y |   |
-| remove        | Y |   |
-| attach        | Y |   |
-| auth          |   |   |
-| statfs        | Y |   |
-| lopen         | Y |   |
-| lcreate       | Y |   |
-| symlink       | Y |   |
-| mknod         | Y |   |
-| rename        | Y |   |
-| readlink      | Y |   |
-| getattr       | Y |   |
-| setattr       | Y | trunc, chmod, chown, etc. wrappers too  |
-| xattrwalk     |   |   |
-| xattrcreate   |   |   |
-| readdir       | Y |   |
-| fsync         | Y |   |
-| lock          |   |   |
-| getlock       |   |   |
-| link          | Y |   |
-| mkdir         | Y |   |
-| renameat      | Y |   |
-| unlinkat      | Y |   |
-
-The xattr calls are likely not going to be implemented, as they are not needed for the primary use-case of this client.
-
-Implementation percentage: 22/28 (78%)
+t9p is a relatively small (originally tiny) 9p2000.L client supporting RTEMS and Linux.
+This client was designed with older RTEMS systems in mind (single core, <=512M memory, PowerPC or m68k).
 
 ## Building
 
-Including t9p in a different application may be done in a variety of different ways. You can opt to build and install the t9p libraries
-to your system's library dir, or you can include the .c files directly in your project.
+### Integrating with Other Projects
 
-The .c files require no special defines or include directories to compile, and can be included as-is. Platform specific code is toggled on or off
-using built-in compiler defines.
+t9p's source files require no special defines or include dirs to build, so they can be trivially included in other projects in a variety of ways.
 
+Platform specific source files will need to be excluded manually (i.e. do not build t9p_rtems.c if you are targeting Linux).
 
 ### Configuring
 
@@ -120,23 +83,20 @@ NOTE: you will need qemu-system-i386 to be installed and available in your PATH.
 
 ## Target Environment
 
-This needs to run on the following targets:
+This client has been tested on the following targets:
 - linux-x86_64
 - linux-powerpc (testing only)
 - RTEMS4/6-mvme3100 (PowerPC, soft FP)
 - RTEMS4/6-mvme6100 (PowerPC, hard FP, altivec)
-- RTEMS4-svgm (PowerPC, soft FP and hard+altivec)
-- RTEMS4/6-uC5282 (m68k)
+- RTEMS4/6-uC5282 (m68k, Coldfire ISA-A)
+
+We will also need to test the client on:
+- RTEMS4-svgm (PowerPC, soft FP [for VGM-1D] and hard+altivec [for VGM5])
 
 Compilers:
 - GCC 4.8.5 (RTEMS 4)
 - GCC 13.2.0 (RTEMS 6)
 - whatever else you are building with on host system
-
-Important things to note:
-- Must be endian-safe
-- Must not rely on Linux-specific syscalls, if avoidable 
-- Must not rely on RTEMS-specific syscalls, if avoidable
 
 ## Testing
 
@@ -184,3 +144,50 @@ Must be mounted with correct uid/gid. IP required right now, that needs fixing.
 - Leave plenty of comments
 - Validate your changes with manual testing before committing them
 - Open issues for bugs+improvements
+
+## Supported Calls
+
+| Call | Implemented? | Notes |
+|---|---|---|
+| version       | Y |   |
+| flush         |   |   |
+| walk          | Y |   |
+| read          | Y |   |
+| write         | Y |   |
+| clunk         | Y |   |
+| remove        | Y |   |
+| attach        | Y |   |
+| auth          |   |   |
+| statfs        | Y |   |
+| lopen         | Y |   |
+| lcreate       | Y |   |
+| symlink       | Y |   |
+| mknod         | Y |   |
+| rename        | Y |   |
+| readlink      | Y |   |
+| getattr       | Y |   |
+| setattr       | Y | trunc, chmod, chown, etc. wrappers too  |
+| xattrwalk     |   |   |
+| xattrcreate   |   |   |
+| readdir       | Y |   |
+| fsync         | Y |   |
+| lock          |   |   |
+| getlock       |   |   |
+| link          | Y |   |
+| mkdir         | Y |   |
+| renameat      | Y |   |
+| unlinkat      | Y |   |
+
+The xattr calls are likely not going to be implemented, as they are not needed for the primary use-case of this client.
+
+Implementation percentage: 22/28 (78%)
+
+## Copyright Notice:
+            
+COPYRIGHT © SLAC National Accelerator Laboratory. All rights reserved. 
+This work is supported [in part] by the U.S. Department of Energy, Office of Basic Energy Sciences under contract DE-AC02-76SF00515.
+
+## Usage Restrictions:
+
+Neither the name of the Leland Stanford Junior University, SLAC National Accelerator Laboratory, U.S. Department of Energy 
+nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
