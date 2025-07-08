@@ -639,6 +639,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   char ip[128] = {0};
   char user[128] = {0};
   int uid = T9P_NOUID, gid = T9P_NOGID;
+  int msize = 65536;
 
   /** Parse source (in format IP:[PORT:]/path/on/server) */
   char* sip = strtok(mt_entry->dev, ":");
@@ -674,6 +675,10 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
       const char* p = strpbrk(r, "=");
       if (p)
         gid = atoi(p + 1);
+    } else if (!strncmp(r, "msize", strlen("msize"))) {
+      const char* p = strpbrk(r, "=");
+      if (p)
+        msize = atoi(p + 1);
     } else if (!strncmp(r, "user", strlen("user"))) {
       const char* p = strpbrk(r, "=");
       if (p)
@@ -681,6 +686,12 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     } else if (!strcmp(r, "trace")) {
       loglevel = T9P_LOG_TRACE;
     }
+  }
+
+  if (msize <= 0) {
+    fprintf(stderr, "Invalid msize\n");
+    errno = EINVAL;
+    return -1;
   }
 
 #if __RTEMS_MAJOR__ >= 6
@@ -703,6 +714,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   fi->opts.opts.uid = uid;
   fi->opts.transport = T9P_RTEMS_TRANS_TCP;
   fi->opts.opts.log_level = loglevel;
+  fi->opts.opts.msize = msize;
   strcpy(fi->opts.ip, ip);
   strcpy(fi->opts.opts.user, user);
   strcpy(fi->apath, apath);
