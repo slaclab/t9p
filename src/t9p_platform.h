@@ -17,6 +17,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <assert.h>
 
 #ifdef __rtems__
 #include <rtems.h>
@@ -30,6 +31,15 @@
 #define T9P_TARGET T9P_TARGET_POSIX
 #elif defined(__rtems__)
 #define T9P_TARGET T9P_TARGET_RTEMS4
+#endif
+
+/** Alignment checking */
+#ifdef NDEBUG
+#define ASSERT_ALIGNED(_addr, _align)
+#else
+#define ASSERT_ALIGNED(_addr, _align) do {        \
+    assert(((uintptr_t)(_addr)) % (_align) == 0); \
+  } while (0)
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -55,6 +65,7 @@
 static inline uint32_t
 atomic_load_u32(uint32_t* p)
 {
+  ASSERT_ALIGNED(p, 4);
 #if __mcoldfire__ == 1
   return *p;
 #else
@@ -65,6 +76,7 @@ atomic_load_u32(uint32_t* p)
 static inline void
 atomic_store_u32(uint32_t* p, uint32_t val)
 {
+  ASSERT_ALIGNED(p, 4);
 #if __mcoldfire__ == 1
   *p = val;
 #else
@@ -75,6 +87,7 @@ atomic_store_u32(uint32_t* p, uint32_t val)
 static inline int
 atomic_compare_exchange_u32(uint32_t* p, uint32_t expected, uint32_t newval)
 {
+  ASSERT_ALIGNED(p, 4);
 #if __mcoldfire__ == 1
   rtems_interrupt_level l;
   int r = 0;
@@ -91,6 +104,7 @@ atomic_compare_exchange_u32(uint32_t* p, uint32_t expected, uint32_t newval)
 static inline uint32_t
 atomic_add_u32(uint32_t* p, uint32_t v)
 {
+  ASSERT_ALIGNED(p, 4);
 #if __mcoldfire__ == 1
   uint32_t r;
   rtems_interrupt_level l;
@@ -107,6 +121,7 @@ atomic_add_u32(uint32_t* p, uint32_t v)
 static inline uint32_t
 atomic_sub_u32(uint32_t* p, uint32_t v)
 {
+  ASSERT_ALIGNED(p, 4);
 #if __mcoldfire__ == 1
   uint32_t r;
   rtems_interrupt_level l;
@@ -122,12 +137,14 @@ atomic_sub_u32(uint32_t* p, uint32_t v)
 
 #endif
 
+enum t9p_thread_prio;
+
 /** Generic thread API */
 
 typedef void* (*thread_proc_t)(void*);
 typedef struct _thread_s thread_t;
 
-extern thread_t* thread_create(thread_proc_t proc, void* param, uint32_t prio);
+extern thread_t* thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio);
 extern void thread_join(thread_t* thr);
 extern void thread_destroy(thread_t* thread);
 

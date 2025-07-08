@@ -46,6 +46,8 @@
 #include <rtems/rtems/tasks.h>
 #include <rtems/rtems/event.h>
 #include <rtems/rtems/clock.h>
+#else
+#include <sched.h>
 #endif
 #else
 #define PATH_MAX 256
@@ -69,12 +71,12 @@
 
 #define MAX_PATH_COMPONENTS 256
 
-#define MAX_TAGS 1024
+#define MAX_TAGS 512
 #define MAX_TRANSACTIONS 512
 
 #define DEFAULT_MAX_FILES 256
 #define DEFAULT_SEND_TIMEO 3000
-#define DEFAULT_RECV_TIMEO 3000
+#define DEFAULT_RECV_TIMEO 60000
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -571,7 +573,7 @@ _version_handshake(struct t9p_context* c)
     buf,
     sizeof(buf),
     T9P_NOTAG,
-    MAX(c->opts.max_read_data_size, c->opts.max_write_data_size),
+    c->opts.msize,
     sizeof(version) - 1,
     version
   );
@@ -784,13 +786,12 @@ void
 t9p_opts_init(struct t9p_opts* opts)
 {
   memset(opts, 0, sizeof(*opts));
-  opts->max_read_data_size = (1 << 20);  /** 1M */
-  opts->max_write_data_size = (1 << 20); /** 1M */
+  opts->msize = 16384; //(1 << 20);  /** 1M */
   opts->queue_size = T9P_PACKET_QUEUE_SIZE;
   opts->max_fids = DEFAULT_MAX_FILES;
   opts->send_timeo = DEFAULT_SEND_TIMEO;
   opts->recv_timeo = DEFAULT_RECV_TIMEO;
-  opts->prio = 20;
+  opts->prio = T9P_THREAD_PRIO_MED;
 }
 
 t9p_context_t*
@@ -887,7 +888,7 @@ t9p_init(
   c->thr_run = 1;
 
   /** Kick off thread */
-  if (!(c->io_thread = thread_create(_t9p_thread_proc, c, opts->prio))) {
+  if (!(c->io_thread = thread_create(_t9p_thread_proc, c, c->opts.prio))) {
     t9p_shutdown(c);
     return NULL;
   }
@@ -1128,6 +1129,10 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
   if (_maybe_recover(c, h) < 0)
     return -EBADF;
 
+  /** File already open, just return success */
+  if (h->iounit != 0)
+    return 0;
+
   char packet[128];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1151,7 +1156,7 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
   };
 
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tlopen failed\n", __FUNCTION__);
+    ERROR(c, "%s: Tlopen: %s\n", __FUNCTION__, _t9p_strerror(l));
     return l;
   }
 
@@ -1177,7 +1182,7 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
 void
 t9p_close(t9p_handle_t handle)
 {
-  handle->iounit = 0;
+  /* Nothing to do on 9p */
 }
 
 ssize_t
@@ -1215,6 +1220,8 @@ t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* 
     .rheader = rheader,
     .rheadersz = sizeof(struct Rread)
   };
+
+  memset(outbuffer, '-', num);
 
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
     ERROR(c, "%s: Tread: %s\n", __FUNCTION__, _t9p_strerror(l));
@@ -2794,7 +2801,7 @@ _t9p_thread_proc(void* param)
       if (c->opts.log_level <= T9P_LOG_TRACE) {
         if (node->tr.hdata) {
           struct TRcommon com;
-          decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
+          (void)decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
           fprintf(stderr,
             "send: (header) type=%d(%s), len=%u, tag=%d\n",
             com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
@@ -2802,7 +2809,7 @@ _t9p_thread_proc(void* param)
         }
         else if (node->tr.data) {
           struct TRcommon com;
-          decode_TRcommon(&com, node->tr.data, node->tr.size);
+          (void)decode_TRcommon(&com, node->tr.data, node->tr.size);
           fprintf(stderr,
             "send: type=%d(%s), len=%u, tag=%d\n",
             com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
@@ -3168,10 +3175,6 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
     rflags |= MSG_PEEK;
 
   struct tcp_context* pc = context;
-  /** Read behavior instead of peek */
-  // if (flags & T9P_RECV_READ)
-  //     return read(pc->sock, data, len);
-  // else
   ssize_t r = recv(pc->sock, data, len, rflags);
   if (r < 0)
     r = -errno;

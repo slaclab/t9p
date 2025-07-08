@@ -14,6 +14,7 @@
  * ----------------------------------------------------------------------------
  **/
 #include "t9p_platform.h"
+#include "t9p.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -35,8 +36,25 @@ struct _mutex_s
   pthread_mutexattr_t attr;
 };
 
+#ifdef __rtems__
+/* All SCHED_ types have prio 1-254 on RTEMS */
+static const int prio_to_posix[T9P_THREAD_PRIO_COUNT] =
+{
+  50,  /* low */
+  120, /* med */
+  250  /* max */
+};
+#else
+static const int prio_to_posix[T9P_THREAD_PRIO_COUNT] =
+{
+  20, /* low */
+  50, /* med */
+  90  /* max */
+};
+#endif
+
 thread_t*
-thread_create(thread_proc_t proc, void* param, uint32_t prio)
+thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio)
 {
   thread_t* p = malloc(sizeof(struct _thread_s));
   if (!p)
@@ -47,10 +65,13 @@ thread_create(thread_proc_t proc, void* param, uint32_t prio)
     return NULL;
   }
 
+#ifdef __rtems__
   struct sched_param sp = {
-    .sched_priority = prio
+    .sched_priority = prio_to_posix[prio]
   };
   pthread_attr_setschedparam(&p->attr, &sp);
+  pthread_attr_setschedpolicy(&p->attr, SCHED_OTHER);
+#endif
 
   assert(proc);
 

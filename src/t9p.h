@@ -151,10 +151,18 @@ typedef enum t9p_log
   T9P_LOG_ERR,
 } t9p_log_t;
 
+typedef enum t9p_thread_prio
+{
+  T9P_THREAD_PRIO_LOW = 0,
+  T9P_THREAD_PRIO_MED,
+  T9P_THREAD_PRIO_HIGH,
+
+  T9P_THREAD_PRIO_COUNT,
+} t9p_thread_prio_t;
+
 typedef struct t9p_opts
 {
-  uint32_t max_write_data_size; /**< Max amount of data that can be transferred in a write packet */
-  uint32_t max_read_data_size;  /**< Max amount of data that can be transferred in a read packet */
+  uint32_t msize;               /**< Max message size */
   uint32_t queue_size;          /**< Packet queue size. Must be power of two! */
   int log_level;                /**< Logging level (See t9p_log enum) */
   uint32_t uid;                 /**< UID to use */
@@ -163,7 +171,7 @@ typedef struct t9p_opts
   int send_timeo;               /**< Send timeout, in ms */
   int recv_timeo;               /**< Recv timeout, in ms */
   uint32_t gid;                 /**< Default gid, used when NOGID is passed to functions */
-  uint32_t prio;                /**< I/O thread priority. This is passed to a POSIX function (usually) */
+  t9p_thread_prio_t prio;       /**< I/O thread priority. This is passed to a POSIX function (usually) */
 } t9p_opts_t;
 
 /** Flags for t9p_getattr */
