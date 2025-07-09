@@ -36,6 +36,7 @@
 #include <rtems/score/apimutex.h>
 #include <rtems/score/protectedheap.h>
 
+#include "t9p.h"
 #include "../src/t9p_platform.h"
 
 #define CHECK(_x, ...) \
@@ -272,9 +273,9 @@ int
 t9p_run_threaded_write_test()
 {
   thread_t* threads[] = {
-    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile1.txt", 50),
-    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile2.txt", 51),
-    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile3.txt", 52),
+    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile1.txt", T9P_THREAD_PRIO_LOW),
+    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile2.txt", T9P_THREAD_PRIO_MED),
+    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile3.txt", T9P_THREAD_PRIO_HIGH),
   };
 
   for (int i = 0; i < sizeof(threads)/sizeof(threads[0]); ++i) {
