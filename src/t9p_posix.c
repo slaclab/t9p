@@ -23,6 +23,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <netinet/ip.h>
+#include <sys/socket.h>
 
 struct _thread_s
 {
@@ -323,3 +329,33 @@ msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 }
 
 #endif
+
+int
+gethostbyname_inet(const char* name, in_addr_t* outaddr)
+{
+  static mutex_t* mutex;
+  if (!mutex) {
+    mutex = mutex_create(); /* needed to guard unsafe gethostbyname calls... */
+  }
+
+  int ret = 0;
+
+  mutex_lock(mutex);
+
+  struct hostent* ent = gethostbyname(name);  
+  if (ent && ent->h_addr_list && *ent->h_addr_list) {
+    switch (ent->h_addrtype) {
+    case AF_INET:
+      *outaddr = *(in_addr_t*)ent->h_addr_list[0];
+      break;
+    default:
+      ret = -1;
+      break;
+    }
+  }
+  else
+    ret = -1;
+
+  mutex_unlock(mutex);
+  return ret;
+}

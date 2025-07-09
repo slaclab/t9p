@@ -34,6 +34,8 @@
 #include <time.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include <ctype.h>
+#include <netdb.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -234,6 +236,25 @@ t9p_rt_ms_to_ticks(uint32_t ms)
   return i;
 }
 #endif
+
+bool
+ip_in_dot_format(const char* ip)
+{
+  int dots = 0, seq = 0;
+  for (const char* s = ip; *s; ++s) {
+    if (*s == '.') {
+      if (seq == 0) return false; /* .. is invalid */
+      ++dots, seq = 0;
+      continue;
+    }
+    if (*s > '9' || *s < '0')
+      return false; /* any non-numeric char that isn't '.' is invalid */
+    ++seq;
+    if (seq > 3)
+      return false; /* more than 3 nums is invalid */
+  }
+  return dots == 3; /* needs exactly 3 dots */
+}
 
 /********************************************************************/
 /*                                                                  */
@@ -618,7 +639,7 @@ _version_handshake(struct t9p_context* c)
 
   c->msize = rv->msize;
 
-  DEBUG(c, "Rversion handshake complete for version %s\n", version);
+  DEBUG(c, "Using %s with msize %lu\n", version, rv->msize);
   free(rv);
   return 0;
 }
@@ -3059,7 +3080,7 @@ _t9p_tcp_newsock()
   to.tv_sec = 0;
   if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
     perror("setsockopt(SO_RECVTIMEO)");
-    close(socket);
+    close(sock);
     return -1;
   }
 #endif
@@ -3109,8 +3130,21 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
   char* pport = strtok(NULL, ":");
 
   struct sockaddr_in addr = {0};
-  addr.sin_addr.s_addr = inet_addr(paddr);
-  addr.sin_family = AF_INET;
+
+  /* needs resolve first */
+  if (!ip_in_dot_format(paddr)) {
+    if (gethostbyname_inet(paddr, &addr.sin_addr.s_addr) < 0) {
+      fprintf(stderr, "Cannot resolve addr '%s'\n", paddr);
+      return -1;
+    }
+    fprintf(stderr, "%s\n", inet_ntoa(addr.sin_addr));
+    addr.sin_family = AF_INET;
+  }
+  else {
+    addr.sin_addr.s_addr = inet_addr(paddr);
+    addr.sin_family = AF_INET;
+  }
+
   if (pport)
     addr.sin_port = htons(atoi(pport));
   else

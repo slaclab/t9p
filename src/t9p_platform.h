@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <assert.h>
+#include <netinet/in.h>
 
 #ifdef __rtems__
 #include <rtems.h>
@@ -174,3 +175,6 @@ extern int msg_queue_recv(msg_queue_t* q, void* data, size_t* size);
 
 /** Dynamic memory helpers */
 extern void* aligned_zmalloc(size_t size, size_t align);
+
+/** Safe wrapper around gethostbyname/getaddrinfo */
+extern int gethostbyname_inet(const char* name, in_addr_t* outaddr);
