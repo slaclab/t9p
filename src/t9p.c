@@ -69,6 +69,12 @@
 #include "t9p.h"
 #include "t9proto.h"
 
+/* FIXME: This is a workaround for some diod wierdness. For some reason it assumes
+ * that I/O requests (Twrite, Rread) are 24 bytes, even though they are less. This leads
+ * to diod rejecting writes w/count 4073 with msize=4096, even though it really shouldn't.
+ * REMOVE ME when fixed in upstream. */
+#define DIOD_IOHDRSZ 24
+
 #define T9P_TARGET_VERSION "9P2000.L"
 
 #define MAX_PATH_COMPONENTS 256
@@ -1206,19 +1212,12 @@ t9p_close(t9p_handle_t handle)
   /* Nothing to do on 9p */
 }
 
-ssize_t
-t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
+static ssize_t
+t9p_read_internal(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
 {
-  TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, (unsigned)num, outbuffer);
-  if (_maybe_recover(c, h) < 0)
-    return -EBADF;
-
   char packet[128];
   char rheader[sizeof(struct Rread)];
   int status = 0;
-
-  if (!_can_rw_fid(h, 0))
-    return -EPERM;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
@@ -1262,16 +1261,39 @@ error:
 }
 
 ssize_t
-t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
+t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
 {
-  TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, (unsigned)num, inbuffer);
+  TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, (unsigned)num, outbuffer);
   if (_maybe_recover(c, h) < 0)
     return -EBADF;
 
-  char packet[128];
+  if (!_can_rw_fid(h, 0))
+    return -EACCES;
 
-  if (!_can_rw_fid(h, 1))
-    return -1;
+  const size_t maxRd = c->msize - DIOD_IOHDRSZ; /* See FIXME note at #define */
+  uint64_t off = 0;
+  char* buf = outbuffer;
+  while (num > 0) {
+    const size_t toRd = MIN(num, maxRd);
+    ssize_t r = t9p_read_internal(c, h, offset + off, toRd, buf);
+    if (r < 0)
+      return r;
+    else if (r == 0) /* end of file */
+      return off;
+
+    off += r;
+    buf += r;
+    if (r > num) num = 0; /* paranoia! should never happen */
+    else num -= r;
+  }
+
+  return off;
+}
+
+static ssize_t
+t9p_write_internal(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
+{
+  char packet[128];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
@@ -1307,6 +1329,34 @@ t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const
   }
 
   return rw.count;
+}
+
+ssize_t
+t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
+{
+  TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, (unsigned)num, inbuffer);
+  if (_maybe_recover(c, h) < 0)
+    return -EBADF;
+
+  if (!_can_rw_fid(h, 1))
+    return -EACCES;
+
+  const ssize_t maxWr = c->msize - DIOD_IOHDRSZ; /* See FIXME note at #define */
+  const char* buf = inbuffer;
+  uint64_t off = 0;
+  while (num > 0) {
+    const ssize_t toWrite = MIN(num, maxWr);
+    ssize_t r = t9p_write_internal(c, h, offset + off, toWrite, buf);
+    if (r < 0)
+      return r;
+
+    off += r;
+    buf += r;
+    if (r > num) num = 0; /* paranoia! should never happen */
+    else num -= r;
+  }
+
+  return off;
 }
 
 int
