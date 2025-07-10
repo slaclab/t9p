@@ -853,7 +853,7 @@ t9p_init(
   }
 
   /** Init file handle list */
-  c->fhl = malloc(sizeof(struct t9p_handle_node) * opts->max_fids);
+  c->fhl = calloc(sizeof(struct t9p_handle_node), opts->max_fids);
   c->fhl_max = opts->max_fids;
   c->fhl_count = 0;
   c->fhl_free = NULL;
