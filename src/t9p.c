@@ -1242,8 +1242,6 @@ t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* 
     .rheadersz = sizeof(struct Rread)
   };
 
-  memset(outbuffer, '-', num);
-
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
     ERROR(c, "%s: Tread: %s\n", __FUNCTION__, _t9p_strerror(l));
     status = l;
