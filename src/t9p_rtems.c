@@ -1480,6 +1480,16 @@ t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   ENSURE(n != NULL);
 
+  ssize_t ret = t9p_read(n->c, n->h, iop->offset, count, buffer);
+  /** RTEMS 4.X is funny about this; it handles the offset itself. */
+#if __RTEMS_MAJOR__ >= 6
+  iop->offset += ret;
+#endif
+  if (ret < 0)
+    rtems_set_errno_and_return_minus_one(-ret);
+  return ret;
+
+#if 0
   /** Break reads into pieces in case iounit is smaller than the requested read size */
   const size_t iounit = t9p_get_iounit(n->h);
   ssize_t rem = count, ret = 0;
@@ -1499,12 +1509,13 @@ t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
     off += ret;
 
     /** Likely end of file */
-    if (ret != toRead)
+    if (ret == 0)
       break;
   }
 
   TRACE("read num=%lu", (uintptr_t)p - (uintptr_t)buffer);
   return (uintptr_t)p - (uintptr_t)buffer;
+#endif
 }
 
 static ssize_t
@@ -1515,6 +1526,15 @@ t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count)
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   ENSURE(n != NULL);
 
+  ssize_t ret = t9p_write(n->c, n->h, iop->offset, count, p);
+  /** RTEMS 4.X tracks the offset for us */
+#if __RTEMS_MAJOR__ >= 6
+  iop->offset += ret;
+#endif
+  if (ret < 0)
+    rtems_set_errno_and_return_minus_one(-ret);
+  return ret;
+#if 0
   /** Break writes into pieces in case iounit is smaller than the requested write size */
   const size_t iounit = t9p_get_iounit(n->h);
   ssize_t rem = count, ret = 0;
@@ -1533,6 +1553,7 @@ t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count)
   #endif
   }
   return count;
+#endif
 }
 
 static off_t
@@ -1545,10 +1566,6 @@ t9p_rtems_file_lseek(rtems_libio_t* iop, off_t offset, int whence)
   if (whence == SEEK_END) {
     iop->offset = t9p_stat_size(n->c, n->h);
   }
-
-  /** FIXME: Why doesn't higher-level lseek handle this? am I doing something wrong? */
-  //if (iop->offset < 0)
-  //  rtems_set_errno_and_return_minus_one(EINVAL);
 
   return iop->offset;
 }
