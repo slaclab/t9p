@@ -17,3 +17,4 @@ vgcore*
 compile_commands.json
 
 Makefile.in
+/tests/tcpsrv
