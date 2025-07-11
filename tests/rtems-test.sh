@@ -21,6 +21,10 @@ while test $# -gt 0; do
         TARGET=$2
         shift
         ;;
+    -l|--limit)
+        LIMIT="cpulimit -f -l 1 --"
+        shift
+        ;;
     *)
         echo "Unknown arg $1"
         exit 1
@@ -39,6 +43,11 @@ else
 fi
 echo "NETDEV=$NETDEV"
 
-qemu-system-$ARCH $QEMU_ARGS -no-reboot -m 128 -serial mon:stdio -nographic \
-    -device $NETDEV,netdev=em0 -netdev user,id=em0,hostfwd=tcp::10003-:10003,hostfwd=tcp::1234-:1234 \
+gcc -o tcpsrv tcpsrv.c -lc
+./tcpsrv &
+
+$LIMIT qemu-system-$ARCH $QEMU_ARGS -no-reboot -m 128M -serial mon:stdio -nographic \
+    -device $NETDEV,netdev=em0 -netdev user,id=em0,hostfwd=tcp::10003-:10003,hostfwd=tcp::1234-:1234,hostfwd=udp::5000-:5000 \
     -append "$BSP_ARGS" -kernel $PWD/../build-cmake/build-$TARGET/t9p_rtems_test
+
+kill $(jobs -p)

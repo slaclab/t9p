@@ -23,6 +23,9 @@
 #include <errno.h>
 #include <string.h>
 #include <rtems/bspcmdline.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 
 #ifdef RTEMS_BSD_STACK
 #include <machine/rtems-bsd-commands.h>
@@ -104,9 +107,54 @@ static struct rtems_bsdnet_ifconfig ne2k_driver_config = {
 
 struct rtems_bsdnet_config rtems_bsdnet_config = {
   .ifconfig = &ne2k_driver_config,
+  .mbuf_bytecount = 100*1024,
+  .mbuf_cluster_bytecount = 200*1024,
+  .network_task_priority = 150,
 };
 
 #endif
+
+uintptr_t dummy = 0;
+
+/* This task spams a tcpsrv instance with junk. The idea is to saturate the network
+ * stack as much as possible to simulate bad behavior seen with the uC5282 */
+static void
+loading_thread(unsigned long arg)
+{
+  struct sockaddr_in dest = {0};
+  dest.sin_addr.s_addr = inet_addr("10.0.2.2");
+  dest.sin_family = AF_INET;
+  dest.sin_port = htons(4096);
+
+  int sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (sock < 0) {
+    perror("socket");
+    abort();
+  }
+
+  if (connect(sock, (struct sockaddr*)&dest, sizeof(dest)) < 0) {
+    perror("connect");
+    abort();
+  }
+
+  while (1) {
+    char buf[4096];
+    for (int i = 0; i < sizeof(buf); ++i)
+      buf[i] = rand() & 0xFF;
+    
+    if (send(sock, buf, sizeof(buf), 0) < 0) {
+      perror("sendto");
+      usleep(1000); continue;
+    }
+
+    if (recv(sock, buf, sizeof(buf), 0) < 0) {
+      perror("recvfrom");
+      usleep(1000); continue;
+    }
+
+    usleep(1000);
+  }
+}
 
 /** Configure network using libbsd */
 static void
@@ -206,13 +254,28 @@ POSIX_Init(void* arg)
   rtems_shell_write_file("/etc/group", "rtems:x:1:rtems\n");
   chmod("/etc/group", 0644);
 
+  rtems_id id;
+  int r = rtems_task_create(
+    rtems_build_name('D','U','M','Y'),
+    200,
+    0,
+    RTEMS_PREEMPT,
+    0,
+    &id
+  );
+  r = rtems_task_start(id, loading_thread, 0);
+
+  if (r != RTEMS_SUCCESSFUL) {
+    printf("Failed to launch dummy thread\n");
+  }
+
   printf("Press s to open shell, a to run auto test, any other key to continue\n");
   char b;
   b = getchar();
   if (b == 's' || b == 'a') {
     mkdir("/test", 0777);
     mkdir("/test2", 0777);
-    const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID ",trace";
+    const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID ",msize=4096";
     mount(
       "10.0.2.2:10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
@@ -261,7 +324,7 @@ POSIX_Init(void* arg)
     args[n++] = strdup(s);
   }
 
-  int r = main(n, args);
+  r = main(n, args);
 
   if (r != 0)
     printf("*** FAILED T9P CMD ***\n");
@@ -291,6 +354,10 @@ bsp_predriver_hook(void)
   BSPPrintkPort = BSP_CONSOLE_PORT_COM1;
 }
 #endif
+
+#define CONFIGURE_TICKS_PER_TIMESLICE   (20000/CONFIGURE_MICROSECONDS_PER_TICK)
+#define CONFIGURE_EXECUTIVE_RAM_SIZE (2*1024*1024)
+#define CONFIGURE_INIT_TASK_PRIORITY    80
 
 /** POSIX configuration */
 #define CONFIGURE_POSIX_INIT_THREAD_TABLE
