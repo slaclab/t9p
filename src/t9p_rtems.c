@@ -14,10 +14,12 @@
  * ----------------------------------------------------------------------------
  **/
 
-#define _T9P_NO_POSIX_MQ
 #include "t9p_rtems.h"
 #include "t9p.h"
 #include "t9p_platform.h"
+
+#include <stdio.h>
+#include <string.h>
 
 #include <rtems.h>
 #include <rtems/libio.h>
@@ -43,8 +45,6 @@
 #ifdef HAVE_CEXPSH
 #include <cexpsh.h>
 #endif
-
-#include "t9p_posix.c"
 
 #define TESTING
 
@@ -1475,10 +1475,11 @@ static ssize_t
 t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
 {
   TRACE("iop=%p,buffer=%p,count=%zu,iop->off=%lld", iop, buffer, count, iop->offset);
-  ssize_t off = iop->offset;
-  uint8_t* p = buffer;
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   ENSURE(n != NULL);
+
+  if (!buffer)
+    rtems_set_errno_and_return_minus_one(EINVAL);
 
   ssize_t ret = t9p_read(n->c, n->h, iop->offset, count, buffer);
   /** RTEMS 4.X is funny about this; it handles the offset itself. */
@@ -1488,45 +1489,19 @@ t9p_rtems_file_read(rtems_libio_t* iop, void* buffer, size_t count)
   if (ret < 0)
     rtems_set_errno_and_return_minus_one(-ret);
   return ret;
-
-#if 0
-  /** Break reads into pieces in case iounit is smaller than the requested read size */
-  const size_t iounit = t9p_get_iounit(n->h);
-  ssize_t rem = count, ret = 0;
-  while (rem > 0) {
-    const uint32_t toRead = min(iounit, rem);
-    ret = t9p_read(n->c, n->h, off, toRead, p);
-    if (ret < 0) {
-      errno = -ret;
-      return -1;
-    }
-    rem -= ret;
-    p += ret;
-    /** RTEMS 4.X is funny about this; it handles the offset itself. */
-  #if __RTEMS_MAJOR__ >= 6
-    iop->offset += ret;
-  #endif
-    off += ret;
-
-    /** Likely end of file */
-    if (ret == 0)
-      break;
-  }
-
-  TRACE("read num=%lu", (uintptr_t)p - (uintptr_t)buffer);
-  return (uintptr_t)p - (uintptr_t)buffer;
-#endif
 }
 
 static ssize_t
 t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count)
 {
   TRACE("iop=%p, buffer=%p, count=%zu", iop, buffer, count);
-  const uint8_t* p = buffer;
   t9p_rtems_node_t* n = t9p_rtems_iop_get_node(iop);
   ENSURE(n != NULL);
 
-  ssize_t ret = t9p_write(n->c, n->h, iop->offset, count, p);
+  if (!buffer)
+    rtems_set_errno_and_return_minus_one(EINVAL);
+
+  ssize_t ret = t9p_write(n->c, n->h, iop->offset, count, buffer);
   /** RTEMS 4.X tracks the offset for us */
 #if __RTEMS_MAJOR__ >= 6
   iop->offset += ret;
@@ -1534,26 +1509,6 @@ t9p_rtems_file_write(rtems_libio_t* iop, const void* buffer, size_t count)
   if (ret < 0)
     rtems_set_errno_and_return_minus_one(-ret);
   return ret;
-#if 0
-  /** Break writes into pieces in case iounit is smaller than the requested write size */
-  const size_t iounit = t9p_get_iounit(n->h);
-  ssize_t rem = count, ret = 0;
-  while (rem > 0) {
-    ssize_t toWrite = min(iounit, rem < count ? rem : count);
-    ret = t9p_write(n->c, n->h, iop->offset, toWrite, p);
-    if (ret < 0) {
-      errno = -ret;
-      return -1;
-    }
-    rem -= ret;
-    p += ret;
-    /** RTEMS 4.X tracks the offset for us */
-  #if __RTEMS_MAJOR__ >= 6
-    iop->offset += ret;
-  #endif
-  }
-  return count;
-#endif
 }
 
 static off_t
@@ -1672,72 +1627,3 @@ t9p_rtems_file_ioctl(rtems_libio_t* iop, unsigned long req, void* buffer)
   return 0;
 }
 
-/**************************************************************************************
- * Platform abstraction
- **************************************************************************************/
-
-void*
-aligned_zmalloc(size_t size, size_t align)
-{
-  void* ptr = NULL;
-  rtems_memalign(&ptr, align, size);
-  if (ptr)
-    memset(ptr, 0, size);
-  return ptr;
-}
-
-#ifdef _T9P_NO_POSIX_MQ
-
-struct _msg_queue_s
-{
-  rtems_name name;
-  rtems_id queue;
-  size_t msgSize;
-};
-
-msg_queue_t*
-msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
-{
-  msg_queue_t* q = calloc(1, sizeof(msg_queue_t));
-  q->name = rtems_build_name(id[0], id[1], id[2], id[3]);
-  q->msgSize = msgSize;
-  rtems_status_code status =
-    rtems_message_queue_create(q->name, maxMsgs, msgSize, RTEMS_FIFO, &q->queue);
-  if (status != RTEMS_SUCCESSFUL) {
-    printf("Queue create failed: %d\n", status);
-    free(q);
-    return NULL;
-  }
-  return q;
-}
-
-void
-msg_queue_destroy(msg_queue_t* q)
-{
-  rtems_message_queue_delete(q->queue);
-  free(q);
-}
-
-int
-msg_queue_send(msg_queue_t* q, const void* data, size_t size)
-{
-  assert(size == q->msgSize);
-  return rtems_message_queue_send(q->queue, data, size) == RTEMS_SUCCESSFUL ? 0 : -1;
-}
-
-int
-msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
-{
-  assert(*size == q->msgSize);
-  return 
-    rtems_message_queue_receive(q->queue, data, size, RTEMS_NO_WAIT, 0) == RTEMS_SUCCESSFUL?0:-1;
-}
-
-#endif
-
-#if defined(TESTING) && defined(HAVE_GESYS)
-
-/** This is so evil.. */
-#include "../tests/t9p_automated_test.c"
-
-#endif

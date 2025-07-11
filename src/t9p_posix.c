@@ -205,21 +205,73 @@ event_destroy(event_t* ev)
   free(ev);
 }
 
-#ifndef __rtems__
 void*
 aligned_zmalloc(size_t size, size_t align)
 {
   void* ptr = NULL;
+#ifdef __rtems__
   posix_memalign(&ptr, align, size);
+#else
+  rtems_memalign(&ptr, align, size);
+#endif
   if (ptr)
     memset(ptr, 0, size);
   return ptr;
 }
-#endif
+
+
+#ifdef __rtems__
+
+/* Message queue using the RTEMS score API */
+
+struct _msg_queue_s
+{
+  rtems_name name;
+  rtems_id queue;
+  size_t msgSize;
+};
+
+msg_queue_t*
+msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
+{
+  msg_queue_t* q = calloc(1, sizeof(msg_queue_t));
+  q->name = rtems_build_name(id[0], id[1], id[2], id[3]);
+  q->msgSize = msgSize;
+  rtems_status_code status =
+    rtems_message_queue_create(q->name, maxMsgs, msgSize, RTEMS_FIFO, &q->queue);
+  if (status != RTEMS_SUCCESSFUL) {
+    printf("Queue create failed: %d\n", status);
+    free(q);
+    return NULL;
+  }
+  return q;
+}
+
+void
+msg_queue_destroy(msg_queue_t* q)
+{
+  rtems_message_queue_delete(q->queue);
+  free(q);
+}
+
+int
+msg_queue_send(msg_queue_t* q, const void* data, size_t size)
+{
+  assert(size == q->msgSize);
+  return rtems_message_queue_send(q->queue, data, size) == RTEMS_SUCCESSFUL ? 0 : -1;
+}
+
+int
+msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
+{
+  assert(*size == q->msgSize);
+  return 
+    rtems_message_queue_receive(q->queue, data, size, RTEMS_NO_WAIT, 0) == RTEMS_SUCCESSFUL?0:-1;
+}
+
+#else /* __rtems__ */
 
 /** Really dumb message queue because POSIX message queues don't quite cut the mustard... */
-
-#ifndef _T9P_NO_POSIX_MQ
 
 struct msg
 {
