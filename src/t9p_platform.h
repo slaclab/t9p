@@ -29,16 +29,16 @@
 
 /** Make your target selections here! */
 #ifdef __linux__
-#define T9P_TARGET T9P_TARGET_POSIX
+# define T9P_TARGET T9P_TARGET_POSIX
 #elif defined(__rtems__)
-#define T9P_TARGET T9P_TARGET_RTEMS4
+# define T9P_TARGET T9P_TARGET_RTEMS4
 #endif
 
 /** Alignment checking */
 #ifdef NDEBUG
-#define ASSERT_ALIGNED(_addr, _align)
+# define ASSERT_ALIGNED(_addr, _align)
 #else
-#define ASSERT_ALIGNED(_addr, _align) do {        \
+# define ASSERT_ALIGNED(_addr, _align) do {        \
     assert(((uintptr_t)(_addr)) % (_align) == 0); \
   } while (0)
 #endif
@@ -48,14 +48,14 @@
 #define CC_MFENCE asm volatile ("" : : : "memory")
 
 #ifdef __powerpc__
-#define MFENCE asm volatile ("lwsync" : : : "memory")
+# define MFENCE asm volatile ("lwsync" : : : "memory")
 #elif defined(__i386__)
-#define MFENCE asm volatile ("mfence" : : : "memory") /* not really needed on x86... */
+# define MFENCE asm volatile ("mfence" : : : "memory") /* not really needed on x86... */
 #elif defined(__m68k__)
 /* nop performs full pipeline synchronization on CF */
-#define MFENCE asm volatile ("nop" : : : "memory")
+# define MFENCE asm volatile ("nop" : : : "memory")
 #else
-#define MFENCE asm volatile ("" : : : "memory")
+# define MFENCE asm volatile ("" : : : "memory")
 #endif
 /**
  * NOTE: The Coldfire ISA-A does not support atomic instructions. Instead, we
