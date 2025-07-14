@@ -110,6 +110,9 @@ struct rtems_bsdnet_config rtems_bsdnet_config = {
   .mbuf_bytecount = 100*1024,
   .mbuf_cluster_bytecount = 200*1024,
   .network_task_priority = 150,
+  .ntp_server = {
+    "10.0.2.2",
+  },
 };
 
 #endif
@@ -155,6 +158,17 @@ loading_thread(unsigned long arg)
     usleep(1000);
   }
 }
+
+#ifdef RTEMS_LEGACY_STACK
+static void
+ntpd_task(unsigned long p)
+{
+  while (1) {
+    rtems_bsdnet_synchronize_ntp(0, 150);
+    sleep(10);
+  }
+}
+#endif
 
 /** Configure network using libbsd */
 static void
@@ -204,6 +218,72 @@ configure_network(void)
 
   /** Register 9P fs backend */
   t9p_rtems_register();
+
+#ifdef RTEMS_LEGACY_STACK
+  rtems_id task_id = 0;
+  int r = rtems_task_create(
+    rtems_build_name('n', 't', 'p', 'd'),
+    150,
+    rtems_minimum_stack_size,
+    RTEMS_PREEMPT,
+    RTEMS_FLOATING_POINT,
+    &task_id
+  );
+  if (r != RTEMS_SUCCESSFUL) {
+    fprintf(stderr, "task create failed\n");
+    return;
+  }
+
+  r = rtems_task_start(task_id, ntpd_task, 0);
+  if (r != RTEMS_SUCCESSFUL) {
+    fprintf(stderr, "task start failed\n");
+    return;
+  }
+#endif // RTEMS_LEGACY_STACK
+}
+
+#if __RTEMS_MAJOR__ < 5
+static int sh_rtems_mbuf_stats(int argc, char** argv)
+{
+  rtems_bsdnet_show_mbuf_stats();
+  return 0;
+}
+
+static int sh_rtems_if_stats(int argc, char** argv)
+{
+  rtems_bsdnet_show_if_stats();
+  return 0;
+}
+
+static int sh_rtems_ip_stats(int argc, char** argv)
+{
+  rtems_bsdnet_show_ip_stats();
+  return 0;
+}
+
+static int sh_rtems_tcp_stats(int argc, char** argv)
+{
+  rtems_bsdnet_show_tcp_stats();
+  return 0;
+}
+
+static int sh_rtems_udp_stats(int argc, char** argv)
+{
+  rtems_bsdnet_show_udp_stats();
+  return 0;
+}
+#endif // __RTEMS_MAJOR__ < 5
+
+static void
+register_shell_cmds()
+{
+#if __RTEMS_MAJOR__ < 5
+  rtems_shell_add_cmd("mbuf_stats", "network", "", sh_rtems_mbuf_stats);
+  rtems_shell_add_cmd("if_stats", "network", "", sh_rtems_if_stats);
+  rtems_shell_add_cmd("ip_stats", "network", "", sh_rtems_ip_stats);
+  rtems_shell_add_cmd("tcp_stats", "network", "", sh_rtems_tcp_stats);
+  rtems_shell_add_cmd("udp_stats", "network", "", sh_rtems_udp_stats);
+#endif
 }
 
 static void*
@@ -214,6 +294,8 @@ POSIX_Init(void* arg)
 #if __i386__
   printf("bsp_cmdline: %s\n", bsp_cmdline());
 #endif
+
+  register_shell_cmds();
 
   struct stat st;
   if (fstat(fileno(stdin), &st) < -1) {
