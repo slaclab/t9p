@@ -3115,11 +3115,13 @@ _t9p_tcp_newsock()
     return -1;
   }
 
+#ifndef __rtems__
   /** Keep connections alive */
   int o = 1;
   if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &o, sizeof(o)) < 0) {
     perror("setsockopt");
   }
+#endif
   
 #ifdef __linux__
   /** On Linux, set recv timeout */
