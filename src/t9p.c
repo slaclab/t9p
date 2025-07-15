@@ -34,6 +34,8 @@
 #include <time.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include <ctype.h>
+#include <netdb.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -46,6 +48,8 @@
 #include <rtems/rtems/tasks.h>
 #include <rtems/rtems/event.h>
 #include <rtems/rtems/clock.h>
+#else
+#include <sched.h>
 #endif
 #else
 #define PATH_MAX 256
@@ -65,16 +69,22 @@
 #include "t9p.h"
 #include "t9proto.h"
 
+/* FIXME: This is a workaround for some diod wierdness. For some reason it assumes
+ * that I/O requests (Twrite, Rread) are 24 bytes, even though they are less. This leads
+ * to diod rejecting writes w/count 4073 with msize=4096, even though it really shouldn't.
+ * REMOVE ME when fixed in upstream. */
+#define DIOD_IOHDRSZ 24
+
 #define T9P_TARGET_VERSION "9P2000.L"
 
 #define MAX_PATH_COMPONENTS 256
 
-#define MAX_TAGS 1024
+#define MAX_TAGS 512
 #define MAX_TRANSACTIONS 512
 
 #define DEFAULT_MAX_FILES 256
 #define DEFAULT_SEND_TIMEO 3000
-#define DEFAULT_RECV_TIMEO 3000
+#define DEFAULT_RECV_TIMEO 60000
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -232,6 +242,25 @@ t9p_rt_ms_to_ticks(uint32_t ms)
   return i;
 }
 #endif
+
+bool
+ip_in_dot_format(const char* ip)
+{
+  int dots = 0, seq = 0;
+  for (const char* s = ip; *s; ++s) {
+    if (*s == '.') {
+      if (seq == 0) return false; /* .. is invalid */
+      ++dots, seq = 0;
+      continue;
+    }
+    if (*s > '9' || *s < '0')
+      return false; /* any non-numeric char that isn't '.' is invalid */
+    ++seq;
+    if (seq > 3)
+      return false; /* more than 3 nums is invalid */
+  }
+  return dots == 3; /* needs exactly 3 dots */
+}
 
 /********************************************************************/
 /*                                                                  */
@@ -571,7 +600,7 @@ _version_handshake(struct t9p_context* c)
     buf,
     sizeof(buf),
     T9P_NOTAG,
-    MAX(c->opts.max_read_data_size, c->opts.max_write_data_size),
+    c->opts.msize,
     sizeof(version) - 1,
     version
   );
@@ -616,7 +645,7 @@ _version_handshake(struct t9p_context* c)
 
   c->msize = rv->msize;
 
-  DEBUG(c, "Rversion handshake complete for version %s\n", version);
+  DEBUG(c, "Using %s with msize %lu\n", version, rv->msize);
   free(rv);
   return 0;
 }
@@ -784,13 +813,12 @@ void
 t9p_opts_init(struct t9p_opts* opts)
 {
   memset(opts, 0, sizeof(*opts));
-  opts->max_read_data_size = (1 << 20);  /** 1M */
-  opts->max_write_data_size = (1 << 20); /** 1M */
+  opts->msize = 16384; //(1 << 20);  /** 1M */
   opts->queue_size = T9P_PACKET_QUEUE_SIZE;
   opts->max_fids = DEFAULT_MAX_FILES;
   opts->send_timeo = DEFAULT_SEND_TIMEO;
   opts->recv_timeo = DEFAULT_RECV_TIMEO;
-  opts->prio = 20;
+  opts->prio = T9P_THREAD_PRIO_MED;
 }
 
 t9p_context_t*
@@ -831,7 +859,7 @@ t9p_init(
   }
 
   /** Init file handle list */
-  c->fhl = malloc(sizeof(struct t9p_handle_node) * opts->max_fids);
+  c->fhl = calloc(sizeof(struct t9p_handle_node), opts->max_fids);
   c->fhl_max = opts->max_fids;
   c->fhl_count = 0;
   c->fhl_free = NULL;
@@ -887,7 +915,7 @@ t9p_init(
   c->thr_run = 1;
 
   /** Kick off thread */
-  if (!(c->io_thread = thread_create(_t9p_thread_proc, c, opts->prio))) {
+  if (!(c->io_thread = thread_create(_t9p_thread_proc, c, c->opts.prio))) {
     t9p_shutdown(c);
     return NULL;
   }
@@ -1128,6 +1156,10 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
   if (_maybe_recover(c, h) < 0)
     return -EBADF;
 
+  /** File already open, just return success */
+  if (h->iounit != 0)
+    return 0;
+
   char packet[128];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1151,7 +1183,7 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
   };
 
   if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tlopen failed\n", __FUNCTION__);
+    ERROR(c, "%s: Tlopen: %s\n", __FUNCTION__, _t9p_strerror(l));
     return l;
   }
 
@@ -1177,22 +1209,15 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
 void
 t9p_close(t9p_handle_t handle)
 {
-  handle->iounit = 0;
+  /* Nothing to do on 9p */
 }
 
-ssize_t
-t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
+static ssize_t
+t9p_read_internal(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
 {
-  TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, (unsigned)num, outbuffer);
-  if (_maybe_recover(c, h) < 0)
-    return -EBADF;
-
   char packet[128];
   char rheader[sizeof(struct Rread)];
   int status = 0;
-
-  if (!_can_rw_fid(h, 0))
-    return -EPERM;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
@@ -1236,16 +1261,39 @@ error:
 }
 
 ssize_t
-t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
+t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
 {
-  TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, (unsigned)num, inbuffer);
+  TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, (unsigned)num, outbuffer);
   if (_maybe_recover(c, h) < 0)
     return -EBADF;
 
-  char packet[128];
+  if (!_can_rw_fid(h, 0))
+    return -EACCES;
 
-  if (!_can_rw_fid(h, 1))
-    return -1;
+  const size_t maxRd = c->msize - DIOD_IOHDRSZ; /* See FIXME note at #define */
+  uint64_t off = 0;
+  char* buf = outbuffer;
+  while (num > 0) {
+    const size_t toRd = MIN(num, maxRd);
+    ssize_t r = t9p_read_internal(c, h, offset + off, toRd, buf);
+    if (r < 0)
+      return r;
+    else if (r == 0) /* end of file */
+      return off;
+
+    off += r;
+    buf += r;
+    if (r > num) num = 0; /* paranoia! should never happen */
+    else num -= r;
+  }
+
+  return off;
+}
+
+static ssize_t
+t9p_write_internal(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
+{
+  char packet[128];
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
   if (!n)
@@ -1281,6 +1329,34 @@ t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const
   }
 
   return rw.count;
+}
+
+ssize_t
+t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
+{
+  TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, (unsigned)num, inbuffer);
+  if (_maybe_recover(c, h) < 0)
+    return -EBADF;
+
+  if (!_can_rw_fid(h, 1))
+    return -EACCES;
+
+  const ssize_t maxWr = c->msize - DIOD_IOHDRSZ; /* See FIXME note at #define */
+  const char* buf = inbuffer;
+  uint64_t off = 0;
+  while (num > 0) {
+    const ssize_t toWrite = MIN(num, maxWr);
+    ssize_t r = t9p_write_internal(c, h, offset + off, toWrite, buf);
+    if (r < 0)
+      return r;
+
+    off += r;
+    buf += r;
+    if (r > num) num = 0; /* paranoia! should never happen */
+    else num -= r;
+  }
+
+  return off;
 }
 
 int
@@ -2767,7 +2843,8 @@ _t9p_thread_proc(void* param)
     if (c->broken)
       _t9p_timeout_all(requests, MAX_TAGS);
 
-    /* Attempt a reconnect every 5 seconds */
+    /* Attempt a reconnect periodically */
+    int do_sleep = 1;
     while (c->broken) {
       mutex_lock(c->socket_lock);
       if (_t9p_try_reconnect(c) == 0) {
@@ -2775,7 +2852,8 @@ _t9p_thread_proc(void* param)
         break;
       }
       mutex_unlock(c->socket_lock);
-      sleep(1);
+      sleep(do_sleep);
+      do_sleep = (do_sleep << 1) & 0x7F; /* back off a bit, but limit to 64 */
     }
 
     mutex_lock(c->socket_lock);
@@ -2794,7 +2872,7 @@ _t9p_thread_proc(void* param)
       if (c->opts.log_level <= T9P_LOG_TRACE) {
         if (node->tr.hdata) {
           struct TRcommon com;
-          decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
+          (void)decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
           fprintf(stderr,
             "send: (header) type=%d(%s), len=%u, tag=%d\n",
             com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
@@ -2802,7 +2880,7 @@ _t9p_thread_proc(void* param)
         }
         else if (node->tr.data) {
           struct TRcommon com;
-          decode_TRcommon(&com, node->tr.data, node->tr.size);
+          (void)decode_TRcommon(&com, node->tr.data, node->tr.size);
           fprintf(stderr,
             "send: type=%d(%s), len=%u, tag=%d\n",
             com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
@@ -3039,11 +3117,13 @@ _t9p_tcp_newsock()
     return -1;
   }
 
+#ifndef __rtems__
   /** Keep connections alive */
   int o = 1;
   if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &o, sizeof(o)) < 0) {
     perror("setsockopt");
   }
+#endif
   
 #ifdef __linux__
   /** On Linux, set recv timeout */
@@ -3052,7 +3132,7 @@ _t9p_tcp_newsock()
   to.tv_sec = 0;
   if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
     perror("setsockopt(SO_RECVTIMEO)");
-    close(socket);
+    close(sock);
     return -1;
   }
 #endif
@@ -3102,8 +3182,21 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
   char* pport = strtok(NULL, ":");
 
   struct sockaddr_in addr = {0};
-  addr.sin_addr.s_addr = inet_addr(paddr);
-  addr.sin_family = AF_INET;
+
+  /* needs resolve first */
+  if (!ip_in_dot_format(paddr)) {
+    if (gethostbyname_inet(paddr, &addr.sin_addr.s_addr) < 0) {
+      fprintf(stderr, "Cannot resolve addr '%s'\n", paddr);
+      return -1;
+    }
+    fprintf(stderr, "%s\n", inet_ntoa(addr.sin_addr));
+    addr.sin_family = AF_INET;
+  }
+  else {
+    addr.sin_addr.s_addr = inet_addr(paddr);
+    addr.sin_family = AF_INET;
+  }
+
   if (pport)
     addr.sin_port = htons(atoi(pport));
   else
@@ -3168,10 +3261,6 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
     rflags |= MSG_PEEK;
 
   struct tcp_context* pc = context;
-  /** Read behavior instead of peek */
-  // if (flags & T9P_RECV_READ)
-  //     return read(pc->sock, data, len);
-  // else
   ssize_t r = recv(pc->sock, data, len, rflags);
   if (r < 0)
     r = -errno;

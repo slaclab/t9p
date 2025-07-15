@@ -12,15 +12,12 @@ endif()
 set(T9P_SOURCES
     "src/t9p.c"
     "src/t9proto.c"
+    "src/t9p_posix.c"
 )
 
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
     set(T9P_PLATFORM_SOURCES
         "src/t9p_rtems.c"
-    )
-else()
-    set(T9P_PLATFORM_SOURCES
-        "src/t9p_posix.c"
     )
 endif()
 
