@@ -2843,7 +2843,8 @@ _t9p_thread_proc(void* param)
     if (c->broken)
       _t9p_timeout_all(requests, MAX_TAGS);
 
-    /* Attempt a reconnect every 5 seconds */
+    /* Attempt a reconnect periodically */
+    int do_sleep = 1;
     while (c->broken) {
       mutex_lock(c->socket_lock);
       if (_t9p_try_reconnect(c) == 0) {
@@ -2851,7 +2852,8 @@ _t9p_thread_proc(void* param)
         break;
       }
       mutex_unlock(c->socket_lock);
-      sleep(1);
+      sleep(do_sleep);
+      do_sleep = (do_sleep << 1) & 0x7F; /* back off a bit, but limit to 64 */
     }
 
     mutex_lock(c->socket_lock);
