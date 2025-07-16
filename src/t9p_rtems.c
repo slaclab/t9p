@@ -595,13 +595,13 @@ t9p_rtems_loc_get_fsinfo(const rtems_filesystem_location_info_t* loc)
 static t9p_rtems_node_t*
 t9p_rtems_clone_node(const t9p_rtems_node_t* old, int dupFid)
 {
-  t9p_rtems_node_t* n = calloc(sizeof(t9p_rtems_node_t), 1);
+  t9p_rtems_node_t* n = t9p_calloc(sizeof(t9p_rtems_node_t), 1);
   *n = *old;
 
   /** Duplicate fid too */
   if (dupFid) {
     if (t9p_dup(n->c, old->h, &n->h) < 0) {
-      free(n);
+      t9p_free(n);
       return NULL;
     }
   }
@@ -702,7 +702,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   mt_entry->pathconf_limits_and_options = t9p_fs_opts;
 #endif
   /** Configure FS info and opts */
-  mt_entry->fs_info = calloc(sizeof(t9p_rtems_fs_info_t), 1);
+  mt_entry->fs_info = t9p_calloc(sizeof(t9p_rtems_fs_info_t), 1);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
 
   pthread_mutexattr_init(&fi->mutattr);
@@ -741,7 +741,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   printf("Mounted 9P %s:%s at %s\n", ip, apath, mt_entry->target);
 
   /** Setup root node info */
-  t9p_rtems_node_t* root = calloc(sizeof(t9p_rtems_node_t), 1);
+  t9p_rtems_node_t* root = t9p_calloc(sizeof(t9p_rtems_node_t), 1);
   root->c = fi->c;
   root->h = t9p_get_root(fi->c);
 #if __RTEMS_MAJOR__ >= 6
@@ -771,7 +771,7 @@ t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry)
   pthread_mutex_destroy(&fi->mutex);
   pthread_mutexattr_destroy(&fi->mutattr);
   t9p_shutdown(fi->c);
-  
+
 #if __RTEMS_MAJOR__ <= 4
   return 0;
 #endif
@@ -858,14 +858,14 @@ t9p_rtems_fs_clonenode(rtems_filesystem_location_info_t* loc)
   
   /** Duplicate the existing node to avoid double frees.
     * TODO: Ref counting? */
-  t9p_rtems_node_t* newnode = calloc(sizeof(t9p_rtems_node_t), 1);
+  t9p_rtems_node_t* newnode = t9p_calloc(sizeof(t9p_rtems_node_t), 1);
   *newnode = *n;
 
   t9p_handle_t newhandle;
   int r;
   if ((r = t9p_dup(n->c, n->h, &newhandle)) < 0) {
     errno = -r;
-    free(newnode);
+    t9p_free(newnode);
     return -1;
   }
   newnode->h = newhandle;
@@ -896,7 +896,7 @@ t9p_rtems_fs_evalpath(rtems_filesystem_eval_path_context_t* ctx)
   }
 
   /** Create a new node for the new location. We're supposed to reuse currentloc here. */
-  t9p_rtems_node_t* e = calloc(sizeof(t9p_rtems_node_t), 1);
+  t9p_rtems_node_t* e = t9p_calloc(sizeof(t9p_rtems_node_t), 1);
   current->node_access = e;
   e->c = n->c;
   e->h = h;
@@ -1245,7 +1245,7 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
   n->h = NULL;
   n->c = NULL;
   loc->node_access = NULL;
-  free(n);
+  t9p_free(n);
   
 #if __RTEMS_MAJOR__ <= 4
   return 0;
