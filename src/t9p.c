@@ -813,7 +813,11 @@ void
 t9p_opts_init(struct t9p_opts* opts)
 {
   memset(opts, 0, sizeof(*opts));
-  opts->msize = 16384; //(1 << 20);  /** 1M */
+#ifdef __mcoldfire__
+  opts->msize = 4096; /* Coldfire works better with smaller msize */
+#else
+  opts->msize = 65536;
+#endif
   opts->queue_size = T9P_PACKET_QUEUE_SIZE;
   opts->max_fids = DEFAULT_MAX_FILES;
   opts->send_timeo = DEFAULT_SEND_TIMEO;
@@ -3019,33 +3023,8 @@ _t9p_thread_proc(void* param)
       if (!n->tr.rdata || n->tr.rsize == 0)
         _discard(c, &com);
       else {
-        /** Read off what we can */
         l = c->trans.recv(c->conn, n->tr.rdata, MIN(n->tr.rsize, com.size), 0);
-        if (l > 0) {
-          ssize_t rem = com.size - l;
-          nread += l;
-
-          /** Discard the rest */
-          while (rem > 0) {
-            ssize_t r;
-            int tries = 5;
-          again:
-            r = c->trans.recv(c->conn, buf, MIN(sizeof(buf), rem), 0);
-            if (r <= 0) {
-              /** If we hit EAGAIN, wait and retry. Not optimal, but this is a rather rare
-                * edge case. */
-              if (r < 0 && errno == EAGAIN && tries-- > 0) {
-                usleep(500);
-                goto again;
-              }
-              break;
-            }
-            rem -= r;
-          }
-
-          if (rem > 0)
-            ERROR(c, "recv: Partial discard\n");
-        }
+        nread += l;
       }
 
     recv_done:
@@ -3261,10 +3240,40 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
     rflags |= MSG_PEEK;
 
   struct tcp_context* pc = context;
-  ssize_t r = recv(pc->sock, data, len, rflags);
-  if (r < 0)
-    r = -errno;
-  return r;
+
+  /* For peek, we don't need all of that crazy logic */
+  if (flags & T9P_RECV_PEEK) {
+    ssize_t r = recv(pc->sock, data, len, rflags);
+    if (r < 0)
+      r = -errno;
+    return r;
+  }
+
+  ssize_t off = 0, rem = len, l = 0;
+  int tries = 20;
+
+  do {
+    l = recv(pc->sock, (uint8_t*)data + off, rem, rflags);
+    if (l <= 0) {
+      if (l < 0 && errno != EAGAIN)
+        return -errno; /* Just bail */
+
+      /* Nonblock recv is finnicky. Sometimes we get EAGAIN when data isn't ready,
+       * but sometimes we also get 0. This is presumably some weirdness with the
+       * network stack on relatively slow systems like CF chips. This logic will slow
+       * us down if the server returns a malformed response where size > actual size */
+      if (--tries > 0) {
+        usleep(500);
+        continue;
+      }
+      break;
+    }
+
+    rem -= l;
+    off += l;
+  } while(rem > 0);
+
+  return off;
 }
 
 int
