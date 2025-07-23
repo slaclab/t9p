@@ -813,7 +813,11 @@ void
 t9p_opts_init(struct t9p_opts* opts)
 {
   memset(opts, 0, sizeof(*opts));
-  opts->msize = 16384; //(1 << 20);  /** 1M */
+#ifdef __mcoldfire__
+  opts->msize = 4096; /* Coldfire works better with smaller msize */
+#else
+  opts->msize = 65536;
+#endif
   opts->queue_size = T9P_PACKET_QUEUE_SIZE;
   opts->max_fids = DEFAULT_MAX_FILES;
   opts->send_timeo = DEFAULT_SEND_TIMEO;
