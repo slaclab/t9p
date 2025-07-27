@@ -33,7 +33,9 @@
 #include <rtems/bsd/bsd.h>
 #include <rtems/bsd/iface.h>
 #else // Legacy stack includes
-#include  <rtems/rtems_bsdnet.h>
+#include <rtems/rtems_bsdnet.h>
+#include <sys/sysctl.h>
+#include <netinet/in.h>
 #endif
 
 #if __RTEMS_MAJOR__ < 6
@@ -220,8 +222,29 @@ configure_network(void)
   t9p_rtems_register();
 
 #ifdef RTEMS_LEGACY_STACK
+  int r;
+
+  /* Packet loss testing with new sysctl */
+#if __RTEMS_MAJOR__ < 5 && defined(IPCTL_DROPPERCENT)
+  int loss = 0;
+
+  char str[32];
+  if (rtems_bsp_cmdline_get_param("--loss", str, sizeof(str))) {
+    loss = atoi(str);
+  }
+
+  if (loss) {
+    int name[] = {CTL_NET, PF_INET, IPPROTO_IP, IPCTL_DROPPERCENT};
+
+    size_t sz = sizeof(loss);
+    if ((r = sysctl(name, 4, NULL, NULL, &loss, sz)) < 0) {
+      fprintf(stderr, "sysctl failed: %s\n", strerror(errno));
+    }
+  }
+#endif
+
   rtems_id task_id = 0;
-  int r = rtems_task_create(
+  r = rtems_task_create(
     rtems_build_name('n', 't', 'p', 'd'),
     150,
     rtems_minimum_stack_size,
@@ -357,7 +380,7 @@ POSIX_Init(void* arg)
   if (b == 's' || b == 'a') {
     mkdir("/test", 0777);
     mkdir("/test2", 0777);
-    const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID ",msize=4096";
+    const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID ",msize=65535,trace";
     mount(
       "10.0.2.2:10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
