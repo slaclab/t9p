@@ -538,6 +538,36 @@ CEXP_HELP_TAB_BEGIN(p9SetTrace)
 CEXP_HELP_TAB_END
 #endif
 
+int
+p9MemStatsGlobal()
+{
+#ifndef T9P_NO_MEMTRACK
+  printf(
+    "Allocations: %d (%u bytes total, %u bytes requested)\n",
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_alloc_calls),
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes),
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes_requested)
+  );
+  printf(
+    "Frees:       %d (%u bytes total)\n",
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_free_calls),
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_freed_bytes)
+  );
+#else
+  printf("Compiled with NO_MEMTRACK, no stats have been recorded!");
+#endif
+  return 0;
+}
+
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(p9MemStatsGlobal)
+        HELP(
+"Display heap memory usage stats\n"
+        int, p9MemStatsGlobal,  ()
+        ),
+CEXP_HELP_TAB_END
+#endif
+
 /**************************************************************************************
  * Utilities
  **************************************************************************************/
