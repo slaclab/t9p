@@ -25,6 +25,17 @@ while test $# -gt 0; do
         LIMIT="cpulimit -f -l 1 --"
         shift
         ;;
+    --loss)
+        BSP_ARGS="$BSP_ARGS --loss=$2"
+        shift
+        ;;
+    --trace)
+        BSP_ARGS="$BSP_ARGS --trace"
+        ;;
+    --msize)
+        BSP_ARGS="$BSP_ARGS --msize=$2"
+        shift
+        ;;
     *)
         echo "Unknown arg $1"
         exit 1
@@ -34,7 +45,7 @@ while test $# -gt 0; do
 done
 
 # diod running on host port 10002
-BSP_ARGS="--console=/dev/com1 -u $(whoami) -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
+BSP_ARGS="$BSP_ARGS --console=/dev/com1 -u $(whoami) -a $PWD/fs -m $PWD/mnt 10.0.2.2:10002"
 
 if [[ "$(echo $TARGET | cut -d '-' -f1)" == "rtems4" ]]; then
     NETDEV=ne2k_pci

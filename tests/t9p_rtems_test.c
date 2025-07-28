@@ -133,12 +133,12 @@ loading_thread(unsigned long arg)
 
   int sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) {
-    perror("socket");
+    perror("tcpsrv socket");
     abort();
   }
 
   if (connect(sock, (struct sockaddr*)&dest, sizeof(dest)) < 0) {
-    perror("connect");
+    perror("tcpsrv connect");
     abort();
   }
 
@@ -230,10 +230,11 @@ configure_network(void)
 
   char str[32];
   if (rtems_bsp_cmdline_get_param("--loss", str, sizeof(str))) {
-    loss = atoi(str);
+    loss = atoi(str + sizeof("--loss=")-1);
   }
 
   if (loss) {
+    fprintf(stderr, "Dropping %d%% of all IP packets\n", loss);
     int name[] = {CTL_NET, PF_INET, IPPROTO_IP, IPCTL_DROPPERCENT};
 
     size_t sz = sizeof(loss);
@@ -380,7 +381,26 @@ POSIX_Init(void* arg)
   if (b == 's' || b == 'a') {
     mkdir("/test", 0777);
     mkdir("/test2", 0777);
-    const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID ",msize=65535,trace";
+    char opts[512], msize[32];
+    *opts = 0;
+
+    strcat(opts, "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID);
+
+    if (strstr(rtems_bsp_cmdline_get(), "--trace")) {
+      strcat(opts, ",trace");
+    }
+
+    /* Add --msize from the boot command line, default to 64k */
+    if (rtems_bsp_cmdline_get_param("--msize", msize, sizeof(msize))) {
+      strcat(opts, ",msize=");
+      strcat(opts, msize + sizeof("--msize=")-1);
+    }
+    else {
+      strcat(opts, ",msize=65536");
+    }
+    
+    printf("Mounting 10.0.2.2:10002:%s at %s with opts '%s'\n", RTEMS_TEST_PATH "/tests/fs", "/test", opts);
+
     mount(
       "10.0.2.2:10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
