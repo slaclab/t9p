@@ -20,6 +20,7 @@
 
 #include "t9proto.h"
 #include "t9p.h"
+#include "t9p_platform.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -196,7 +197,7 @@ decode_Rversion(struct Rversion** out, const void* buf, size_t buflen)
     return -1;
 
   uint32_t len = BSWAP32(in->size);
-  *out = malloc(len);
+  *out = t9p_malloc(len);
   memcpy(*out, buf, len);
   (*out)->msize = BSWAP32(in->msize);
   (*out)->size = BSWAP32(in->size);
@@ -307,7 +308,7 @@ decode_Rwalk(struct Rwalk* rw, const void* buf, size_t buflen, qid_t** outqids)
   const qid_t* qs = (const qid_t*)((uint8_t*)buf + offsetof(struct Rwalk, nwqid)
     + sizeof(uint16_t));
 
-  *outqids = calloc(rw->nwqid, sizeof(qid_t));
+  *outqids = t9p_calloc(rw->nwqid, sizeof(qid_t));
   for (int i = 0; i < rw->nwqid; ++i)
     (*outqids)[i] = swapqid(qs[i]);
 

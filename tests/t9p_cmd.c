@@ -14,6 +14,7 @@
  * ----------------------------------------------------------------------------
  **/
 #include "t9p.h"
+#include "t9p_platform.h"
 
 #include <ctype.h>
 #include <getopt.h>
@@ -886,6 +887,21 @@ main(int argc, char** argv)
     free(ptr);
     ptr = NULL;
   }
+
+#ifndef T9P_NO_MEMTRACK
+  /* malloc and co. will reserve more space than necessary, don't rely on exact values */
+  printf(
+    "Allocations: %d (%u bytes total, %u bytes requested)\n",
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_alloc_calls),
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes),
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes_requested)
+  );
+  printf(
+    "Frees:       %d (%u bytes total)\n",
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_free_calls),
+    atomic_load_u32(&g_t9p_memtrack_ctx.total_freed_bytes)
+  );
+#endif
 
   if (ctx)
     t9p_shutdown(ctx);

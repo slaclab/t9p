@@ -62,12 +62,12 @@ static const int prio_to_posix[T9P_THREAD_PRIO_COUNT] =
 thread_t*
 thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio)
 {
-  thread_t* p = malloc(sizeof(struct _thread_s));
+  thread_t* p = t9p_malloc(sizeof(struct _thread_s));
   if (!p)
     return NULL;
 
   if (pthread_attr_init(&p->attr) != 0) {
-    free(p);
+    t9p_free(p);
     return NULL;
   }
 
@@ -83,7 +83,7 @@ thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio)
 
   if (pthread_create(&p->thread, &p->attr, proc, param) != 0) {
     pthread_attr_destroy(&p->attr);
-    free(p);
+    t9p_free(p);
     return NULL;
   }
 
@@ -103,22 +103,22 @@ thread_destroy(thread_t* thread)
   if (thread->thread)
     pthread_join(thread->thread, NULL);
   pthread_attr_destroy(&thread->attr);
-  free(thread);
+  t9p_free(thread);
 }
 
 mutex_t*
 mutex_create(void)
 {
-  mutex_t* m = malloc(sizeof(mutex_t));
+  mutex_t* m = t9p_malloc(sizeof(mutex_t));
 
   if (pthread_mutexattr_init(&m->attr) != 0) {
-    free(m);
+    t9p_free(m);
     return NULL;
   }
 
   if (pthread_mutex_init(&m->mutex, &m->attr) != 0) {
     pthread_mutexattr_destroy(&m->attr);
-    free(m);
+    t9p_free(m);
     return NULL;
   }
 
@@ -142,7 +142,7 @@ mutex_destroy(mutex_t* mut)
 {
   pthread_mutexattr_destroy(&mut->attr);
   pthread_mutex_destroy(&mut->mutex);
-  free(mut);
+  t9p_free(mut);
 }
 
 struct _event_s
@@ -156,7 +156,7 @@ struct _event_s
 event_t*
 event_create(void)
 {
-  event_t* ev = malloc(sizeof(event_t));
+  event_t* ev = t9p_malloc(sizeof(event_t));
   memset(ev, 0, sizeof *ev);
   pthread_condattr_init(&ev->condattr);
   pthread_cond_init(&ev->cond, &ev->condattr);
@@ -202,19 +202,8 @@ event_destroy(event_t* ev)
   pthread_condattr_destroy(&ev->condattr);
   pthread_mutex_destroy(&ev->mutex);
   pthread_mutexattr_destroy(&ev->mutexattr);
-  free(ev);
+  t9p_free(ev);
 }
-
-void*
-aligned_zmalloc(size_t size, size_t align)
-{
-  void* ptr = NULL;
-  posix_memalign(&ptr, align, size);
-  if (ptr)
-    memset(ptr, 0, size);
-  return ptr;
-}
-
 
 #ifdef __rtems__
 
@@ -230,14 +219,14 @@ struct _msg_queue_s
 msg_queue_t*
 msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
 {
-  msg_queue_t* q = calloc(1, sizeof(msg_queue_t));
+  msg_queue_t* q = t9p_calloc(1, sizeof(msg_queue_t));
   q->name = rtems_build_name(id[0], id[1], id[2], id[3]);
   q->msgSize = msgSize;
   rtems_status_code status =
     rtems_message_queue_create(q->name, maxMsgs, msgSize, RTEMS_FIFO, &q->queue);
   if (status != RTEMS_SUCCESSFUL) {
     printf("Queue create failed: %d\n", status);
-    free(q);
+    t9p_free(q);
     return NULL;
   }
   return q;
@@ -247,7 +236,7 @@ void
 msg_queue_destroy(msg_queue_t* q)
 {
   rtems_message_queue_delete(q->queue);
-  free(q);
+  t9p_free(q);
 }
 
 int
@@ -290,12 +279,12 @@ struct _msg_queue_s
 msg_queue_t*
 msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
 {
-  msg_queue_t* q = malloc(sizeof(msg_queue_t));
+  msg_queue_t* q = t9p_malloc(sizeof(msg_queue_t));
 
   q->fh = q->q = 0;
 
   for (int i = 0; i < maxMsgs; ++i) {
-    struct msg* m = calloc(1, msgSize + sizeof(struct msg));
+    struct msg* m = t9p_calloc(1, msgSize + sizeof(struct msg));
     m->next = q->fh;
     q->fh = m;
   }
@@ -312,16 +301,16 @@ msg_queue_destroy(msg_queue_t* q)
     return;
   for (struct msg* m = q->q; m;) {
     struct msg* n = m->next;
-    free(m);
+    t9p_free(m);
     m = n;
   }
 
   for (struct msg* m = q->fh; m;) {
     struct msg* n = m->next;
-    free(m);
+    t9p_free(m);
     m = n;
   }
-  free(q);
+  t9p_free(q);
 }
 
 int

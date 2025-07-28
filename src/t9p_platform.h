@@ -138,9 +138,9 @@ atomic_sub_u32(uint32_t* p, uint32_t v)
 
 #endif
 
-enum t9p_thread_prio;
-
 /** Generic thread API */
+
+enum t9p_thread_prio;
 
 typedef void* (*thread_proc_t)(void*);
 typedef struct _thread_s thread_t;
@@ -174,7 +174,36 @@ extern int msg_queue_send(msg_queue_t* q, const void* data, size_t size);
 extern int msg_queue_recv(msg_queue_t* q, void* data, size_t* size);
 
 /** Dynamic memory helpers */
-extern void* aligned_zmalloc(size_t size, size_t align);
+extern void* t9p_malloc(size_t size);
+extern void* t9p_calloc(size_t nmeb, size_t size);
+extern void* t9p_aligned_zmalloc(size_t size, size_t align);
+extern void t9p_free(void* ptr);
+
+#ifndef T9P_NO_MEMTRACK
+typedef struct t9p_memtrack_ctx
+{
+  uint32_t total_allocd_bytes;
+  uint32_t total_allocd_bytes_requested;
+  uint32_t total_freed_bytes;
+  uint32_t total_alloc_calls;
+  uint32_t total_free_calls;
+} t9p_memtrack_ctx_t;
+
+#define T9P_MEMTRACK_CTX(name) static t9p_memtrack_ctx_t name = {0, 0, 0, 0, 0}
+
+extern t9p_memtrack_ctx_t g_t9p_memtrack_ctx;
+
+extern void* t9p_malloc_ctx(size_t size, t9p_memtrack_ctx_t* ctx);
+extern void* t9p_calloc_ctx(size_t nmemb, size_t size, t9p_memtrack_ctx_t* ctx);
+extern void* t9p_aligned_zmalloc_ctx(size_t size, size_t align, t9p_memtrack_ctx_t* ctx);
+extern void t9p_free_ctx(void* ptr, t9p_memtrack_ctx_t* ctx);
+#else
+#define T9P_MEMTRACK_CTX(name)
+#define t9p_malloc_ctx(size, ctx) t9p_malloc(size)
+#define t9p_calloc_ctx(nmemb, size, ctx) t9p_calloc(nmemb, size)
+#define t9p_aligned_zmalloc_ctx(size, align, ctx) t9p_aligned_zmalloc(size, align)
+#define t9p_free_ctx(ptr, ctx) t9p_free(ptr)
+#endif
 
 /** Safe wrapper around gethostbyname/getaddrinfo */
 extern int gethostbyname_inet(const char* name, in_addr_t* outaddr);

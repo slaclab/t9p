@@ -4,6 +4,8 @@ project(t9p C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
+option(T9P_NO_MEMTRACK "Disable tracking allocations and frees" OFF)
+
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
     include(rtems-tools/cmake/rtems.cmake)
     rtems_cmake_init()
@@ -11,6 +13,7 @@ endif()
 
 set(T9P_SOURCES
     "src/t9p.c"
+    "src/t9p_mem.c"
     "src/t9proto.c"
     "src/t9p_posix.c"
 )
@@ -33,6 +36,10 @@ set(WARN_FLAGS
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g2 ${WARN_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g2")
+
+if(T9P_NO_MEMTRACK)
+    target_compile_definitions(t9p PUBLIC T9P_NO_MEMTRACK)
+endif()
 
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
     execute_process(COMMAND id -u OUTPUT_VARIABLE RTEMS_TEST_UID OUTPUT_STRIP_TRAILING_WHITESPACE)

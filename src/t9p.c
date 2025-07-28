@@ -346,7 +346,7 @@ tr_pool_init(struct trans_pool* q, uint32_t num)
   /** Allocate nodes */
   for (int i = 0; i < num; ++i) {
     struct trans_node* on = q->freehead;
-    q->freehead = calloc(1, sizeof(*on));
+    q->freehead = t9p_calloc(1, sizeof(*on));
   #ifdef USE_POSIX_EVENTS
     q->freehead->event = event_create();
   #endif
@@ -373,7 +373,7 @@ tr_pool_destroy(struct trans_pool* q)
   #ifdef USE_POSIX_EVENTS
     event_destroy(n->event);
   #endif
-    free(n);
+    t9p_free(n);
     n = b;
   }
 
@@ -639,14 +639,14 @@ _version_handshake(struct t9p_context* c)
     ERROR(
       c, "Rversion handshake failed: version mismatch, requested '%s', got '%s'\n", version, vstr
     );
-    free(rv);
+    t9p_free(rv);
     return -1;
   }
 
   c->msize = rv->msize;
 
   DEBUG(c, "Using %s with msize %lu\n", version, rv->msize);
-  free(rv);
+  t9p_free(rv);
   return 0;
 }
 
@@ -757,7 +757,7 @@ _string_release(struct t9p_string* str)
 {
   uint32_t r = atomic_sub_u32(&str->rc,1);
   if (r == 0) {
-    free(str);
+    t9p_free(str);
     return NULL;
   }
   /** we've likely underflowed and this is a bug! */
@@ -784,7 +784,7 @@ _string_new_path(const char* dname, const char* fname)
   const size_t fl = strlen(fname);
   
   const size_t tl = dl + fl + 2; /* +1 for NUL, +1 for path sep */
-  struct t9p_string* s = calloc(sizeof(struct t9p_string) + tl, 1);
+  struct t9p_string* s = t9p_calloc(sizeof(struct t9p_string) + tl, 1);
   s->len = tl;
   s->rc = 1; /* always start with 1 ref */
   strNcpy(s->string, dname, dl+1);
@@ -843,7 +843,7 @@ t9p_init(
   assert(transport->reconnect);
   assert(opts);
 
-  t9p_context_t* c = aligned_zmalloc(sizeof(struct t9p_context), T9P_ALIGNOF(struct t9p_context));
+  t9p_context_t* c = t9p_aligned_zmalloc(sizeof(struct t9p_context), T9P_ALIGNOF(struct t9p_context));
   strNcpy(c->mntpoint, mntpoint, sizeof(c->mntpoint));
   strNcpy(c->addr, addr, sizeof(c->addr));
   strNcpy(c->apath, apath, sizeof(c->apath));
@@ -863,7 +863,7 @@ t9p_init(
   }
 
   /** Init file handle list */
-  c->fhl = calloc(sizeof(struct t9p_handle_node), opts->max_fids);
+  c->fhl = t9p_calloc(sizeof(struct t9p_handle_node), opts->max_fids);
   c->fhl_max = opts->max_fids;
   c->fhl_count = 0;
   c->fhl_free = NULL;
@@ -933,7 +933,7 @@ error_post_fhl:
   mutex_destroy(c->fhl_mutex);
   event_destroy(c->recv_event);
 error_pre_fhl:
-  free(c);
+  t9p_free(c);
   return NULL;
 }
 
@@ -955,11 +955,11 @@ t9p_shutdown(t9p_context_t* c)
   c->trans.disconnect(c->conn);
   c->trans.shutdown(c->conn);
 
-  free(c->fhl);
+  t9p_free(c->fhl);
 
   mutex_destroy(c->fhl_mutex);
   event_destroy(c->recv_event);
-  free(c);
+  t9p_free(c);
 }
 
 int
@@ -1037,7 +1037,7 @@ t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path
     * we have failed to open the full path. Just clunk and return error */
   if (nwcount != rw.nwqid) {
     _clunk_sync(c, fh->h.fid);
-    free(qids);
+    t9p_free(qids);
     goto error;
   }
 
@@ -1047,7 +1047,7 @@ t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path
   else
     fh->h.qid = qids[rw.nwqid - 1];
   fh->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
-  free(qids);
+  t9p_free(qids);
 
   *outhandle = &fh->h;
   return 0;
@@ -1898,7 +1898,7 @@ static void
 _t9p_parse_dir_callback(void* param, struct Rreaddir_dir dir, const char* name)
 {
   struct _t9p_parse_dir_param* dp = param;
-  struct t9p_dir_info* di = calloc(sizeof(struct t9p_dir_info) + dir.namelen + 1, 1);
+  struct t9p_dir_info* di = t9p_calloc(sizeof(struct t9p_dir_info) + dir.namelen + 1, 1);
   di->qid = dir.qid;
   di->type = dir.type;
 
@@ -1999,7 +1999,7 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
 error:
   for (t9p_dir_info_t* d = *outdirs; d;) {
     t9p_dir_info_t* dn = d->next;
-    free(d);
+    t9p_free(d);
     d = dn;
   }
   return status;
@@ -2494,7 +2494,7 @@ t9p_free_dirs(t9p_dir_info_t* head)
     return;
   for (t9p_dir_info_t* d = head; d;) {
     t9p_dir_info_t* dn = d->next;
-    free(d);
+    t9p_free(d);
     d = dn;
   }
 }
@@ -2735,7 +2735,7 @@ static void*
 _config_rtems_socket(int sock)
 {
 #ifdef RTEMS_LEGACY_STACK
-  struct rtems_wake_io_arg* arg = calloc(sizeof(struct rtems_wake_io_arg), 1);
+  struct rtems_wake_io_arg* arg = t9p_calloc(sizeof(struct rtems_wake_io_arg), 1);
   arg->task = rtems_task_self();
 
   struct sockwakeup sow = {
@@ -2746,7 +2746,7 @@ _config_rtems_socket(int sock)
   if (0 != setsockopt(sock, SOL_SOCKET, SO_RCVWAKEUP, &sow, sizeof(sow))) {
     perror("t9p_tcp_init: failed to set SO_RCVWAKEUP on socket");
     printf("Non-fatal error, continuing anyway...\n");
-    free(arg);
+    t9p_free(arg);
     return NULL;
   }
 
@@ -2826,7 +2826,7 @@ _t9p_thread_proc(void* param)
 {
   t9p_context_t* c = param;
 
-  struct trans_node** requests = calloc(MAX_TAGS, sizeof(struct trans_node*));
+  struct trans_node** requests = t9p_calloc(MAX_TAGS, sizeof(struct trans_node*));
 
 #ifdef __rtems__
   c->rtems_thr_ident = rtems_task_self();
@@ -3066,10 +3066,10 @@ _t9p_thread_proc(void* param)
 
 #if __rtems__
   if (rarg)
-    free(rarg);
+    t9p_free(rarg);
 #endif
 
-  free(requests);
+  t9p_free(requests);
   return NULL;
 }
 
@@ -3121,10 +3121,10 @@ _t9p_tcp_newsock()
 void*
 t9p_tcp_init(void)
 {
-  struct tcp_context* ctx = calloc(1, sizeof(struct tcp_context));
+  struct tcp_context* ctx = t9p_calloc(1, sizeof(struct tcp_context));
 
   if ((ctx->sock = _t9p_tcp_newsock()) < 0) {
-    free(ctx);
+    t9p_free(ctx);
     return NULL;
   }
   return ctx;
@@ -3222,7 +3222,7 @@ t9p_tcp_shutdown(void* context)
 {
   struct tcp_context* ctx = context;
   close(ctx->sock);
-  free(context);
+  t9p_free(context);
 }
 
 ssize_t

@@ -10,8 +10,10 @@ tests/t9p_threaded_test
 *.log
 vgcore*
 
+.idea
 .vscode
 /.cache/
+/cmake-build*
 /build*
 
 compile_commands.json
