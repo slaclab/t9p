@@ -692,6 +692,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   }
 
   int loglevel = T9P_LOG_DEBUG;
+  t9p_thread_mode_t thr_mode = T9P_THREAD_MODE_NONE;
   for (char* r = strtok(buf, ","); r; r = strtok(NULL, ",")) {
     if (!strncmp(r, "ip", strlen("ip"))) {
       const char* p = strpbrk(r, "=");
@@ -715,6 +716,8 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
         strcpy(user, p + 1);
     } else if (!strcmp(r, "trace")) {
       loglevel = T9P_LOG_TRACE;
+    } else if (!strcmp(r, "threaded")) {
+      thr_mode = T9P_THREAD_MODE_WORKER;
     }
   }
 
@@ -744,6 +747,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   fi->opts.opts.uid = uid;
   fi->opts.transport = T9P_RTEMS_TRANS_TCP;
   fi->opts.opts.log_level = loglevel;
+  fi->opts.opts.mode = thr_mode;
   fi->opts.opts.msize = msize;
   strcpy(fi->opts.ip, ip);
   strcpy(fi->opts.opts.user, user);
