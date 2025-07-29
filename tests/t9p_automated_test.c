@@ -45,14 +45,18 @@
     ++fails; \
   }
 
+#define ANSI_RED "\033[31m"
+#define ANSI_GREEN "\033[32m"
+#define ANSI_RESET "\033[0m"
+
 static void
 result_banner(int f)
 {
   printf("*********************************************\n");
   if (f != 0)
-    printf(" TEST FAILURE DETECTED!!!!\n");
+    printf(ANSI_RED " TEST FAILURE DETECTED!!!!" ANSI_RESET "\n");
   else
-    printf(" TESTS PASSED\n");
+    printf(ANSI_GREEN " TESTS PASSED" ANSI_RESET "\n");
   printf("*********************************************\n");
 }
 
@@ -180,7 +184,7 @@ t9p_run_trunc_test(const char* path)
   return fails;
 }
 
-#define BLOCK_SIZE 512
+#define BLOCK_SIZE 8192
 
 int
 t9p_run_write_perf_test(const char* path)

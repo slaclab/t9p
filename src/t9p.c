@@ -19,6 +19,11 @@
 
 #include "t9p_platform.h"
 
+#ifdef __rtems__
+/* Required for MSG_PEEK */
+#define __BSD_VISIBLE 1
+#endif
+
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -64,6 +69,8 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/socket.h>
 #endif
 
 #include "t9p.h"
@@ -194,31 +201,35 @@ struct t9p_handle_node
 /*                                                                  */
 /********************************************************************/
 
-static int _version_handshake(struct t9p_context* context);
-static int _attach_root(struct t9p_context* c);
-static int _send(struct t9p_context* c, const void* data, size_t sz, int flags);
-static void _perror(struct t9p_context* c, const char* msg, struct TRcommon* err);
-static int _iserror(struct TRcommon* err);
-static int _clunk_sync(struct t9p_context* c, int fid);
-static int _can_rw_fid(t9p_handle_t h, int write);
-static const char* _t9p_strerror(int e);
+static int t9p__version_handshake(struct t9p_context* context);
+static int t9p__attach_root(struct t9p_context* c);
+static int t9p__send(struct t9p_context* c, const void* data, size_t sz, int flags);
+static void t9p__perror(struct t9p_context* c, const char* msg, struct TRcommon* err);
+static int t9p__iserror(struct TRcommon* err);
+static int t9p__clunk_sync(struct t9p_context* c, int fid);
+static int t9p__is_fid_rw(t9p_handle_t h, int write);
+static const char* t9p__strerror(int e);
+static void t9p__discard(struct t9p_context* c, struct TRcommon* com);
 
 /** String methods */
-T9P_NODISCARD static struct t9p_string* _string_release(struct t9p_string* str);
-static void _string_acquire(struct t9p_string* str);
-T9P_NODISCARD static struct t9p_string* _string_new_path(const char* dname, const char* fname);
-T9P_NODISCARD static struct t9p_string* _string_copy(struct t9p_string* str);
+T9P_NODISCARD static struct t9p_string* t9p__string_release(struct t9p_string* str);
+static void t9p__string_acquire(struct t9p_string* str);
+T9P_NODISCARD static struct t9p_string* t9p__string_new_path(const char* dname, const char* fname);
+T9P_NODISCARD static struct t9p_string* t9p__string_copy(struct t9p_string* str);
 
 /** t9p_context 'methods' */
-T9P_NODISCARD static struct t9p_handle_node* _alloc_handle(struct t9p_context* c,
-  t9p_handle_t parent, const char* fname);
-T9P_NODISCARD static struct t9p_handle_node* _copy_handle(struct t9p_context* c, t9p_handle_t h);
-static void _release_handle(struct t9p_context* c, struct t9p_handle_node* h);
-static void _release_handle_by_fid(struct t9p_context* c, t9p_handle_t h);
-static int _maybe_recover(struct t9p_context* c, t9p_handle_t h);
-static struct t9p_handle_node* _handle_by_fid(struct t9p_context* c, t9p_handle_t h);
+T9P_NODISCARD static struct t9p_handle_node* t9p__alloc_handle(
+  struct t9p_context* c,
+  t9p_handle_t parent,
+  const char* fname
+);
+T9P_NODISCARD static struct t9p_handle_node* t9p__copy_handle(struct t9p_context* c, t9p_handle_t h);
+static void t9p__release_handle(struct t9p_context* c, struct t9p_handle_node* h);
+static void t9p__release_handle_by_fid(struct t9p_context* c, t9p_handle_t h);
+static int t9p__maybe_recover(struct t9p_context* c, t9p_handle_t h);
+static struct t9p_handle_node* t9p__handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 
-static void* _t9p_thread_proc(void* param);
+static void* t9p__thread_proc(void* param);
 
 /** Safe strcpy that ensures dest is NULL terminated */
 void
@@ -235,7 +246,7 @@ strNcpy(char* dest, const char* src, size_t dmax)
 
 #ifdef __rtems__
 static rtems_interval
-t9p_rt_ms_to_ticks(uint32_t ms)
+t9p__rt_ms_to_ticks(uint32_t ms)
 {
   rtems_interval i = ms * rtems_clock_get_ticks_per_second() / 1000;
   if (!i) i = 1;
@@ -243,7 +254,7 @@ t9p_rt_ms_to_ticks(uint32_t ms)
 }
 #endif
 
-bool
+static bool
 ip_in_dot_format(const char* ip)
 {
   int dots = 0, seq = 0;
@@ -272,11 +283,16 @@ struct trans;
 struct trans_pool;
 struct trans_node;
 
-struct trans_node* tr_enqueue(struct t9p_context* ctx, struct trans_pool* q,
-  struct trans_node* tr);
-void tr_release(struct trans_pool* q, struct trans_node* tn);
+struct trans_node* tr_enqueue(
+  struct t9p_context* ctx,
+  struct trans_pool* q,
+  struct trans_node* tr
+);
+static void tr_release(struct trans_pool* q, struct trans_node* tn);
 static void tr_signal(struct trans_node* n);
 static int tr_wait(struct trans_node* n, int timeo);
+static int tr_recv_now(struct t9p_context* c, struct trans_node* n);
+static int tr_send_now(struct t9p_context* c, struct trans_node* n);
 
 #define TR_FLAGS_NONE 0x0
 
@@ -456,19 +472,14 @@ tr_release(struct trans_pool* q, struct trans_node* tn)
 }
 
 /**
- * Enqueues the node into the queue and waits for it to be servied
- * This will release the node back into the pool on error, or after the node is serviced.
- * \param c Context
- * \param n Node
- * \param tr Transaction description, copied into n->tr before sending
- * \return < 0 on error
+ * Submits a new transaction to the worker thread.
+ * Only call this if you're running in threaded mode!
+ * \returns < 0 on error
  */
 static int
-tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr)
+tr_send_recv_worker(struct t9p_context* c, struct trans_node* n, bool* send_ok)
 {
-  int r = 0;
-  n->tr = *tr;
-
+  int r;
   n = tr_enqueue(c, &c->trans_pool, n);
   if (n == NULL)
     return -ENOMEM;
@@ -482,8 +493,70 @@ tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr)
     c->trans_pool.deadhead = n;
     mutex_unlock(c->trans_pool.guard);
 
-    printf("event_wait: %s\n", _t9p_strerror(r));
+    *send_ok = n->sent;
+
+    printf("event_wait: %s\n", t9p__strerror(r));
     return r;
+  }
+
+  *send_ok = true;
+
+  return 0;
+}
+
+/**
+ * Single-threaded mode send-recv. Acquires the socket lock and pumps the socket itself.
+ */
+static int
+tr_send_recv_now(struct t9p_context* c, struct trans_node* n, bool* send_ok)
+{
+  int r;
+
+  mutex_lock(c->socket_lock);
+
+  /* Attempt to send packet data */
+  if ((r = tr_send_now(c, n)) < 0) {
+    mutex_unlock(c->socket_lock);
+    *send_ok = false;
+    return r;
+  }
+
+  *send_ok = true;
+
+  /* Attempt to read the result */
+  r = tr_recv_now(c, n);
+
+  mutex_unlock(c->socket_lock);
+  return r;
+}
+
+/**
+ * Enqueues the node into the queue and waits for it to be servied
+ * This will release the node back into the pool on error, or after the node is serviced.
+ * \param c Context
+ * \param n Node
+ * \param tr Transaction description, copied into n->tr before sending
+ * \param send_ok Output variable to receive the send status. May be NULL
+ * \return < 0 on error
+ */
+static int
+tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr, bool* send_ok)
+{
+  int r = 0;
+  bool sent = false;
+  n->tr = *tr;
+
+  send_ok = send_ok ? send_ok : &sent;
+
+  switch (c->opts.mode) {
+  case T9P_THREAD_MODE_NONE:
+    if ((r = tr_send_recv_now(c, n, send_ok)) < 0)
+      return r;
+    break;
+  case T9P_THREAD_MODE_WORKER:
+    if ((r = tr_send_recv_worker(c, n, send_ok)) < 0)
+      return r;
+    break;
   }
 
   uint32_t status = n->tr.status;
@@ -518,30 +591,31 @@ tr_wait(struct trans_node* n, int timeout)
 #else
   rtems_event_set es;
   rtems_status_code r = rtems_event_receive(T9P_NODE_EVENT, RTEMS_EVENT_ALL | RTEMS_WAIT,
-    t9p_rt_ms_to_ticks(timeout), &es);
+    t9p__rt_ms_to_ticks(timeout), &es);
   return r == RTEMS_SUCCESSFUL ? 0 : -ETIMEDOUT;
 #endif
 }
 
 static int
-_send(struct t9p_context* c, const void* data, size_t sz, int flags)
+t9p__send(struct t9p_context* c, const void* data, size_t sz, int flags)
 {
   return c->trans.send(c->conn, data, sz, flags);
 }
 
 /** Synchronously recv a type of packet, or Rerror. Includes timeout */
 static ssize_t
-_recv_type(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t type, uint16_t tag)
+t9p__recv_type(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t type, uint16_t tag, struct TRcommon* ocom)
 {
   ssize_t n;
   struct timespec start;
   clock_gettime(CLOCK_MONOTONIC, &start);
   int timeoutMs = c->opts.recv_timeo;
   while (1) {
-    n = c->trans.recv(c->conn, data, sz, 0);
+    char comb[sizeof(struct TRcommon)] = {0};
+    n = c->trans.recv(c->conn, comb, sizeof(comb), T9P_RECV_PEEK);
     if (n >= sizeof(struct TRcommon)) {
       struct TRcommon com;
-      if (decode_TRcommon(&com, data, n) < 0) {
+      if (decode_TRcommon(&com, comb, n) < 0) {
         ERROR(c, "decode_TRcommon failed\n");
         continue;
       }
@@ -550,8 +624,13 @@ _recv_type(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t type
         ERROR(c, "Discarding mismatched tag. %d expected, got %d\n", tag, com.tag);
       }
       /** Return if we have recv'ed the correct type, or Rlerror/Rerror */
-      else if (com.type == type || com.type == T9P_TYPE_Rlerror || com.type == T9P_TYPE_Rerror)
-        return n;
+      else if (com.type == type || com.type == T9P_TYPE_Rlerror || com.type == T9P_TYPE_Rerror) {
+        *ocom = com;
+        return c->trans.recv(c->conn, data, MIN(sz, com.size), 0);;
+      }
+      else {
+        t9p__discard(c, &com);
+      }
     }
 
     struct timespec tp;
@@ -565,10 +644,10 @@ _recv_type(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t type
 }
 
 static void
-_perror(struct t9p_context* c, const char* msg, struct TRcommon* err)
+t9p__perror(struct t9p_context* c, const char* msg, struct TRcommon* err)
 {
   if (err->type == T9P_TYPE_Rlerror) {
-    ERROR(c, "%s: %s\n", msg, _t9p_strerror(((struct Rlerror*)err)->ecode));
+    ERROR(c, "%s: %s\n", msg, t9p__strerror(((struct Rlerror*)err)->ecode));
   } else if (err->tag == T9P_TYPE_Rerror) {
     struct Rerror* re = (struct Rerror*)err;
     char buf[1024];
@@ -579,19 +658,19 @@ _perror(struct t9p_context* c, const char* msg, struct TRcommon* err)
 }
 
 static const char*
-_t9p_strerror(int err)
+t9p__strerror(int err)
 {
   return strerror(err < 0 ? -err : err);
 }
 
 static int
-_iserror(struct TRcommon* err)
+t9p__iserror(struct TRcommon* err)
 {
   return err->type == T9P_TYPE_Rerror || err->type == T9P_TYPE_Rlerror;
 }
 
 static int
-_version_handshake(struct t9p_context* c)
+t9p__version_handshake(struct t9p_context* c)
 {
   const uint8_t version[] = T9P_TARGET_VERSION;
 
@@ -609,21 +688,21 @@ _version_handshake(struct t9p_context* c)
     return -1;
   }
 
-  if (_send(c, buf, sendSize, 0) < 0) {
+  if (t9p__send(c, buf, sendSize, 0) < 0) {
     ERROR(c, "Tversion handshake failed: I/O error\n");
     return -1;
   }
 
   /** Listen for the return message */
-  ssize_t read = _recv_type(c, buf, sizeof(buf) - 1, 0, T9P_TYPE_Rversion, T9P_NOTAG);
+  struct TRcommon com;
+  ssize_t read = t9p__recv_type(c, buf, sizeof(buf) - 1, 0, T9P_TYPE_Rversion, T9P_NOTAG, &com);
   if (read < 0) {
     ERROR(c, "Rversion handshake failed: %s\n", strerror(errno));
     return -1;
   }
 
-  struct TRcommon* tr = (struct TRcommon*)buf;
-  if (tr->type != T9P_TYPE_Rversion) {
-    ERROR(c, "Rversion handshake failed: unexpected packet type %d\n", tr->type);
+  if (t9p__iserror(&com)) {
+    ERROR(c, "Rversion handshake failed\n");
     return -1;
   }
 
@@ -651,14 +730,14 @@ _version_handshake(struct t9p_context* c)
 }
 
 static int
-_attach_root(struct t9p_context* c)
+t9p__attach_root(struct t9p_context* c)
 {
   char packetBuf[4096];
   int len;
   uint16_t tag = 0;
   uint32_t uid = *c->opts.user ? T9P_NOUID : c->opts.uid;
 
-  struct t9p_handle_node* h = c->root ? c->root : _alloc_handle(c, NULL, c->apath);
+  struct t9p_handle_node* h = c->root ? c->root : t9p__alloc_handle(c, NULL, c->apath);
   if (!h) {
     ERROR(c, "Rattach failed: unable to allocate handle\n");
     goto error;
@@ -680,20 +759,20 @@ _attach_root(struct t9p_context* c)
     goto error;
   }
 
-  if (_send(c, packetBuf, len, 0) < 0) {
+  if (t9p__send(c, packetBuf, len, 0) < 0) {
     ERROR(c, "Tattach root failed: unable to send\n");
     goto error;
   }
 
-  ssize_t read = _recv_type(c, packetBuf, sizeof(packetBuf), 0, T9P_TYPE_Rattach, tag);
+  struct TRcommon com;
+  ssize_t read = t9p__recv_type(c, packetBuf, sizeof(packetBuf), 0, T9P_TYPE_Rattach, tag, &com);
   if (read < 0) {
     ERROR(c, "Rattach failed: read timeout\n");
     goto error;
   }
 
-  struct TRcommon* com = (struct TRcommon*)packetBuf;
-  if (_iserror(com)) {
-    _perror(c, "Rattach failed", com);
+  if (t9p__iserror(&com)) {
+    ERROR(c, "Rattach failed");
     goto error;
   }
 
@@ -710,12 +789,12 @@ _attach_root(struct t9p_context* c)
   return 0;
 
 error:
-  _release_handle(c, h);
+  t9p__release_handle(c, h);
   return -1;
 }
 
 static int
-_clunk_sync(struct t9p_context* c, int fid)
+t9p__clunk_sync(struct t9p_context* c, int fid)
 {
   char buf[128];
 
@@ -739,8 +818,8 @@ _clunk_sync(struct t9p_context* c, int fid)
     .rdata = buf,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tclunk failed\n", __FUNCTION__);
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tclunk failed: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
   return 0;
@@ -753,7 +832,7 @@ _clunk_sync(struct t9p_context* c, int fid)
  * you passed in.
  */
 T9P_NODISCARD static struct t9p_string*
-_string_release(struct t9p_string* str)
+t9p__string_release(struct t9p_string* str)
 {
   uint32_t r = atomic_sub_u32(&str->rc,1);
   if (r == 0) {
@@ -768,7 +847,7 @@ _string_release(struct t9p_string* str)
 }
 
 static void
-_string_acquire(struct t9p_string* str)
+t9p__string_acquire(struct t9p_string* str)
 {
   atomic_add_u32(&str->rc, 1);
 }
@@ -778,7 +857,7 @@ _string_acquire(struct t9p_string* str)
  * Always starts with a rc of 1, do not addref to this!
  */
 T9P_NODISCARD static struct t9p_string*
-_string_new_path(const char* dname, const char* fname)
+t9p__string_new_path(const char* dname, const char* fname)
 {
   const size_t dl = strlen(dname);
   const size_t fl = strlen(fname);
@@ -797,9 +876,9 @@ _string_new_path(const char* dname, const char* fname)
  * "copies" the string. Just increments refcount and returns it.
  */
 T9P_NODISCARD static struct t9p_string*
-_string_copy(struct t9p_string* str)
+t9p__string_copy(struct t9p_string* str)
 {
-  _string_acquire(str);
+  t9p__string_acquire(str);
   return str;
 }
 
@@ -823,6 +902,8 @@ t9p_opts_init(struct t9p_opts* opts)
   opts->send_timeo = DEFAULT_SEND_TIMEO;
   opts->recv_timeo = DEFAULT_RECV_TIMEO;
   opts->prio = T9P_THREAD_PRIO_MED;
+  opts->mode = T9P_THREAD_MODE_NONE;
+  opts->log_level = T9P_LOG_WARN;
 }
 
 t9p_context_t*
@@ -851,7 +932,7 @@ t9p_init(
   c->opts = *opts;
 
   /** Init transport layer */
-  if (!(c->conn = transport->init())) {
+  if (!(c->conn = transport->init(c))) {
     ERRLOG("Transport init failed\n");
     goto error_pre_fhl;
   }
@@ -897,7 +978,7 @@ t9p_init(
   mutex_lock(c->socket_lock);
 
   /** Perform the version handshake */
-  if (_version_handshake(c) < 0) {
+  if (t9p__version_handshake(c) < 0) {
     ERRLOG("Connection to %s failed\n", addr);
     transport->disconnect(c->conn);
     transport->shutdown(c->conn);
@@ -906,7 +987,7 @@ t9p_init(
   }
 
   /** Attach to the root fs */
-  if (_attach_root(c) < 0) {
+  if (t9p__attach_root(c) < 0) {
     ERRLOG("Connected to %s failed\n", addr);
     transport->disconnect(c->conn);
     transport->shutdown(c->conn);
@@ -916,12 +997,13 @@ t9p_init(
 
   mutex_unlock(c->socket_lock);
 
-  c->thr_run = 1;
-
   /** Kick off thread */
-  if (!(c->io_thread = thread_create(_t9p_thread_proc, c, c->opts.prio))) {
-    t9p_shutdown(c);
-    return NULL;
+  if (opts->mode == T9P_THREAD_MODE_WORKER) {
+    c->thr_run = 1;
+    if (!(c->io_thread = thread_create(t9p__thread_proc, c, c->opts.prio))) {
+      t9p_shutdown(c);
+      return NULL;
+    }
   }
 
   return c;
@@ -944,12 +1026,14 @@ t9p_shutdown(t9p_context_t* c)
   mutex_lock(c->fhl_mutex);
   for (int i = 0; i < c->fhl_max; ++i)
     if (c->fhl[i].h.valid_mask & T9P_HANDLE_FID_VALID)
-      _clunk_sync(c, c->fhl[i].h.fid);
+      t9p__clunk_sync(c, c->fhl[i].h.fid);
   mutex_unlock(c->fhl_mutex);
 
-  /** Kill off the thread */
-  c->thr_run = 0;
-  thread_join(c->io_thread);
+  if (c->io_thread) {
+    /** Kill off the thread */
+    c->thr_run = 0;
+    thread_join(c->io_thread);
+  }
 
   /** Disconnect and shutdown the transport layer */
   c->trans.disconnect(c->conn);
@@ -962,8 +1046,8 @@ t9p_shutdown(t9p_context_t* c)
   t9p_free(c);
 }
 
-int
-t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path, t9p_handle_t myhandle, t9p_handle_t* outhandle)
+static int
+t9p__open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path, t9p_handle_t myhandle, t9p_handle_t* outhandle)
 {
   TRACE(c, "t9p_open_handle(p=%p,path=%s)\n", parent, path);
   char p[T9P_PATH_MAX];
@@ -993,8 +1077,8 @@ t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path
     return -ENOMEM;
   }
 
-  struct t9p_handle_node* fh = myhandle ? _handle_by_fid(c, myhandle)
-    : _alloc_handle(c, parent, path);
+  struct t9p_handle_node* fh = myhandle ? t9p__handle_by_fid(c, myhandle)
+    : t9p__alloc_handle(c, parent, path);
   
   if (!fh) {
     ERROR(c, "%s: out of handles\n", __FUNCTION__);
@@ -1021,8 +1105,8 @@ t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path
     .rsize = sizeof(packet),
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s(%s): Twalk: %s\n", __FUNCTION__, path, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s(%s): Twalk: %s\n", __FUNCTION__, path, t9p__strerror(l));
     goto error;
   }
 
@@ -1036,7 +1120,7 @@ t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path
   /** If the number of comps we requested earlier doesn't match the number of qids we have,
     * we have failed to open the full path. Just clunk and return error */
   if (nwcount != rw.nwqid) {
-    _clunk_sync(c, fh->h.fid);
+    t9p__clunk_sync(c, fh->h.fid);
     t9p_free(qids);
     goto error;
   }
@@ -1053,18 +1137,18 @@ t9p_open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path
   return 0;
 error:
   if (!myhandle) /* only release handles we create */
-    _release_handle(c, fh);
+    t9p__release_handle(c, fh);
   return -l;
 }
 
 t9p_handle_t
 t9p_open_handle(t9p_context_t* c, t9p_handle_t parent, const char* path)
 {
-  if (_maybe_recover(c, parent) < 0)
+  if (t9p__maybe_recover(c, parent) < 0)
     return NULL;
 
   t9p_handle_t h;
-  if (t9p_open_handle_internal(c, parent, path, NULL, &h) < 0)
+  if (t9p__open_handle_internal(c, parent, path, NULL, &h) < 0)
     return NULL;
   return h;
 }
@@ -1080,8 +1164,8 @@ t9p_close_handle(t9p_context_t* c, t9p_handle_t h)
     return;
   /** Clunk it if the FID is valid */
   if (h->valid_mask & T9P_HANDLE_FID_VALID)
-    _clunk_sync(c, h->fid);
-  _release_handle(c, &c->fhl[h->fid]);
+    t9p__clunk_sync(c, h->fid);
+  t9p__release_handle(c, &c->fhl[h->fid]);
 }
 
 t9p_handle_t
@@ -1108,7 +1192,7 @@ t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t afid, t9p_handle_t*
   if (!n)
     return -ENOMEM;
 
-  struct t9p_handle_node* h = _alloc_handle(c, afid, apath);
+  struct t9p_handle_node* h = t9p__alloc_handle(c, afid, apath);
   if (!h) {
     tr_release(&c->trans_pool, n);
     return -ENOMEM;
@@ -1121,7 +1205,7 @@ t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t afid, t9p_handle_t*
   if (l < 0) {
     ERROR(c, "%s: unable to encode Tattach\n", __FUNCTION__);
     tr_release(&c->trans_pool, n);
-    _release_handle(c, h);
+    t9p__release_handle(c, h);
     return -EINVAL;
   }
 
@@ -1134,16 +1218,16 @@ t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t afid, t9p_handle_t*
     .rtype = T9P_TYPE_Rattach,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tattach failed: %s\n", __FUNCTION__, _t9p_strerror(l));
-    _release_handle(c, h);
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tattach failed: %s\n", __FUNCTION__, t9p__strerror(l));
+    t9p__release_handle(c, h);
     return l;
   }
 
   struct Rattach ra;
   if ((l = decode_Rattach(&ra, packet, l)) < 0) {
     ERROR(c, "%s: Rattach decode failed", __FUNCTION__);
-    _release_handle(c, h);
+    t9p__release_handle(c, h);
     return -EPROTO;
   }
 
@@ -1157,7 +1241,7 @@ int
 t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
 {
   TRACE(c, "t9p_open(c=%p,h=%p,mode=0x%X)\n", c, h, (unsigned)mode);
-  if (_maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
   /** File already open, just return success */
@@ -1186,8 +1270,8 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
     .rtype = T9P_TYPE_Rlopen,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tlopen: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tlopen: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1245,8 +1329,8 @@ t9p_read_internal(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
     .rheadersz = sizeof(struct Rread)
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tread: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tread: %s\n", __FUNCTION__, t9p__strerror(l));
     status = l;
     goto error;
   }
@@ -1268,10 +1352,10 @@ ssize_t
 t9p_read(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, void* outbuffer)
 {
   TRACE(c, "t9p_read(h=%p,off=%" PRIu64 ",num=%u,out=%p)\n", h, offset, (unsigned)num, outbuffer);
-  if (_maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
-  if (!_can_rw_fid(h, 0))
+  if (!t9p__is_fid_rw(h, 0))
     return -EACCES;
 
   const size_t maxRd = c->msize - DIOD_IOHDRSZ; /* See FIXME note at #define */
@@ -1321,8 +1405,8 @@ t9p_write_internal(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t n
     .rsize = sizeof(packet)
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Twrite: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Twrite: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1339,10 +1423,10 @@ ssize_t
 t9p_write(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t num, const void* inbuffer)
 {
   TRACE(c, "t9p_write(h=%p,off=%" PRIu64 ",num=%u,in=%p)\n", h, offset, (unsigned)num, inbuffer);
-  if (_maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
-  if (!_can_rw_fid(h, 1))
+  if (!t9p__is_fid_rw(h, 1))
     return -EACCES;
 
   const ssize_t maxWr = c->msize - DIOD_IOHDRSZ; /* See FIXME note at #define */
@@ -1372,7 +1456,7 @@ t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t
   if (!t9p_is_valid(h))
     return -EBADF;
 
-  if (_maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1395,8 +1479,8 @@ t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t
     .rsize = sizeof(packet),
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tgetattr: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tgetattr: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1438,7 +1522,7 @@ t9p_create(
   TRACE(c, "t9p_create(parent=%p,nh=%p,name=%s,mode=0x%X,gid=%d,flags=0x%X)\n", parent, newhandle,
     name, (unsigned)mode, (unsigned)gid, (unsigned)flags);
 
-  if (_maybe_recover(c, parent) < 0)
+  if (t9p__maybe_recover(c, parent) < 0)
     return -EBADF;
 
   char packet[512];
@@ -1477,8 +1561,8 @@ t9p_create(
     .rtype = T9P_TYPE_Rlcreate
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tlcreate: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tlcreate: %s\n", __FUNCTION__, t9p__strerror(l));
     t9p_close_handle(c, h);
     return l;
   }
@@ -1526,10 +1610,10 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
   if (!t9p_is_valid(todup))
     return -EBADF;
 
-  if (_maybe_recover(c, todup) < 0)
+  if (t9p__maybe_recover(c, todup) < 0)
     return -EBADF;
 
-  struct t9p_handle_node* h = _copy_handle(c, todup);
+  struct t9p_handle_node* h = t9p__copy_handle(c, todup);
   if (!h) {
     ERROR(c, "%s: unable to alloc new handle\n", __FUNCTION__);
     return -ENOMEM;
@@ -1542,7 +1626,7 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
   int l;
   if ((l = encode_Twalk(packet, sizeof(packet), n->tag, todup->fid, h->h.fid, 0, NULL)) < 0) {
     ERROR(c, "%s: failed to encode Twalk\n", __FUNCTION__);
-    _release_handle(c, h);
+    t9p__release_handle(c, h);
     tr_release(&c->trans_pool, n);
     return -EINVAL;
   }
@@ -1556,16 +1640,16 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
     .rtype = T9P_TYPE_Rwalk,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Twalk: %s\n", __FUNCTION__, _t9p_strerror(l));
-    _release_handle(c, h);
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Twalk: %s\n", __FUNCTION__, t9p__strerror(l));
+    t9p__release_handle(c, h);
     return -EIO;
   }
 
   struct Rwalk rw;
   qid_t* qid = NULL;
   if (decode_Rwalk(&rw, packet, l, &qid) < 0) {
-    _release_handle(c, h);
+    t9p__release_handle(c, h);
     return -EPROTO;
   }
 
@@ -1583,9 +1667,11 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
 {
   TRACE(c, "t9p_remove(h=%p)\n", h);
   char packet[128];
+  bool send_ok;
+
   if (!t9p_is_valid(h))
     return -EBADF;
-  if (_maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1607,31 +1693,18 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
     .rsize = sizeof(packet),
     .rtype = T9P_TYPE_Rremove
   };
-  n->tr = tr;
 
-  n = tr_enqueue(c, &c->trans_pool, n);
-  if (!n) {
-    ERROR(c, "%s: unable to queue\n", __FUNCTION__);
-    return -EIO;
+  if ((l = tr_send_recv(c, n, &tr, &send_ok)) < 0) {
+    INFO(c, "%s: Tremove: %s\n", __FUNCTION__, t9p__strerror(l));
+    /* Tremove is basically a clunk with the side effect of removing a file. This will clunk
+     * even if we get Rlerror back from the server. If the send was OK and the server should
+     * have received our Tremove, release the fid */
+    if (send_ok)
+      t9p__release_handle_by_fid(c, h);
+    return l;
   }
 
-  /** FIXME: We should only release the FID if we get back either Rerror or Rlerror from the server.
-   * It is true that Tremove will clunk even on Rlerror, but we need to make sure that the server
-   * *actually* gets our Tremove... With TCP transport, this probably doesn't matter too much. */
-
-  /** Tremove is basically just a clunk with the side effect of removing a file. This will clunk
-   * even if the remove fails */
-  _release_handle_by_fid(c, h);
-
-  if (tr_wait(n, c->opts.recv_timeo) != 0) {
-    ERROR(c, "%s: timed out\n", __FUNCTION__);
-    tr_release(&c->trans_pool, n); // FIXME:!!!!!!!!!!! USE AFTER FREE IN WORKER THREAD
-    return 0; /** TODO: Returning -1 here and releasing the file handle would be inconsistent with
-                 the other error cases */
-  }
-
-  tr_release(&c->trans_pool, n);
-
+  t9p__release_handle_by_fid(c, h);
   return 0;
 }
 
@@ -1640,7 +1713,7 @@ t9p_fsync(t9p_context_t* c, t9p_handle_t file, uint32_t datasync)
 {
   TRACE(c, "t9p_fsync(h=%p)\n", file);
   char packet[128];
-  if (!t9p_is_valid(file) || _maybe_recover(c, file) < 0)
+  if (!t9p_is_valid(file) || t9p__maybe_recover(c, file) < 0)
     return -EBADF;
   if (!t9p_is_open(file))
     return -EBADF;
@@ -1665,8 +1738,8 @@ t9p_fsync(t9p_context_t* c, t9p_handle_t file, uint32_t datasync)
     .rsize = sizeof(packet)
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tfsync: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tfsync: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1686,7 +1759,7 @@ t9p_mkdir(
 
   if (!t9p_is_valid(parent))
     return -EBADF;
-  if (_maybe_recover(c, parent) < 0)
+  if (t9p__maybe_recover(c, parent) < 0)
     return -EBADF;
 
   if (gid == T9P_NOGID) {
@@ -1713,8 +1786,8 @@ t9p_mkdir(
     .rsize = sizeof(packet),
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tmkdir: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tmkdir: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1739,7 +1812,7 @@ t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs)
 
   if (!t9p_is_valid(h))
     return -EBADF;
-  if (_maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1761,8 +1834,8 @@ t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs)
     .rtype = T9P_TYPE_Rstatfs,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tstatfs: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tstatfs: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1794,7 +1867,7 @@ t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize
 
   if (!t9p_is_valid(h))
     return -EBADF;
-  if (_maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -1816,8 +1889,8 @@ t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize
     .rtype = T9P_TYPE_Rreadlink,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Treadlink: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Treadlink: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1842,7 +1915,7 @@ t9p_symlink(
   if (!t9p_is_valid(dir))
     dir = t9p_get_root(c);
 
-  if (_maybe_recover(c, dir) < 0)
+  if (t9p__maybe_recover(c, dir) < 0)
     return -EBADF;
 
   if (gid == T9P_NOGID)
@@ -1867,8 +1940,8 @@ t9p_symlink(
     .rtype = T9P_TYPE_Rsymlink,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tsymlink: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tsymlink: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1930,7 +2003,7 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
   if (!t9p_is_valid(dir) || !t9p_is_open(dir))
     return -EBADF;
 
-  if (_maybe_recover(c, dir) < 0)
+  if (t9p__maybe_recover(c, dir) < 0)
     return -EBADF;
 
   /** Only work on dirs.. */
@@ -1969,8 +2042,8 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
       .rtype = T9P_TYPE_Rreaddir
     };
 
-    if ((l = tr_send_recv(c, n, &tr)) < 0) {
-      ERROR(c, "%s: Treaddir: %s\n", __FUNCTION__, _t9p_strerror(l));
+    if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+      INFO(c, "%s: Treaddir: %s\n", __FUNCTION__, t9p__strerror(l));
       status = l;
       goto error;
     }
@@ -2059,7 +2132,7 @@ t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
   if (!t9p_is_valid(dir) || !t9p_is_open(dir))
     return -EBADF;
 
-  if (_maybe_recover(c, dir) < 0)
+  if (t9p__maybe_recover(c, dir) < 0)
     return -EBADF;
 
   /** Only work on dirs.. */
@@ -2096,8 +2169,8 @@ t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
       .rtype = T9P_TYPE_Rreaddir
     };
 
-    if ((l = tr_send_recv(c, n, &tr)) < 0) {
-      ERROR(c, "%s: Treaddir: %s\n", __FUNCTION__, _t9p_strerror(l));
+    if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+      INFO(c, "%s: Treaddir: %s\n", __FUNCTION__, t9p__strerror(l));
       status = l;
       goto error;
     }
@@ -2136,7 +2209,7 @@ t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t flag
   if (!t9p_is_valid(dir))
     return -EBADF;
 
-  if (_maybe_recover(c, dir) < 0)
+  if (t9p__maybe_recover(c, dir) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -2158,8 +2231,8 @@ t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t flag
     .rtype = T9P_TYPE_Runlinkat,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tunlinkat: %s\n", __FUNCTION__, _t9p_strerror(-l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tunlinkat: %s\n", __FUNCTION__, t9p__strerror(-l));
     return l;
   }
 
@@ -2184,7 +2257,7 @@ t9p_renameat(
   if (!t9p_is_valid(olddirfid) || !t9p_is_valid(newdirfid))
     return -EBADF;
 
-  if (_maybe_recover(c, olddirfid) < 0 || _maybe_recover(c, newdirfid) < 0)
+  if (t9p__maybe_recover(c, olddirfid) < 0 || t9p__maybe_recover(c, newdirfid) < 0)
     return -EBADF;
 
   if (!t9p_is_dir(olddirfid) || !t9p_is_dir(newdirfid))
@@ -2211,8 +2284,8 @@ t9p_renameat(
     .rtype = T9P_TYPE_Rrenameat,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Trenameat: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Trenameat: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -2234,7 +2307,7 @@ t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_se
   if (!t9p_is_valid(h))
     return -EBADF;
 
-  if (_maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -2256,8 +2329,8 @@ t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_se
     .rtype = T9P_TYPE_Rsetattr,
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tsetattr: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tsetattr: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -2279,7 +2352,7 @@ t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newna
   if (!t9p_is_valid(dir) || !t9p_is_valid(h))
     return -EBADF;
 
-  if (_maybe_recover(c, dir) < 0 || _maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, dir) < 0 || t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -2301,14 +2374,14 @@ t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newna
     .rtype = T9P_TYPE_Rrename
   };
 
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Trename: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Trename: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
   /* Update the file path for the node */
-  (void)_string_release(h->str);
-  h->str = _string_new_path(dir ? dir->str->string : "", newname);
+  (void)t9p__string_release(h->str);
+  h->str = t9p__string_new_path(dir ? dir->str->string : "", newname);
 
   return 0;
 }
@@ -2322,7 +2395,7 @@ t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
   if (!t9p_is_valid(dir) || !t9p_is_valid(h))
     return -EBADF;
 
-  if (_maybe_recover(c, dir) < 0 || _maybe_recover(c, h) < 0)
+  if (t9p__maybe_recover(c, dir) < 0 || t9p__maybe_recover(c, h) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -2344,8 +2417,8 @@ t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
     .rtype = T9P_TYPE_Rlink
   };
   
-  if ((l = tr_send_recv(c, n, &tr)) < 0) {
-    ERROR(c, "%s: Tlink: %s\n", __FUNCTION__, _t9p_strerror(l));
+  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+    INFO(c, "%s: Tlink: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
   return 0;
@@ -2361,7 +2434,7 @@ t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, u
   if (!t9p_is_valid(dir))
     return -EBADF;
 
-  if (_maybe_recover(c, dir) < 0)
+  if (t9p__maybe_recover(c, dir) < 0)
     return -EBADF;
 
   struct trans_node* n = tr_get_node(&c->trans_pool);
@@ -2383,8 +2456,8 @@ t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, u
       .rtype = T9P_TYPE_Rmknod
     };
 
-    if ((l = tr_send_recv(c, n, &tr)) < 0) {
-      ERROR(c, "%s: Tmknod: %s\n", __FUNCTION__, _t9p_strerror(l));
+    if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+      INFO(c, "%s: Tmknod: %s\n", __FUNCTION__, t9p__strerror(l));
       return l;
     }
     return 0;
@@ -2563,7 +2636,7 @@ t9p_get_opts(t9p_context_t* c)
 
 /** Alloc a new handle, locks fid table */
 static struct t9p_handle_node*
-_alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
+t9p__alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
 {
   mutex_lock(c->fhl_mutex);
   struct t9p_handle_node* n = c->fhl_free;
@@ -2582,7 +2655,7 @@ _alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
 
   /** If given a file name, associate it with the handle */
   if (fname)
-    n->h.str = _string_new_path(is_parent_root ? "" : parent->str->string, fname);
+    n->h.str = t9p__string_new_path(is_parent_root ? "" : parent->str->string, fname);
 
   mutex_unlock(c->fhl_mutex);
   return n;
@@ -2593,23 +2666,23 @@ _alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
  * a new handle and copy the string to it. Nothing else changes.
  */
 static struct t9p_handle_node*
-_copy_handle(struct t9p_context* c, t9p_handle_t h)
+t9p__copy_handle(struct t9p_context* c, t9p_handle_t h)
 {
-  struct t9p_handle_node* n = _alloc_handle(c, NULL, NULL);
+  struct t9p_handle_node* n = t9p__alloc_handle(c, NULL, NULL);
   if (!n)
     return NULL;
-  n->h.str = _string_copy(h->str);
+  n->h.str = t9p__string_copy(h->str);
   return n;
 }
 
 /** Release a handle for reuse */
 static void
-_release_handle(struct t9p_context* c, struct t9p_handle_node* h)
+t9p__release_handle(struct t9p_context* c, struct t9p_handle_node* h)
 {
   mutex_lock(c->fhl_mutex);
 
   /** Release the string */
-  h->h.str = _string_release(h->h.str);
+  h->h.str = t9p__string_release(h->h.str);
 
   /** Clear data, but preserve fid */
   memset(&h->h.qid, 0, sizeof(h->h.qid));
@@ -2625,13 +2698,13 @@ _release_handle(struct t9p_context* c, struct t9p_handle_node* h)
 }
 
 static void
-_release_handle_by_fid(struct t9p_context* c, t9p_handle_t h)
+t9p__release_handle_by_fid(struct t9p_context* c, t9p_handle_t h)
 {
-  _release_handle(c, &c->fhl[h->fid]);
+  t9p__release_handle(c, &c->fhl[h->fid]);
 }
 
 static struct t9p_handle_node*
-_handle_by_fid(struct t9p_context* c, t9p_handle_t h)
+t9p__handle_by_fid(struct t9p_context* c, t9p_handle_t h)
 {
   return &c->fhl[h->fid];
 }
@@ -2640,7 +2713,7 @@ _handle_by_fid(struct t9p_context* c, t9p_handle_t h)
  * Recovers a handle if its serial != context serial
  */
 static int
-_maybe_recover(struct t9p_context* c, t9p_handle_t h)
+t9p__maybe_recover(struct t9p_context* c, t9p_handle_t h)
 {
   /* No recovery needed */
   if (!h || c->serial == h->serial || t9p_is_root(c, h))
@@ -2662,9 +2735,9 @@ _maybe_recover(struct t9p_context* c, t9p_handle_t h)
 
   int r;
   t9p_handle_t unused;
-  if ((r = t9p_open_handle_internal(c, NULL, h->str->string, h, &unused)) < 0) {
+  if ((r = t9p__open_handle_internal(c, NULL, h->str->string, h, &unused)) < 0) {
     ERROR(c, "_recover_handle_if_needed: Recovery of fid %d failed: %s\n", 
-      (int)h->fid, _t9p_strerror(r));
+      (int)h->fid, t9p__strerror(r));
     return -1;
   }
 
@@ -2672,7 +2745,7 @@ _maybe_recover(struct t9p_context* c, t9p_handle_t h)
   if (h->iounit) {
     if ((r = t9p_open(c, h, h->obits)) < 0) {
       ERROR(c, "_recover_handle_if_needed: Recovery of fid %d failed due to open error: %s\n",
-        (int)h->fid, _t9p_strerror(r));
+        (int)h->fid, t9p__strerror(r));
       /** FIXME: AAAAAA clunk the fid!!!! */
     }
   }
@@ -2684,7 +2757,7 @@ _maybe_recover(struct t9p_context* c, t9p_handle_t h)
 
 /** Can we read/write to a fid? */
 static int
-_can_rw_fid(t9p_handle_t h, int write)
+t9p__is_fid_rw(t9p_handle_t h, int write)
 {
   if (!t9p_is_open(h))
     return 0;
@@ -2695,23 +2768,40 @@ _can_rw_fid(t9p_handle_t h, int write)
 }
 
 static void
-_discard(struct t9p_context* c, struct TRcommon* com)
+t9p__discard(struct t9p_context* c, struct TRcommon* com)
 {
-  char buf[256];
-  ssize_t left = com->size;
-  while (left > 0) {
-    size_t r;
-  again:
-    r = MIN(sizeof(buf), left);
-    if (c->trans.recv(c->conn, buf, r, 0) == -1) {
-      /** If we hit EAGAIN, wait and retry. Not optimal, but this is a rather rare
-        * edge case. */
-      if (errno == EAGAIN) {
-        usleep(500);
-        goto again;
-      }
+  ssize_t r;
+
+  /* Blocking mode */
+  if (c->opts.mode == T9P_THREAD_MODE_NONE) {
+    char buf[256];
+
+    ssize_t rem = com ? com->size : SSIZE_MAX;
+    ssize_t tries = 10;
+    while (rem > 0) {
+      r = c->trans.recv(c->conn, buf, MIN(rem, sizeof(buf)), T9P_RECV_PEEK | T9P_RECV_DONTWAIT);
+      if (r == -EAGAIN && --tries > 0)
+        continue;
+      if (r <= 0)
+        return;
+      r = c->trans.recv(c->conn, buf, MIN(rem, sizeof(buf)), 0);
+      if (r <= 0)
+        return;
     }
-    left -= r;
+  }
+  /* Nonblock mode */
+  else if (c->opts.mode == T9P_THREAD_MODE_WORKER) {
+    char buf[256];
+    ssize_t left = com ? com->size : SSIZE_MAX;
+    ssize_t tries = 20;
+    while (left > 0) {
+      r = c->trans.recv(c->conn, buf, MIN(sizeof(buf), left), T9P_RECV_DONTWAIT);
+      if (r == -EAGAIN && --tries > 0)
+        continue;
+      if (r <= 0)
+        return;
+      left -= r;
+    }
   }
 }
 
@@ -2724,7 +2814,7 @@ struct rtems_wake_io_arg
 };
 
 static void
-_rtems_wake_io(struct socket* sock, void* a)
+t9p__rtems_wake_io(struct socket* sock, void* a)
 {
   struct rtems_wake_io_arg* arg = a;
   rtems_event_send(arg->task, T9P_WAKE_EVENT);
@@ -2732,14 +2822,14 @@ _rtems_wake_io(struct socket* sock, void* a)
 #endif
 
 static void*
-_config_rtems_socket(int sock)
+t9p__config_rtems_socket(int sock)
 {
 #ifdef RTEMS_LEGACY_STACK
   struct rtems_wake_io_arg* arg = t9p_calloc(sizeof(struct rtems_wake_io_arg), 1);
   arg->task = rtems_task_self();
 
   struct sockwakeup sow = {
-    .sw_pfn = _rtems_wake_io,
+    .sw_pfn = t9p__rtems_wake_io,
     .sw_arg = arg
   };
 
@@ -2759,7 +2849,7 @@ _config_rtems_socket(int sock)
 #define SLEEP_DURATION_MS 1
 
 static rtems_interval
-_get_wait_duration(void)
+t9p__get_wait_duration(void)
 {
   static rtems_interval rti = 0; 
   if (rti == 0)
@@ -2773,7 +2863,7 @@ _get_wait_duration(void)
 
 /** Handle tasks when the connection is broken */
 static void
-_t9p_conn_broken(t9p_context_t* c)
+t9p__conn_broken(t9p_context_t* c)
 {
   if (c->broken)
     return; /* already handled the error case */
@@ -2789,14 +2879,14 @@ _t9p_conn_broken(t9p_context_t* c)
  * Returns -1 for connect failure
  */
 static int
-_t9p_try_reconnect(t9p_context_t* c)
+t9p__try_reconnect(t9p_context_t* c)
 {
-  LOG(c, T9P_LOG_TRACE, "Attempting to re-establish connection with server...\n");
+  LOG(c, T9P_LOG_WARN, "Attempting to re-establish connection with server...\n");
   if (c->trans.reconnect(c->conn, c->addr) < 0)
     return -1;
 
   /* Attach to root again, requires we hold the socket lock */
-  if (_attach_root(c) < 0)
+  if (t9p__attach_root(c) < 0)
     return -1;
 
   LOG(c, T9P_LOG_TRACE, "Connection with server re-established!\n");
@@ -2811,7 +2901,7 @@ _t9p_try_reconnect(t9p_context_t* c)
   * to the 9P server is an exceptionally rare case, especially since we have
   * reliable transport with TCP */
 static void
-_t9p_timeout_all(struct trans_node** nodes, size_t num)
+t9p__timeout_all(struct trans_node** nodes, size_t num)
 {
   for (int i = 0; i < num; ++i) {
     if (!nodes[i]) continue;
@@ -2821,8 +2911,11 @@ _t9p_timeout_all(struct trans_node** nodes, size_t num)
   }
 }
 
+/** Worker thread implementation. Handles sending of new packets, receiving
+  * and servicing requests. Also handles connection recovery
+  */
 static void*
-_t9p_thread_proc(void* param)
+t9p__thread_proc(void* param)
 {
   t9p_context_t* c = param;
 
@@ -2834,7 +2927,7 @@ _t9p_thread_proc(void* param)
   int leSock = c->trans.getsock(c->conn);
   void* rarg = NULL;
   if (leSock >= 0) {
-    rarg = _config_rtems_socket(leSock);
+    rarg = t9p__config_rtems_socket(leSock);
   }
 #endif
 
@@ -2845,13 +2938,13 @@ _t9p_thread_proc(void* param)
 
     /* Timeout all active nodes if we lost connection */
     if (c->broken)
-      _t9p_timeout_all(requests, MAX_TAGS);
+      t9p__timeout_all(requests, MAX_TAGS);
 
     /* Attempt a reconnect periodically */
     int do_sleep = 1;
     while (c->broken) {
       mutex_lock(c->socket_lock);
-      if (_t9p_try_reconnect(c) == 0) {
+      if (t9p__try_reconnect(c) == 0) {
         mutex_unlock(c->socket_lock);
         break;
       }
@@ -2903,16 +2996,16 @@ _t9p_thread_proc(void* param)
           continue; /** Just try again next iteration */
         }
         if (l == -EPIPE || l == -ECONNRESET)
-          _t9p_conn_broken(c);
+          t9p__conn_broken(c);
         else
-          ERROR(c, "send: Failed to send header data: %s\n", _t9p_strerror(l));
+          ERROR(c, "send: Failed to send header data: %s\n", t9p__strerror(l));
         continue;
       }
 
       /** Send "body" data */
       if ((l = c->trans.send(c->conn, node->tr.data, node->tr.size, 0)) < 0) {
         atomic_add_u32(&c->stats.send_errs, 1);
-        ERROR(c, "send: Failed to send data: %s\n", _t9p_strerror(l));
+        ERROR(c, "send: Failed to send data: %s\n", t9p__strerror(l));
         continue;
       }
 
@@ -2921,16 +3014,17 @@ _t9p_thread_proc(void* param)
       requests[node->tag] = node;
     }
 
-    char buf[256] = {0};
+    char hdr[sizeof(struct TRcommon)] = {0};
 
     /** Recv pending transactions */
-    while ((l = c->trans.recv(c->conn, buf, sizeof(buf), T9P_RECV_PEEK)) > 0) {
+    while ((l = c->trans.recv(c->conn, hdr, sizeof(hdr), T9P_RECV_PEEK|T9P_RECV_DONTWAIT)) > 0) {
       atomic_add_u32(&c->stats.recv_cnt, 1);
 
+      /** Decode common header to understand what we're working with */
       struct TRcommon com = {0};
-      if (decode_TRcommon(&com, buf, l) < 0) {
+      if (decode_TRcommon(&com, hdr, l) < 0) {
         ERROR(c, "recv: Unable to decode common header; discarding!\n");
-        c->trans.recv(c->conn, buf, sizeof(buf), 0); /** Discard */
+        c->trans.recv(c->conn, hdr, l, 0); /** Discard */
         atomic_add_u32(&c->stats.recv_errs, 1);
         continue;
       }
@@ -2945,7 +3039,7 @@ _t9p_thread_proc(void* param)
       /** Check if tag is out of range */
       if (com.tag >= MAX_TAGS) {
         ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", com.tag);
-        _discard(c, &com);
+        t9p__discard(c, &com);
         atomic_add_u32(&c->stats.recv_errs, 1);
         continue;
       }
@@ -2953,7 +3047,7 @@ _t9p_thread_proc(void* param)
       /** Check if the type is invalid */
       if (com.type >= T9P_TYPE_Tmax) {
         ERROR(c, "recv: Out of range type (%d); discarding!\n", com.type);
-        _discard(c, &com);
+        t9p__discard(c, &com);
         atomic_add_u32(&c->stats.recv_errs, 1);
         continue;
       }
@@ -2962,7 +3056,7 @@ _t9p_thread_proc(void* param)
       struct trans_node* n = requests[com.tag];
       if (!n) {
         ERROR(c, "recv: Tag '%d' not found in request list; discarding!\n", com.tag);
-        _discard(c, &com);
+        t9p__discard(c, &com);
         atomic_add_u32(&c->stats.recv_errs, 1);
         continue;
       }
@@ -2972,6 +3066,15 @@ _t9p_thread_proc(void* param)
 
       /** Handle error responses */
       if (com.type == T9P_TYPE_Rlerror) {
+        char buf[sizeof(struct Rlerror)];
+        /** Read the whole Rlerror packet, no discard necessary after this */
+        l = c->trans.recv(c->conn, buf, MIN(sizeof(buf), com.size), 0);
+        if (l < sizeof(struct Rlerror)) {
+          ERROR(c, "recv: Short Rlerror\n");
+          atomic_add_u32(&c->stats.recv_errs, 1);
+          continue;
+        }
+
         struct Rlerror err = {0};
         if (decode_Rlerror(&err, buf, l) < 0)
           err.ecode = -1;
@@ -2980,8 +3083,7 @@ _t9p_thread_proc(void* param)
         n->tr.status = err.ecode < 0 ? err.ecode : -err.ecode;
 
         if (n->tr.rdata)
-          memcpy(n->tr.rdata, &err, MIN(sizeof(err), n->tr.rsize));
-        _discard(c, &com);
+          memcpy(n->tr.rdata, buf, MIN(sizeof(buf), n->tr.rsize));
         requests[n->tag] = NULL;
         tr_signal(n);
         continue;
@@ -2990,7 +3092,7 @@ _t9p_thread_proc(void* param)
       /** Check for type mismatch and discard if there is one */
       if (n->tr.rtype != 0 && com.type != n->tr.rtype) {
         ERROR(c, "recv: Expected msg type '%u' but got '%d'; discarding!\n", (unsigned)n->tr.rtype, com.type);
-        _discard(c, &com);
+        t9p__discard(c, &com);
         n->tr.status = -1;
         requests[n->tag] = NULL;
         atomic_add_u32(&c->stats.recv_errs, 1);
@@ -3021,7 +3123,7 @@ _t9p_thread_proc(void* param)
 
       /** No result data space? well, discard... */
       if (!n->tr.rdata || n->tr.rsize == 0)
-        _discard(c, &com);
+        t9p__discard(c, &com);
       else {
         l = c->trans.recv(c->conn, n->tr.rdata, MIN(n->tr.rsize, com.size), 0);
         nread += l;
@@ -3038,7 +3140,7 @@ _t9p_thread_proc(void* param)
 
     /** Check for broken pipe, dispatch handling code */
     if (l == -EPIPE || l == -ECONNRESET) {
-      _t9p_conn_broken(c);
+      t9p__conn_broken(c);
     }
 
     mutex_unlock(c->socket_lock);
@@ -3060,7 +3162,9 @@ _t9p_thread_proc(void* param)
 
   #ifdef __rtems__
     rtems_event_set es;
-    rtems_event_receive(T9P_WAKE_EVENT, RTEMS_EVENT_ANY | RTEMS_WAIT, _get_wait_duration(), &es);
+    rtems_event_receive(T9P_WAKE_EVENT, RTEMS_EVENT_ANY | RTEMS_WAIT, t9p__get_wait_duration(), &es);
+  #else
+    usleep(1000);
   #endif
   }
 
@@ -3071,6 +3175,151 @@ _t9p_thread_proc(void* param)
 
   t9p_free(requests);
   return NULL;
+}
+
+static int
+tr_send_now(struct t9p_context* c, struct trans_node* n)
+{
+  ssize_t l;
+
+  /* Debugging */
+  if (c->opts.log_level <= T9P_LOG_TRACE) {
+    struct TRcommon com = {0};
+    if (n->tr.hdata && decode_TRcommon(&com, n->tr.hdata, n->tr.hsize) < 0)
+      goto log_done;
+    else if (n->tr.data && decode_TRcommon(&com, n->tr.data, n->tr.size) < 0)
+      goto log_done;
+
+    fprintf(stderr, "send: type=%d, tag=%d, size=%lu\n",
+      com.type, com.tag, (unsigned long)com.size);
+  }
+log_done:
+
+  /* Send header data, if any */
+  if (n->tr.hdata) {
+    if ((l = c->trans.send(c->conn, n->tr.hdata, n->tr.hsize, 0)) < 0) {
+      atomic_add_u32(&c->stats.send_errs, 1);
+      ERROR(c, "send: %s\n", strerror(-l));
+      return -1;
+    }
+    atomic_add_u32(&c->stats.send_cnt, 1);
+    atomic_add_u32(&c->stats.total_bytes_send, n->tr.hsize);
+  }
+
+  /* Send main body */
+  if (n->tr.data) {
+    if ((l = c->trans.send(c->conn, n->tr.data, n->tr.size, 0)) < 0) {
+      atomic_add_u32(&c->stats.send_errs, 1);
+      ERROR(c, "send: %s\n", strerror(-l));
+      return -1;
+    }
+    atomic_add_u32(&c->stats.send_cnt, 1);
+    atomic_add_u32(&c->stats.total_bytes_send, n->tr.size);
+  }
+  return 0;
+}
+
+static int
+tr_recv_now(struct t9p_context* c, struct trans_node* n)
+{
+  ssize_t l, nr = 0;
+  char hdr[sizeof(struct TRcommon)];
+
+  while ((l = c->trans.recv(c->conn, hdr, sizeof(hdr), T9P_RECV_PEEK)) > 0) {
+    atomic_add_u32(&c->stats.recv_cnt, 1);
+
+    /* Decode the header */
+    struct TRcommon com;
+    if (decode_TRcommon(&com, hdr, l) < 0) {
+      ERROR(c, "recv: TRcommon decode failed\n");
+      t9p__discard(c, NULL);
+      return -1;
+    }
+
+    if (c->opts.log_level <= T9P_LOG_TRACE) {
+      fprintf(stderr, "recv: type=%d, tag=%d, size=%lu\n",
+        com.type, com.tag, (unsigned long)com.size);
+    }
+
+    /* Check for mismatched tag */
+    if (com.tag != n->tag) {
+      ERROR(c, "recv: mismatched tag. %d vs %d\n", com.tag, n->tag);
+      t9p__discard(c, &com);
+      atomic_add_u32(&c->stats.recv_errs, 1);
+      return -1;
+    }
+
+    atomic_add_u32(&c->stats.total_bytes_recv, com.size);
+
+    /* Handle Rlerror specifically */
+    if (com.type == T9P_TYPE_Rlerror) {
+      atomic_add_u32(&c->stats.recv_errs, 1);
+
+      n->tr.status = -1;
+
+      /* Read entire Rlerror message */
+      char buf[sizeof(struct Rlerror)];
+      struct Rlerror err;
+      if ((l = c->trans.recv(c->conn, buf, com.size, 0)) < sizeof(struct Rlerror)) {
+        ERROR(c, "recv: error reading Rlerror\n");
+      }
+      else if (decode_Rlerror(&err, buf, l) < 0) {
+        ERROR(c, "recv: error decoding Rlerror. tag=%d, sz=%lu\n", com.tag, 
+          (unsigned long)com.size);
+      }
+      else {
+        n->tr.status = -err.ecode;
+      }
+      return -1;
+    }
+
+    /* Check for mismatched type */
+    if (com.type != n->tr.rtype) {
+      ERROR(c, "recv: mismatched type. %d vs %d.\n", com.type, (int)n->tr.rtype);
+      t9p__discard(c, &com);
+      atomic_add_u32(&c->stats.recv_errs, 1);
+      return -1;
+    }
+
+    /* Read into rheader, if any */
+    if (n->tr.rheader && n->tr.rheadersz) {
+      l = c->trans.recv(c->conn, n->tr.rheader, MIN(com.size, n->tr.rheadersz), 0);
+      if (l < 0) {
+        n->tr.status = l;
+        atomic_add_u32(&c->stats.recv_errs, 1);
+        return -1;
+      }
+      if (l > com.size) com.size = 0;
+      else com.size -= l;
+      nr += l;
+    }
+
+    /* Check if any remaining */
+    if (!com.size)
+      goto recv_done;
+
+    /* Read into resulting area, if any */
+    if (n->tr.rdata) {
+      size_t off = 0;
+      while (com.size != 0) {
+        l = c->trans.recv(c->conn, (uint8_t*)n->tr.rdata + off, MIN(com.size, n->tr.rsize), 0);
+        if (l < 0) {
+          n->tr.status = l;
+          atomic_add_u32(&c->stats.recv_errs, 1);
+          return -1;
+        }
+        nr += l;
+        off += l;
+        if (l > com.size) com.size = 0;
+        else com.size -= l;
+      }
+    }
+
+  recv_done:
+    n->tr.status = nr;
+    return 0;
+  }
+  return 0;
 }
 
 /********************************************************************/
@@ -3084,10 +3333,11 @@ _t9p_thread_proc(void* param)
 struct tcp_context
 {
   int sock;
+  bool nonblock;
 };
 
 static int
-_t9p_tcp_newsock()
+t9p__tcp_newsock()
 {
   int sock;
   sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -3097,7 +3347,9 @@ _t9p_tcp_newsock()
   }
 
 #ifndef __rtems__
-  /** Keep connections alive */
+  /* Keep connections alive.
+   * Disabled for RTEMS because this causes a pretty bad mbuf cluster
+   * leak in my testing. Probably not an issue with libbsd stack though */
   int o = 1;
   if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &o, sizeof(o)) < 0) {
     perror("setsockopt");
@@ -3119,11 +3371,13 @@ _t9p_tcp_newsock()
 }
 
 void*
-t9p_tcp_init(void)
+t9p_tcp_init(t9p_context_t* c)
 {
   struct tcp_context* ctx = t9p_calloc(1, sizeof(struct tcp_context));
 
-  if ((ctx->sock = _t9p_tcp_newsock()) < 0) {
+  ctx->nonblock = c->opts.mode == T9P_THREAD_MODE_WORKER;
+
+  if ((ctx->sock = t9p__tcp_newsock()) < 0) {
     t9p_free(ctx);
     return NULL;
   }
@@ -3140,7 +3394,7 @@ t9p_tcp_disconnect(void* context)
 #else
   if (connect(ctx->sock, &s, sizeof(s)) < 0) {
 #endif
-    fprintf(stderr, "Disconnect failed: %s\n", _t9p_strerror(errno));
+    fprintf(stderr, "Disconnect failed: %s\n", t9p__strerror(errno));
     return -1;
   }
 
@@ -3182,22 +3436,9 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
     addr.sin_port = htons(T9P_DEFAULT_PORT);
 
   if (connect(ctx->sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-    fprintf(stderr, "Connect failed to %s: %s\n", addr_or_file, _t9p_strerror(errno));
+    fprintf(stderr, "Connect failed to %s: %s\n", addr_or_file, t9p__strerror(errno));
     return -1;
   }
-
-#ifdef RTEMS_LEGACY_STACK
-  /** Nonblock for RTEMS legacy networking */
-  int noblock = 1;
-  assert(ioctl(ctx->sock, FIONBIO, &noblock) == 0);
-#elif defined(__RTEMS_MAJOR__)
-  /** Set nonblock */
-  if (fcntl(ctx->sock, F_SETFL, O_NONBLOCK) < 0) {
-    perror("Failed to set O_NONBLOCK on socket");
-    close(ctx->sock);
-    return -1;
-  }
-#endif
 
   return 0;
 }
@@ -3210,7 +3451,7 @@ t9p_tcp_reconnect(void* context, const char* addr_or_file)
   shutdown(ctx->sock, SHUT_RDWR);
   close(ctx->sock);
 
-  if ((ctx->sock = _t9p_tcp_newsock()) < 0) {
+  if ((ctx->sock = t9p__tcp_newsock()) < 0) {
     return -1;
   }
 
@@ -3238,11 +3479,13 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
   int rflags = 0;
   if (flags & T9P_RECV_PEEK)
     rflags |= MSG_PEEK;
+  if (flags & T9P_RECV_DONTWAIT)
+    rflags |= MSG_DONTWAIT;
 
   struct tcp_context* pc = context;
 
-  /* For peek, we don't need all of that crazy logic */
-  if (flags & T9P_RECV_PEEK) {
+  /* Simple logic for blocking mode. Nonblock needs some funny business */
+  if (!pc->nonblock) {
     ssize_t r = recv(pc->sock, data, len, rflags);
     if (r < 0)
       r = -errno;
@@ -3250,28 +3493,54 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
   }
 
   ssize_t off = 0, rem = len, l = 0;
-  int tries = 20;
 
+  /* Read as much as we can at first */
+  l = recv(pc->sock, data, len, rflags);
+  if (l < 0 && errno != EAGAIN)
+    return -errno;
+  off += l;
+  rem -= l;
+
+  if (rem <= 0)
+    return off;
+
+  int tries = (flags & T9P_RECV_ALL) ? 50 : 3;
+
+  fd_set fds;
+
+  /* Nonblock recv is finnicky, especially on slow hardware lik the Coldfire MPUs.
+   * Often times responses are split between TCP segments that are received and
+   * processed at different times by the networking stack. Sometimes we'll
+   * receive a header, immediately followed by '0' until the networking stack
+   * actually manages to deliver data. We'll use select() to wait for data */
   do {
-    l = recv(pc->sock, (uint8_t*)data + off, rem, rflags);
-    if (l <= 0) {
-      if (l < 0 && errno != EAGAIN)
-        return -errno; /* Just bail */
+    /* 50ms timeout */
+    struct timeval timeout = {
+      .tv_sec = (flags & T9P_RECV_ALL) ? 5 : 0,
+      .tv_usec = 50000
+    };
 
-      /* Nonblock recv is finnicky. Sometimes we get EAGAIN when data isn't ready,
-       * but sometimes we also get 0. This is presumably some weirdness with the
-       * network stack on relatively slow systems like CF chips. This logic will slow
-       * us down if the server returns a malformed response where size > actual size */
-      if (--tries > 0) {
-        usleep(500);
-        continue;
-      }
+    FD_ZERO(&fds);
+    FD_SET(pc->sock, &fds);
+
+    int r;
+    if ((r = select(1, &fds, NULL, NULL, &timeout)) < 0) {
+      if (r < 0)
+        return -errno; /* Bail... */
       break;
     }
 
+    l = recv(pc->sock, (uint8_t*)data + off, rem, rflags);
+    if (l < 0) {
+      if (errno == EAGAIN)
+        continue; /* Really? */
+      return -errno;
+    }
+    if (!l)
+      break;
     rem -= l;
     off += l;
-  } while(rem > 0);
+  } while(rem > 0 && --tries > 0);
 
   return off;
 }
@@ -3281,6 +3550,18 @@ t9p_tcp_getsock(void* context)
 {
   struct tcp_context* c = context;
   return c->sock;
+}
+
+int t9p_tcp_data_avail(void* context)
+{
+  struct tcp_context* c = context;
+  fd_set fs;
+  FD_ZERO(&fs);
+  FD_SET(c->sock, &fs);
+
+  struct timeval to = {0};
+  select(1, &fs, NULL, NULL, &to);
+  return !!FD_ISSET(c->sock, &fs);
 }
 
 #endif
@@ -3297,6 +3578,7 @@ t9p_init_tcp_transport(t9p_transport_t* tp)
   tp->disconnect = t9p_tcp_disconnect;
   tp->getsock = t9p_tcp_getsock;
   tp->reconnect = t9p_tcp_reconnect;
+  tp->avail = t9p_tcp_data_avail;
   return 0;
 #else
   return -1;

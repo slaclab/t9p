@@ -15,11 +15,7 @@
  **/
 #include "t9p_platform.h"
 
-#ifdef __rtems__
-# include <rtems/malloc.h>
-#else
-# include <malloc.h>
-#endif
+#include <malloc.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -64,11 +60,7 @@ __attribute__((alloc_align(2)))
 t9p_aligned_zmalloc(size_t size, size_t align)
 {
   void* ptr = NULL;
-#ifdef __rtems__
-  rtems_memalign(&ptr, align, size);
-#else
   posix_memalign(&ptr, align, size);
-#endif
   if (ptr)
     memset(ptr, 0, size);
 #ifndef NO_MEMTRACK

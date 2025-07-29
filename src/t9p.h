@@ -35,6 +35,8 @@ extern "C"
 
 #define T9P_NOGID (~0U)
 
+typedef struct t9p_context t9p_context_t;
+
 /** Flags for Tlopen (these match Linux O_XXX bits)*/
 typedef enum t9p_open_flags
 {
@@ -76,17 +78,14 @@ typedef enum t9p_qid_type
 /**
  * Transport flags
  */
-#define T9P_RECV_PEEK                                                                              \
-  0x1 /**< Read a message, but leave it in the queue. See MSG_PEEK. Incompatible with              \
-         T9P_RECV_READ */
-#define T9P_RECV_READ                                                                              \
-  0x2 /**< Read part of a message and leave it in the queue. Similar to peek, except that this     \
-         advances the read position. Incompatible with T9P_RECV_PEEK */
+#define T9P_RECV_PEEK 0x1 /**< See MSG_PEEK */
+#define T9P_RECV_ALL  0x2 /**< Wait for all data to be recv'ed */
+#define T9P_RECV_DONTWAIT 0x4
 
 /**
  * Transport methods.
  */
-typedef void* (*t9p_init_t)();
+typedef void* (*t9p_init_t)(t9p_context_t* /*t9p_context*/);
 typedef void (*t9p_shutdown_t)(void* /*context*/);
 typedef int (*t9p_connect_t)(void* /*context*/, const char* /*addr_or_file*/);
 /** Disconnect method, return 0 for success */
@@ -97,6 +96,7 @@ typedef ssize_t (*t9p_send_t)(
 typedef ssize_t (*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/, int /*flags*/);
 typedef int (*t9p_get_sock_t)(void* /*context*/);
 typedef int (*t9p_reconnect_t)(void* /*context*/, const char* /*addr_or_file*/);
+typedef int (*t9p_data_avail_t)(void* /*context*/);
 
 /**
  * Transport interface.
@@ -110,6 +110,7 @@ typedef int (*t9p_reconnect_t)(void* /*context*/, const char* /*addr_or_file*/);
  * @recv:       Recv some bytes
  * @getsock:    Returns the socket fd, if supported by this transport. Otherwise returns -1
  * @reconnect:  Reconnect to a server
+ * @data_avail: Returns 1 if data is available on the socket
  */
 typedef struct t9p_transport
 {
@@ -121,6 +122,7 @@ typedef struct t9p_transport
   t9p_recv_t recv;
   t9p_get_sock_t getsock;
   t9p_reconnect_t reconnect;
+  t9p_data_avail_t avail;
 } t9p_transport_t;
 
 /**
@@ -135,8 +137,6 @@ typedef struct T9P_ALIGNED(4) t9p_stats {
   uint32_t total_bytes_recv;
   uint32_t msg_counts[128]; /** 128 must match Tmax in t9proto.h */
 } t9p_stats_t;
-
-typedef struct t9p_context t9p_context_t;
 
 /**< Generic handle to a t9p file, directory or symlink */
 typedef struct t9p_handle* t9p_handle_t;
@@ -160,6 +160,12 @@ typedef enum t9p_thread_prio
   T9P_THREAD_PRIO_COUNT,
 } t9p_thread_prio_t;
 
+typedef enum t9p_thread_mode
+{
+  T9P_THREAD_MODE_NONE = 0,
+  T9P_THREAD_MODE_WORKER,
+} t9p_thread_mode_t;
+
 typedef struct t9p_opts
 {
   uint32_t msize;               /**< Max message size */
@@ -172,6 +178,7 @@ typedef struct t9p_opts
   int recv_timeo;               /**< Recv timeout, in ms */
   uint32_t gid;                 /**< Default gid, used when NOGID is passed to functions */
   t9p_thread_prio_t prio;       /**< I/O thread priority. This is passed to a POSIX function (usually) */
+  t9p_thread_mode_t mode;       /**< Thread mode */
 } t9p_opts_t;
 
 /** Flags for t9p_getattr */

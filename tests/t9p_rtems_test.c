@@ -33,7 +33,9 @@
 #include <rtems/bsd/bsd.h>
 #include <rtems/bsd/iface.h>
 #else // Legacy stack includes
-#include  <rtems/rtems_bsdnet.h>
+#include <rtems/rtems_bsdnet.h>
+#include <sys/sysctl.h>
+#include <netinet/in.h>
 #endif
 
 #if __RTEMS_MAJOR__ < 6
@@ -131,12 +133,12 @@ loading_thread(unsigned long arg)
 
   int sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) {
-    perror("socket");
+    perror("tcpsrv socket");
     abort();
   }
 
   if (connect(sock, (struct sockaddr*)&dest, sizeof(dest)) < 0) {
-    perror("connect");
+    perror("tcpsrv connect");
     abort();
   }
 
@@ -220,8 +222,30 @@ configure_network(void)
   t9p_rtems_register();
 
 #ifdef RTEMS_LEGACY_STACK
+  int r;
+
+  /* Packet loss testing with new sysctl */
+#if __RTEMS_MAJOR__ < 5 && defined(IPCTL_DROPPERCENT)
+  int loss = 0;
+
+  char str[32];
+  if (rtems_bsp_cmdline_get_param("--loss", str, sizeof(str))) {
+    loss = atoi(str + sizeof("--loss=")-1);
+  }
+
+  if (loss) {
+    fprintf(stderr, "Dropping %d%% of all IP packets\n", loss);
+    int name[] = {CTL_NET, PF_INET, IPPROTO_IP, IPCTL_DROPPERCENT};
+
+    size_t sz = sizeof(loss);
+    if ((r = sysctl(name, 4, NULL, NULL, &loss, sz)) < 0) {
+      fprintf(stderr, "sysctl failed: %s\n", strerror(errno));
+    }
+  }
+#endif
+
   rtems_id task_id = 0;
-  int r = rtems_task_create(
+  r = rtems_task_create(
     rtems_build_name('n', 't', 'p', 'd'),
     150,
     rtems_minimum_stack_size,
@@ -357,7 +381,26 @@ POSIX_Init(void* arg)
   if (b == 's' || b == 'a') {
     mkdir("/test", 0777);
     mkdir("/test2", 0777);
-    const char* opts = "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID ",msize=4096";
+    char opts[512], msize[32];
+    *opts = 0;
+
+    strcat(opts, "uid=" RTEMS_TEST_UID ",gid=" RTEMS_TEST_GID);
+
+    if (strstr(rtems_bsp_cmdline_get(), "--trace")) {
+      strcat(opts, ",trace");
+    }
+
+    /* Add --msize from the boot command line, default to 64k */
+    if (rtems_bsp_cmdline_get_param("--msize", msize, sizeof(msize))) {
+      strcat(opts, ",msize=");
+      strcat(opts, msize + sizeof("--msize=")-1);
+    }
+    else {
+      strcat(opts, ",msize=65536");
+    }
+    
+    printf("Mounting 10.0.2.2:10002:%s at %s with opts '%s'\n", RTEMS_TEST_PATH "/tests/fs", "/test", opts);
+
     mount(
       "10.0.2.2:10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );

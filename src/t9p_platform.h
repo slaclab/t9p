@@ -24,16 +24,6 @@
 #include <rtems.h>
 #endif
 
-#define T9P_TARGET_POSIX 0
-#define T9P_TARGET_RTEMS4 1
-
-/** Make your target selections here! */
-#ifdef __linux__
-# define T9P_TARGET T9P_TARGET_POSIX
-#elif defined(__rtems__)
-# define T9P_TARGET T9P_TARGET_RTEMS4
-#endif
-
 /** Alignment checking */
 #ifdef NDEBUG
 # define ASSERT_ALIGNED(_addr, _align)
