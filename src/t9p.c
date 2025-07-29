@@ -931,7 +931,7 @@ t9p_init(
   c->opts = *opts;
 
   /** Init transport layer */
-  if (!(c->conn = transport->init())) {
+  if (!(c->conn = transport->init(c))) {
     ERRLOG("Transport init failed\n");
     goto error_pre_fhl;
   }
@@ -2798,14 +2798,38 @@ t9p__is_fid_rw(t9p_handle_t h, int write)
 static void
 t9p__discard(struct t9p_context* c, struct TRcommon* com)
 {
-  char buf[256];
-  ssize_t left = com->size;
-  while (left > 0) {
-    size_t r;
-    r = c->trans.recv(c->conn, buf, MIN(sizeof(buf), left), 0);
-    if (r <= 0)
-      return;
-    left -= r;
+  ssize_t r;
+
+  /* Blocking mode */
+  if (c->opts.mode == T9P_THREAD_MODE_NONE) {
+    char buf[256];
+
+    ssize_t rem = com ? com->size : SSIZE_MAX;
+    ssize_t tries = 10;
+    while (rem > 0) {
+      r = c->trans.recv(c->conn, buf, MIN(rem, sizeof(buf)), T9P_RECV_PEEK | T9P_RECV_DONTWAIT);
+      if (r == -EAGAIN && --tries > 0)
+        continue;
+      if (r <= 0)
+        return;
+      r = c->trans.recv(c->conn, buf, MIN(rem, sizeof(buf)), 0);
+      if (r <= 0)
+        return;
+    }
+  }
+  /* Nonblock mode */
+  else if (c->opts.mode == T9P_THREAD_MODE_WORKER) {
+    char buf[256];
+    ssize_t left = com ? com->size : SSIZE_MAX;
+    ssize_t tries = 20;
+    while (left > 0) {
+      r = c->trans.recv(c->conn, buf, MIN(sizeof(buf), left), T9P_RECV_DONTWAIT);
+      if (r == -EAGAIN && --tries > 0)
+        continue;
+      if (r <= 0)
+        return;
+      left -= r;
+    }
   }
 }
 
@@ -3236,11 +3260,10 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
     struct TRcommon com;
     if (decode_TRcommon(&com, hdr, l) < 0) {
       ERROR(c, "recv: TRcommon decode failed\n");
-      com.size = l;
-      t9p__discard(c, &com); // hacky
+      t9p__discard(c, NULL);
       return -1;
     }
-    
+
     if (c->opts.log_level <= T9P_LOG_TRACE) {
       fprintf(stderr, "recv: type=%d, tag=%d, size=%lu\n",
         com.type, com.tag, (unsigned long)com.size);
@@ -3249,6 +3272,7 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
     /* Check for mismatched tag */
     if (com.tag != n->tag) {
       ERROR(c, "recv: mismatched tag. %d vs %d\n", com.tag, n->tag);
+      t9p__discard(c, &com);
       atomic_add_u32(&c->stats.recv_errs, 1);
       return -1;
     }
@@ -3304,13 +3328,19 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
 
     /* Read into resulting area, if any */
     if (n->tr.rdata) {
-      l = c->trans.recv(c->conn, n->tr.rdata, MIN(com.size, n->tr.rsize), 0);
-      if (l < 0) {
-        n->tr.status = l;
-        atomic_add_u32(&c->stats.recv_errs, 1);
-        return -1;
+      size_t off = 0;
+      while (com.size != 0) {
+        l = c->trans.recv(c->conn, (uint8_t*)n->tr.rdata + off, MIN(com.size, n->tr.rsize), 0);
+        if (l < 0) {
+          n->tr.status = l;
+          atomic_add_u32(&c->stats.recv_errs, 1);
+          return -1;
+        }
+        nr += l;
+        off += l;
+        if (l > com.size) com.size = 0;
+        else com.size -= l;
       }
-      nr += l;
     }
 
   recv_done:
@@ -3331,10 +3361,11 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
 struct tcp_context
 {
   int sock;
+  bool nonblock;
 };
 
 static int
-_t9p_tcp_newsock()
+t9p__tcp_newsock()
 {
   int sock;
   sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -3368,11 +3399,13 @@ _t9p_tcp_newsock()
 }
 
 void*
-t9p_tcp_init(void)
+t9p_tcp_init(t9p_context_t* c)
 {
   struct tcp_context* ctx = t9p_calloc(1, sizeof(struct tcp_context));
 
-  if ((ctx->sock = _t9p_tcp_newsock()) < 0) {
+  ctx->nonblock = c->opts.mode == T9P_THREAD_MODE_WORKER;
+
+  if ((ctx->sock = t9p__tcp_newsock()) < 0) {
     t9p_free(ctx);
     return NULL;
   }
@@ -3434,20 +3467,7 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
     fprintf(stderr, "Connect failed to %s: %s\n", addr_or_file, t9p__strerror(errno));
     return -1;
   }
-#if 0
-#ifdef RTEMS_LEGACY_STACK
-  /** Nonblock for RTEMS legacy networking */
-  int noblock = 1;
-  assert(ioctl(ctx->sock, FIONBIO, &noblock) == 0);
-#elif defined(__RTEMS_MAJOR__)
-  /** Set nonblock */
-  if (fcntl(ctx->sock, F_SETFL, O_NONBLOCK) < 0) {
-    perror("Failed to set O_NONBLOCK on socket");
-    close(ctx->sock);
-    return -1;
-  }
-#endif
-#endif
+
   return 0;
 }
 
@@ -3459,7 +3479,7 @@ t9p_tcp_reconnect(void* context, const char* addr_or_file)
   shutdown(ctx->sock, SHUT_RDWR);
   close(ctx->sock);
 
-  if ((ctx->sock = _t9p_tcp_newsock()) < 0) {
+  if ((ctx->sock = t9p__tcp_newsock()) < 0) {
     return -1;
   }
 
@@ -3492,13 +3512,13 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
 
   struct tcp_context* pc = context;
 
-  /* For peek, we don't need all of that crazy logic */
-  //if (flags & T9P_RECV_PEEK) {
+  /* Simple logic for blocking mode. Nonblock needs some funny business */
+  if (!pc->nonblock) {
     ssize_t r = recv(pc->sock, data, len, rflags);
     if (r < 0)
       r = -errno;
     return r;
-  //}
+  }
 
   ssize_t off = 0, rem = len, l = 0;
 
@@ -3550,30 +3570,6 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
     off += l;
   } while(rem > 0 && --tries > 0);
 
-#if 0
-  do {
-    l = recv(pc->sock, (uint8_t*)data + off, rem, rflags);
-    if (l <= 0) {
-      if (l < 0 && errno != EAGAIN)
-        return -errno; /* Just bail */
-
-      /* Nonblock recv is finnicky. Sometimes we get EAGAIN when data isn't ready,
-       * but sometimes we also get 0. This is a problem particularly on slow chips
-       * like the Coldfire MPUs. Since TCP is a streaming protocol, messages may be
-       * fragmented across multiple segments and processed by the network stack at
-       * different times. So, we may receive the header and then '0' immediately
-       * after, even though the data is already in flight (or delivered) */
-      if (--tries > 0) {
-        usleep(1000);
-        continue;
-      }
-      break;
-    }
-
-    rem -= l;
-    off += l;
-  } while(rem > 0);
-#endif
   return off;
 }
 

@@ -35,6 +35,8 @@ extern "C"
 
 #define T9P_NOGID (~0U)
 
+typedef struct t9p_context t9p_context_t;
+
 /** Flags for Tlopen (these match Linux O_XXX bits)*/
 typedef enum t9p_open_flags
 {
@@ -83,7 +85,7 @@ typedef enum t9p_qid_type
 /**
  * Transport methods.
  */
-typedef void* (*t9p_init_t)();
+typedef void* (*t9p_init_t)(t9p_context_t* /*t9p_context*/);
 typedef void (*t9p_shutdown_t)(void* /*context*/);
 typedef int (*t9p_connect_t)(void* /*context*/, const char* /*addr_or_file*/);
 /** Disconnect method, return 0 for success */
@@ -135,8 +137,6 @@ typedef struct T9P_ALIGNED(4) t9p_stats {
   uint32_t total_bytes_recv;
   uint32_t msg_counts[128]; /** 128 must match Tmax in t9proto.h */
 } t9p_stats_t;
-
-typedef struct t9p_context t9p_context_t;
 
 /**< Generic handle to a t9p file, directory or symlink */
 typedef struct t9p_handle* t9p_handle_t;
