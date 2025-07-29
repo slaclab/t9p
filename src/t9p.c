@@ -1705,35 +1705,6 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
   }
 
   t9p__release_handle_by_fid(c, h);
-
-  return 0;
-#if 0
-  n = tr_enqueue(c, &c->trans_pool, n);
-  if (!n) {
-    ERROR(c, "%s: unable to queue\n", __FUNCTION__);
-    return -EIO;
-  }
-
-#warning FIXME: This logic is broken for non-threaded mode
-
-  /** FIXME: We should only release the FID if we get back either Rerror or Rlerror from the server.
-   * It is true that Tremove will clunk even on Rlerror, but we need to make sure that the server
-   * *actually* gets our Tremove... With TCP transport, this probably doesn't matter too much. */
-
-  /** Tremove is basically just a clunk with the side effect of removing a file. This will clunk
-   * even if the remove fails */
-  t9p__release_handle_by_fid(c, h);
-
-  if (tr_wait(n, c->opts.recv_timeo) != 0) {
-    ERROR(c, "%s: timed out\n", __FUNCTION__);
-    tr_release(&c->trans_pool, n); // FIXME:!!!!!!!!!!! USE AFTER FREE IN WORKER THREAD
-    return 0; /** TODO: Returning -1 here and releasing the file handle would be inconsistent with
-                 the other error cases */
-  }
-
-  tr_release(&c->trans_pool, n);
-#endif
-
   return 0;
 }
 
