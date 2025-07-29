@@ -223,7 +223,7 @@ T9P_NODISCARD static struct t9p_handle_node* t9p__alloc_handle(
   t9p_handle_t parent,
   const char* fname
 );
-T9P_NODISCARD static struct t9p_handle_node* _copy_handle(struct t9p_context* c, t9p_handle_t h);
+T9P_NODISCARD static struct t9p_handle_node* t9p__copy_handle(struct t9p_context* c, t9p_handle_t h);
 static void t9p__release_handle(struct t9p_context* c, struct t9p_handle_node* h);
 static void t9p__release_handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 static int t9p__maybe_recover(struct t9p_context* c, t9p_handle_t h);
@@ -819,7 +819,7 @@ t9p__clunk_sync(struct t9p_context* c, int fid)
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tclunk failed\n", __FUNCTION__);
+    INFO(c, "%s: Tclunk failed: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
   return 0;
@@ -903,6 +903,7 @@ t9p_opts_init(struct t9p_opts* opts)
   opts->recv_timeo = DEFAULT_RECV_TIMEO;
   opts->prio = T9P_THREAD_PRIO_MED;
   opts->mode = T9P_THREAD_MODE_NONE;
+  opts->log_level = T9P_LOG_WARN;
 }
 
 t9p_context_t*
@@ -1105,7 +1106,7 @@ t9p__open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* pat
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s(%s): Twalk: %s\n", __FUNCTION__, path, t9p__strerror(l));
+    INFO(c, "%s(%s): Twalk: %s\n", __FUNCTION__, path, t9p__strerror(l));
     goto error;
   }
 
@@ -1218,7 +1219,7 @@ t9p_attach(t9p_context_t* c, const char* apath, t9p_handle_t afid, t9p_handle_t*
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tattach failed: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tattach failed: %s\n", __FUNCTION__, t9p__strerror(l));
     t9p__release_handle(c, h);
     return l;
   }
@@ -1270,7 +1271,7 @@ t9p_open(t9p_context_t* c, t9p_handle_t h, uint32_t mode)
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tlopen: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tlopen: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1329,7 +1330,7 @@ t9p_read_internal(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t nu
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tread: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tread: %s\n", __FUNCTION__, t9p__strerror(l));
     status = l;
     goto error;
   }
@@ -1405,7 +1406,7 @@ t9p_write_internal(t9p_context_t* c, t9p_handle_t h, uint64_t offset, uint32_t n
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Twrite: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Twrite: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1479,7 +1480,7 @@ t9p_getattr(t9p_context_t* c, t9p_handle_t h, struct t9p_getattr* attr, uint64_t
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tgetattr: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tgetattr: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1561,7 +1562,7 @@ t9p_create(
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tlcreate: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tlcreate: %s\n", __FUNCTION__, t9p__strerror(l));
     t9p_close_handle(c, h);
     return l;
   }
@@ -1612,7 +1613,7 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
   if (t9p__maybe_recover(c, todup) < 0)
     return -EBADF;
 
-  struct t9p_handle_node* h = _copy_handle(c, todup);
+  struct t9p_handle_node* h = t9p__copy_handle(c, todup);
   if (!h) {
     ERROR(c, "%s: unable to alloc new handle\n", __FUNCTION__);
     return -ENOMEM;
@@ -1640,7 +1641,7 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Twalk: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Twalk: %s\n", __FUNCTION__, t9p__strerror(l));
     t9p__release_handle(c, h);
     return -EIO;
   }
@@ -1694,7 +1695,7 @@ t9p_remove(t9p_context_t* c, t9p_handle_t h)
   };
 
   if ((l = tr_send_recv(c, n, &tr, &send_ok)) < 0) {
-    ERROR(c, "%s: Tremove: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tremove: %s\n", __FUNCTION__, t9p__strerror(l));
     /* Tremove is basically a clunk with the side effect of removing a file. This will clunk
      * even if we get Rlerror back from the server. If the send was OK and the server should
      * have received our Tremove, release the fid */
@@ -1767,7 +1768,7 @@ t9p_fsync(t9p_context_t* c, t9p_handle_t file, uint32_t datasync)
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tfsync: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tfsync: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1815,7 +1816,7 @@ t9p_mkdir(
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tmkdir: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tmkdir: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1863,7 +1864,7 @@ t9p_statfs(t9p_context_t* c, t9p_handle_t h, struct t9p_statfs* statfs)
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tstatfs: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tstatfs: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1918,7 +1919,7 @@ t9p_readlink(t9p_context_t* c, t9p_handle_t h, char* outPath, size_t outPathSize
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Treadlink: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Treadlink: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -1969,7 +1970,7 @@ t9p_symlink(
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tsymlink: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tsymlink: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -2071,7 +2072,7 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
     };
 
     if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-      ERROR(c, "%s: Treaddir: %s\n", __FUNCTION__, t9p__strerror(l));
+      INFO(c, "%s: Treaddir: %s\n", __FUNCTION__, t9p__strerror(l));
       status = l;
       goto error;
     }
@@ -2198,7 +2199,7 @@ t9p_readdir_dirents(t9p_context_t* c, t9p_handle_t dir, t9p_scandir_ctx_t* ctx,
     };
 
     if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-      ERROR(c, "%s: Treaddir: %s\n", __FUNCTION__, t9p__strerror(l));
+      INFO(c, "%s: Treaddir: %s\n", __FUNCTION__, t9p__strerror(l));
       status = l;
       goto error;
     }
@@ -2260,7 +2261,7 @@ t9p_unlinkat(t9p_context_t* c, t9p_handle_t dir, const char* file, uint32_t flag
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tunlinkat: %s\n", __FUNCTION__, t9p__strerror(-l));
+    INFO(c, "%s: Tunlinkat: %s\n", __FUNCTION__, t9p__strerror(-l));
     return l;
   }
 
@@ -2313,7 +2314,7 @@ t9p_renameat(
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Trenameat: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Trenameat: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -2358,7 +2359,7 @@ t9p_setattr(t9p_context_t* c, t9p_handle_t h, uint32_t mask, const struct t9p_se
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tsetattr: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tsetattr: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -2403,7 +2404,7 @@ t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newna
   };
 
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Trename: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Trename: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
 
@@ -2446,7 +2447,7 @@ t9p_link(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* target)
   };
   
   if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    ERROR(c, "%s: Tlink: %s\n", __FUNCTION__, t9p__strerror(l));
+    INFO(c, "%s: Tlink: %s\n", __FUNCTION__, t9p__strerror(l));
     return l;
   }
   return 0;
@@ -2485,7 +2486,7 @@ t9p_mknod(t9p_context_t* c, t9p_handle_t dir, const char* name, uint32_t mode, u
     };
 
     if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-      ERROR(c, "%s: Tmknod: %s\n", __FUNCTION__, t9p__strerror(l));
+      INFO(c, "%s: Tmknod: %s\n", __FUNCTION__, t9p__strerror(l));
       return l;
     }
     return 0;
@@ -2694,7 +2695,7 @@ t9p__alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
  * a new handle and copy the string to it. Nothing else changes.
  */
 static struct t9p_handle_node*
-_copy_handle(struct t9p_context* c, t9p_handle_t h)
+t9p__copy_handle(struct t9p_context* c, t9p_handle_t h)
 {
   struct t9p_handle_node* n = t9p__alloc_handle(c, NULL, NULL);
   if (!n)
