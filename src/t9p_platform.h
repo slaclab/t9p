@@ -151,7 +151,7 @@ extern void mutex_destroy(mutex_t* mut);
 
 typedef struct _event_s event_t;
 extern event_t* event_create();
-extern int event_wait(event_t* ev, uint64_t timeout_ms);
+extern int event_wait(event_t* ev, uint32_t timeout_ms);
 extern void event_signal(event_t* ev);
 extern void event_destroy(event_t* ev);
 

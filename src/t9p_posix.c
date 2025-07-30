@@ -166,18 +166,23 @@ event_create(void)
 }
 
 int
-event_wait(event_t* ev, uint64_t timeout_ms)
+event_wait(event_t* ev, uint32_t timeout_ms)
 {
   struct timespec tv = {};
-  clock_gettime(CLOCK_REALTIME, &tv);
-  uint64_t ns = tv.tv_nsec + timeout_ms * 1e6;
-  tv.tv_nsec = ns % 1000000000ULL;
-  tv.tv_sec += (ns / 1000000000ULL);
-
+  if (timeout_ms != UINT32_MAX) {
+    clock_gettime(CLOCK_REALTIME, &tv);
+    uint64_t ns = tv.tv_nsec + timeout_ms * 1e6;
+    tv.tv_nsec = ns % 1000000000ULL;
+    tv.tv_sec += (ns / 1000000000ULL);
+  }
+  
   pthread_mutex_lock(&ev->mutex);
   int r = 0;
   do {
-    r = pthread_cond_timedwait(&ev->cond, &ev->mutex, &tv);
+    if (timeout_ms != UINT32_MAX)
+      r = pthread_cond_timedwait(&ev->cond, &ev->mutex, &tv);
+    else
+      r = pthread_cond_wait(&ev->cond, &ev->mutex);
   } while (r == EAGAIN || r == EINTR);
 
   pthread_mutex_unlock(&ev->mutex); // Dont need to hold this mutex
