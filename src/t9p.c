@@ -131,8 +131,11 @@ struct trans_pool
 struct T9P_ALIGNED(4) t9p_context
 {
   uint32_t thr_run;
-  uint32_t serial;    /**< Serial number of the context. Must match fid, otherwise triggers recovery */
-  bool broken;        /**< Indicates if the pipe was broken or not */
+  
+  /* Serial number of the context. Must match fid, otherwise triggers
+   * recovery of the fid */
+  uint32_t serial;
+  bool broken;
 
   void* conn;
   t9p_transport_t trans;
@@ -150,18 +153,19 @@ struct T9P_ALIGNED(4) t9p_context
 
   /** I/O thread */
   thread_t* io_thread;
-  event_t* recv_event; /**< Signaled when a new packet has been received */
+  event_t* recv_event;
   mutex_t* socket_lock;
+  event_t* broken_event;
 
   struct trans_pool trans_pool;
 
-  struct t9p_handle_node* fhl; /**< Flat array of file handles, allocated in a contiguous block */
-  struct t9p_handle_node* fhl_free; /**< LL of free file handles */
+  struct t9p_handle_node* fhl;
+  struct t9p_handle_node* fhl_free;
   
   struct t9p_stats stats;
   
 #ifdef __rtems__
-  rtems_id rtems_thr_ident;   /**< Used to wake the I/O thread when more data is ready */
+  rtems_id rtems_thr_ident;
 #endif
 };
 
@@ -180,13 +184,21 @@ struct t9p_string
   * DEFAULT_MAX_FILES = 256, so we allocate 9216 bytes on context create */
 struct t9p_handle
 {
-  struct t9p_string* str; /**< Path of the file */
-  int32_t fid;         /**< Also the index into the fh table in t9p_context */
-  uint32_t serial;     /**< Serial number. Must match context. Used for recovery */
-  uint32_t iounit;     /**< Returned by Rlopen after the file is opened */
-  uint32_t obits;      /**< Flags used to open the file. used for recovery */
-  uint16_t valid_mask; /**< Determines what is and isn't valid */
-  qid_t qid;           /**< qid of this object. Only valid if valid_mask says so */
+  /* Path of the file. Set by Twalk */
+  struct t9p_string* str;
+  /* fid, but also index into the file handle table in t9p_context */
+  int32_t fid;
+  /* Serial number. Must match context. Used for recovery */
+  uint32_t serial;
+  /* iounit returned by Rlopen after the file is open (or computed based on msize)
+   * This will never be 0 if the file is open */
+  uint32_t iounit;
+  /* Bits passed to Tlopen used to open the file. Used for recovery */
+  uint32_t obits;
+  /* Determines what is and isn't valid (active, qid, fid) */
+  uint16_t valid_mask;
+  /* Qid, may be invalid unless otherwise specified by valid_mask */
+  qid_t qid;
 };
 
 struct t9p_handle_node
@@ -230,6 +242,7 @@ static int t9p__maybe_recover(struct t9p_context* c, t9p_handle_t h);
 static struct t9p_handle_node* t9p__handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 
 static void* t9p__thread_proc(void* param);
+static void* t9p__recovery_thread_proc(void* param);
 
 /** Safe strcpy that ensures dest is NULL terminated */
 void
@@ -297,37 +310,53 @@ static int tr_send_now(struct t9p_context* c, struct trans_node* n);
 #define TR_FLAGS_NONE 0x0
 
 struct trans {
-  uint32_t ttype;    /**< Transmission type */
-  uint32_t flags;    /**< Flags */
-  const void *data;  /**< Outgoing data */
-  size_t size;       /**< Outgoing data size */
-  void *rdata;       /**< Buffer to hold incoming data */
-  size_t rsize;      /**< Incoming data buffer size */
-  const void *hdata; /**< Optional; header data pointer. If not NULL,
-                          this is ent before this->data is.
-                          This is used to avoid unnecessary copies */
-  size_t hsize;      /**< Optional; header data size */
-  int32_t status;    /**< Combined status/length variable. If < 0, this represents
-                     an error condition. If >= 0, it's the number of bytes
-                     written to rdata. */
-  uint32_t rtype;    /**< 9p meta; result message type. Set to 0 to accept any. */
-  void *rheader;     /**< Optional; pointer to 'header' recv data */
-  size_t rheadersz;  /**< Optional; size of the the recv 'header' buf. This should be the number
-                          of bytes *expected* for the header. i.e. sizeof(Rread) */
+  /* Transmission type */
+  uint32_t ttype;
+  uint32_t flags;
+
+  /* Outgoing data to be sent and size */
+  const void *data;
+  size_t size;
+
+  /* Incoming data buffer and size */
+  void *rdata;
+  size_t rsize;
+  
+  /* Optional; header data buffer. If not NULL, this is sent immediately
+   * before 'data'. This is used to avoid unnecessary copies */
+  const void *hdata;
+  size_t hsize;
+  
+  /* Combined status + length variable. If < 0, this represents an error
+   * condition. If >= 0, it's the number of bytes written to rdata and 
+   * rheader */
+  int32_t status;
+  
+  /* 9p meta; result message type. Used to filter out incoming messages */
+  uint32_t rtype;
+  
+  /* Optional; pointer to 'header' recv data. The size should be the number
+   * of bytes expected to be read, such as sizeof(struct Rread). The first
+   * data recv'ed will be placed here. This helps avoid unnecessary copies */
+  void *rheader;
+  size_t rheadersz;
 };
 
 struct trans_node
 {
   struct trans tr;
 
-  uint8_t sent;   /**< Set once we've been sent */
+  /* Flag set to indicate when this is sent */
+  uint8_t sent;
 #if __rtems__
-  rtems_id task;  /**< Originator of the request. Used with rtems_event_send */
+  /* Originator of the request. Used with rtems_event_send */
+  rtems_id task;
 #else
-  event_t* event; /**< Signaled when the response to this is receieved */
+  /* Signaled when the response to this is receieved */
+  event_t* event;
 #endif
-  uint16_t tag;   /**< Tag for this transaction node; For now, each node will have its
-                       own associated tag. Somewhat sucks, but good enough for now. */
+  /* Tag for this transaction node; For now, each node has its own associated tag */
+  uint16_t tag;
 
   struct trans_node* next;
 };
@@ -512,12 +541,17 @@ tr_send_recv_now(struct t9p_context* c, struct trans_node* n, bool* send_ok)
 {
   int r;
 
+  *send_ok = false;
+
+  /* Skip entirely if the pipe is broken */
+  if (c->broken)
+    return -1;
+
   mutex_lock(c->socket_lock);
 
   /* Attempt to send packet data */
   if ((r = tr_send_now(c, n)) < 0) {
     mutex_unlock(c->socket_lock);
-    *send_ok = false;
     return r;
   }
 
@@ -969,6 +1003,11 @@ t9p_init(
     ERRLOG("Unable to create event\n");
     goto error_post_fhl;
   }
+  
+  if (!(c->broken_event = event_create())) {
+    ERRLOG("Unable to create event\n");
+    goto error_post_fhl;
+  }
 
   if (tr_pool_init(&c->trans_pool, MAX_TRANSACTIONS) < 0) {
     ERRLOG("Unable to create transaction pool\n");
@@ -997,13 +1036,17 @@ t9p_init(
 
   mutex_unlock(c->socket_lock);
 
-  /** Kick off thread */
-  if (opts->mode == T9P_THREAD_MODE_WORKER) {
-    c->thr_run = 1;
-    if (!(c->io_thread = thread_create(t9p__thread_proc, c, c->opts.prio))) {
-      t9p_shutdown(c);
-      return NULL;
-    }
+  /** Kick off thread. Either a fully-featured I/O thread, or recovery thread */
+  void*(*proc)(void*);
+  if (opts->max_fids == T9P_THREAD_MODE_NONE) 
+    proc = t9p__recovery_thread_proc;
+  else
+    proc = t9p__thread_proc;
+
+  c->thr_run = 1;
+  if (!(c->io_thread = thread_create(t9p__thread_proc, c, c->opts.prio))) {
+    t9p_shutdown(c);
+    return NULL;
   }
 
   return c;
@@ -1032,6 +1075,7 @@ t9p_shutdown(t9p_context_t* c)
   if (c->io_thread) {
     /** Kill off the thread */
     c->thr_run = 0;
+    event_signal(c->broken_event);
     thread_join(c->io_thread);
   }
 
@@ -2865,13 +2909,13 @@ t9p__get_wait_duration(void)
 static void
 t9p__conn_broken(t9p_context_t* c)
 {
-  if (c->broken)
-    return; /* already handled the error case */
-
   c->broken = 1;
 
   /* Report broken only once */
   ERROR(c, "t9p: Connection to %s broken, attempting to recover...\n", c->addr);
+  
+  /* Signal the recovery task */
+  event_signal(c->broken_event);
 }
 
 /**
@@ -2881,7 +2925,7 @@ t9p__conn_broken(t9p_context_t* c)
 static int
 t9p__try_reconnect(t9p_context_t* c)
 {
-  LOG(c, T9P_LOG_WARN, "Attempting to re-establish connection with server...\n");
+  LOG(c, T9P_LOG_TRACE, "Attempting to re-establish connection with server...\n");
   if (c->trans.reconnect(c->conn, c->addr) < 0)
     return -1;
 
@@ -2889,11 +2933,32 @@ t9p__try_reconnect(t9p_context_t* c)
   if (t9p__attach_root(c) < 0)
     return -1;
 
-  LOG(c, T9P_LOG_TRACE, "Connection with server re-established!\n");
+  LOG(c, T9P_LOG_WARN, "Connection with server re-established\n");
   c->serial++;
   MFENCE;
   c->broken = 0;
   return 0;
+}
+
+/**
+ * Attempts to reconnect to the server in a loop. Blocks until complete.
+ */
+static void
+t9p__try_reconnect_periodic(t9p_context_t* c)
+{
+  /* Attempt a reconnect periodically */
+  int do_sleep = 1;
+  while (c->broken) {
+    mutex_lock(c->socket_lock);
+    if (t9p__try_reconnect(c) == 0) {
+      mutex_unlock(c->socket_lock);
+      break;
+    }
+    mutex_unlock(c->socket_lock);
+    WARN(c, "Reconnect failed; trying again in %d seconds\n", do_sleep);
+    sleep(do_sleep);
+    do_sleep = MIN(64, do_sleep << 1); /* back off a bit, but limit to 64 */
+  }
 }
 
 /** TODO: we can probably devise some way of recovering these without timing 
@@ -2940,18 +3005,8 @@ t9p__thread_proc(void* param)
     if (c->broken)
       t9p__timeout_all(requests, MAX_TAGS);
 
-    /* Attempt a reconnect periodically */
-    int do_sleep = 1;
-    while (c->broken) {
-      mutex_lock(c->socket_lock);
-      if (t9p__try_reconnect(c) == 0) {
-        mutex_unlock(c->socket_lock);
-        break;
-      }
-      mutex_unlock(c->socket_lock);
-      sleep(do_sleep);
-      do_sleep = (do_sleep << 1) & 0x7F; /* back off a bit, but limit to 64 */
-    }
+    /* Attempt a reconnect periodically; Blocks until done */
+    t9p__try_reconnect_periodic(c);
 
     mutex_lock(c->socket_lock);
 
@@ -3177,6 +3232,25 @@ t9p__thread_proc(void* param)
   return NULL;
 }
 
+/* Recovery task.
+ * This handles reconnection to the 9p server if it's lost and is signaled automatically when we get
+ * EPIPE from send/recv.
+ */
+static void*
+t9p__recovery_thread_proc(void* param)
+{
+  t9p_context_t* c = param;
+  while (c->thr_run) {
+    event_wait(c->broken_event, UINT32_MAX);
+    if (!c->thr_run) /* Kludge; if we're being asked to exit, don't try to recover.. */
+      return NULL;
+
+    t9p__try_reconnect_periodic(c);
+  }
+  return NULL;
+}
+
+
 static int
 tr_send_now(struct t9p_context* c, struct trans_node* n)
 {
@@ -3200,6 +3274,8 @@ log_done:
     if ((l = c->trans.send(c->conn, n->tr.hdata, n->tr.hsize, 0)) < 0) {
       atomic_add_u32(&c->stats.send_errs, 1);
       ERROR(c, "send: %s\n", strerror(-l));
+      if (l == -EPIPE)
+        t9p__conn_broken(c);
       return -1;
     }
     atomic_add_u32(&c->stats.send_cnt, 1);
@@ -3211,6 +3287,8 @@ log_done:
     if ((l = c->trans.send(c->conn, n->tr.data, n->tr.size, 0)) < 0) {
       atomic_add_u32(&c->stats.send_errs, 1);
       ERROR(c, "send: %s\n", strerror(-l));
+      if (l == -EPIPE)
+        t9p__conn_broken(c);
       return -1;
     }
     atomic_add_u32(&c->stats.send_cnt, 1);
@@ -3287,6 +3365,8 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
       if (l < 0) {
         n->tr.status = l;
         atomic_add_u32(&c->stats.recv_errs, 1);
+        if (l == -EPIPE)
+          t9p__conn_broken(c);
         return -1;
       }
       if (l > com.size) com.size = 0;
@@ -3306,6 +3386,8 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
         if (l < 0) {
           n->tr.status = l;
           atomic_add_u32(&c->stats.recv_errs, 1);
+          if (l == -EPIPE)
+            t9p__conn_broken(c);
           return -1;
         }
         nr += l;
@@ -3319,6 +3401,13 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
     n->tr.status = nr;
     return 0;
   }
+  
+  if (l < 0)
+    n->tr.status = l;
+
+  if (l == -EPIPE)
+    t9p__conn_broken(c);
+
   return 0;
 }
 
