@@ -979,6 +979,7 @@ t9p_init(
 
   /** Init file handle list */
   c->fhl = t9p_calloc(sizeof(struct t9p_handle_node), opts->max_fids);
+  c->stats.total_fids = opts->max_fids;
   c->fhl_max = opts->max_fids;
   c->fhl_count = 0;
   c->fhl_free = NULL;
@@ -1037,14 +1038,14 @@ t9p_init(
   mutex_unlock(c->socket_lock);
 
   /** Kick off thread. Either a fully-featured I/O thread, or recovery thread */
-  void*(*proc)(void*);
+  void*(*proc)(void*) = NULL;
   if (opts->max_fids == T9P_THREAD_MODE_NONE) 
     proc = t9p__recovery_thread_proc;
   else
     proc = t9p__thread_proc;
 
   c->thr_run = 1;
-  if (!(c->io_thread = thread_create(t9p__thread_proc, c, c->opts.prio))) {
+  if (!(c->io_thread = thread_create(proc, c, c->opts.prio))) {
     t9p_shutdown(c);
     return NULL;
   }
@@ -2701,6 +2702,7 @@ t9p__alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
   if (fname)
     n->h.str = t9p__string_new_path(is_parent_root ? "" : parent->str->string, fname);
 
+  atomic_add_u32(&c->stats.used_fids, 1);
   mutex_unlock(c->fhl_mutex);
   return n;
 }
@@ -2738,6 +2740,7 @@ t9p__release_handle(struct t9p_context* c, struct t9p_handle_node* h)
   h->next = c->fhl_free;
   c->fhl_free = h;
 
+  atomic_sub_u32(&c->stats.used_fids, 1);
   mutex_unlock(c->fhl_mutex);
 }
 

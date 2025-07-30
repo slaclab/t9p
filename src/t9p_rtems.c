@@ -489,16 +489,38 @@ t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void*
   t9p_opts_t opts = t9p_get_opts(fsi->c);
   t9p_stats_t stats = t9p_get_stats(fsi->c);
   printf("%s\n", fsi->opts.ip);
-  printf("  apath=%s,mntpt=%s,uid=%d,gid=%d\n", fsi->apath, mt_entry->target,
-    (int)opts.uid, (int)opts.gid);
-  printf("   msize=%u\n", (unsigned)t9p_get_msize(fsi->c));
-  printf("   bytesSent=%u (%.2fM) bytesRecv=%u (%.2fM)\n",
+  printf(
+    "  apath=%s,mntpt=%s,uid=%d,gid=%d\n",
+    fsi->apath,
+    mt_entry->target,
+    (int)opts.uid,
+    (int)opts.gid
+  );
+  printf(
+    "   msize=%u\n",
+    (unsigned)t9p_get_msize(fsi->c)
+  );
+  printf(
+    "   bytesSent=%u (%.2fM) bytesRecv=%u (%.2fM)\n",
     (unsigned)stats.total_bytes_send, stats.total_bytes_send / 1000000.f,
-    (unsigned)stats.total_bytes_recv, stats.total_bytes_recv / 1000000.f);
-  printf("   sendCnt=%u, sendErrCnt=%u\n", (unsigned)stats.send_cnt,
-    (unsigned)stats.send_errs);
-  printf("   recvCnt=%u, recvErrCnt=%u\n\n", (unsigned)stats.recv_cnt,
-  (unsigned)stats.recv_errs);
+    (unsigned)stats.total_bytes_recv, stats.total_bytes_recv / 1000000.f
+  );
+  printf(
+    "   sendCnt=%u, sendErrCnt=%u\n",
+    (unsigned)stats.send_cnt,
+    (unsigned)stats.send_errs
+  );
+  printf(
+    "   recvCnt=%u, recvErrCnt=%u\n",
+    (unsigned)stats.recv_cnt,
+    (unsigned)stats.recv_errs
+  );
+  printf(
+    "   totalFids=%u, usedFids=%u (%.2f%%)\n\n",
+    (unsigned)stats.total_fids,
+    (unsigned)stats.used_fids,
+    stats.used_fids / (float)(stats.total_fids)
+  );
 
   (*n)++;
   return false;
@@ -542,16 +564,23 @@ int
 p9MemStatsGlobal()
 {
 #ifndef T9P_NO_MEMTRACK
+  uint32_t alloc_bytes = atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes);
+  uint32_t free_bytes = atomic_load_u32(&g_t9p_memtrack_ctx.total_freed_bytes);
   printf(
     "Allocations: %d (%u bytes total, %u bytes requested)\n",
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_alloc_calls),
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes),
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes_requested)
+    (int)atomic_load_u32(&g_t9p_memtrack_ctx.total_alloc_calls),
+    (unsigned)alloc_bytes,
+    (unsigned)atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes_requested)
   );
   printf(
     "Frees:       %d (%u bytes total)\n",
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_free_calls),
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_freed_bytes)
+    (int)atomic_load_u32(&g_t9p_memtrack_ctx.total_free_calls),
+    (unsigned)free_bytes
+  );
+  printf(
+    "Used:        %u bytes (%.2f KiB)\n",
+    (unsigned)(alloc_bytes - free_bytes),
+    (alloc_bytes - free_bytes) / 1024.f
   );
 #else
   printf("Compiled with NO_MEMTRACK, no stats have been recorded!");
