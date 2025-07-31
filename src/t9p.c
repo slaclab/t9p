@@ -369,7 +369,7 @@ tr_pool_init(struct trans_pool* q, uint32_t num)
 {
   memset(q, 0, sizeof(*q));
 
-  q->queue = msg_queue_create("T9PQ", sizeof(struct trans_node*), MAX_TRANSACTIONS);
+  q->queue = msg_queue_create("T9PQ", sizeof(struct trans_node*), num);
   if (!q->queue)
     return -1;
 
@@ -1006,7 +1006,12 @@ t9p_init(
     goto error_post_fhl;
   }
 
-  if (tr_pool_init(&c->trans_pool, MAX_TRANSACTIONS) < 0) {
+  /* When running in single thread mode, we don't need that many transactions */
+  size_t max_trans = MAX_TRANSACTIONS;
+  if (opts->mode == T9P_THREAD_MODE_NONE)
+    max_trans = 16;
+
+  if (tr_pool_init(&c->trans_pool, max_trans) < 0) {
     ERRLOG("Unable to create transaction pool\n");
     goto error_post_fhl;
   }
