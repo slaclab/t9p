@@ -720,7 +720,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     return -1;
   }
 
-  int loglevel = T9P_LOG_DEBUG;
+  int loglevel = T9P_LOG_WARN;
   t9p_thread_mode_t thr_mode = T9P_THREAD_MODE_NONE;
   for (char* r = strtok(buf, ","); r; r = strtok(NULL, ",")) {
     if (!strncmp(r, "ip", strlen("ip"))) {
