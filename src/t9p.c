@@ -216,7 +216,6 @@ struct t9p_handle_node
 static int t9p__version_handshake(struct t9p_context* context);
 static int t9p__attach_root(struct t9p_context* c);
 static int t9p__send(struct t9p_context* c, const void* data, size_t sz, int flags);
-static void t9p__perror(struct t9p_context* c, const char* msg, struct TRcommon* err);
 static int t9p__iserror(struct TRcommon* err);
 static int t9p__clunk_sync(struct t9p_context* c, int fid);
 static int t9p__is_fid_rw(t9p_handle_t h, int write);
@@ -677,20 +676,6 @@ t9p__recv_type(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t 
   return -ETIMEDOUT;
 }
 
-static void
-t9p__perror(struct t9p_context* c, const char* msg, struct TRcommon* err)
-{
-  if (err->type == T9P_TYPE_Rlerror) {
-    ERROR(c, "%s: %s\n", msg, t9p__strerror(((struct Rlerror*)err)->ecode));
-  } else if (err->tag == T9P_TYPE_Rerror) {
-    struct Rerror* re = (struct Rerror*)err;
-    char buf[1024];
-    memcpy(buf, re->ename, MIN(re->ename_len, sizeof(buf) - 1));
-    buf[re->ename_len] = 0;
-    ERROR(c, "%s: %s\n", msg, buf);
-  }
-}
-
 static const char*
 t9p__strerror(int err)
 {
@@ -777,18 +762,20 @@ t9p__attach_root(struct t9p_context* c)
     goto error;
   }
 
-  if ((len = encode_Tattach(
-         packetBuf,
-         sizeof(packetBuf),
-         tag,
-         h->h.fid,
-         T9P_NOFID,
-         strlen(c->opts.user),
-         (const uint8_t*)c->opts.user,
-         strlen(c->apath),
-         (const uint8_t*)c->apath,
-         uid
-       )) < 0) {
+  len = encode_Tattach(
+    packetBuf,
+    sizeof(packetBuf),
+    tag,
+    h->h.fid,
+    T9P_NOFID,
+    strlen(c->opts.user),
+    (const uint8_t*)c->opts.user,
+    strlen(c->apath),
+    (const uint8_t*)c->apath,
+    uid
+  );
+
+  if (len < 0) {
     ERROR(c, "Tattach root failed: unable to encode packet\n");
     goto error;
   }
