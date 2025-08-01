@@ -135,6 +135,8 @@ typedef struct T9P_ALIGNED(4) t9p_stats {
   uint32_t recv_errs;
   uint32_t total_bytes_send;
   uint32_t total_bytes_recv;
+  uint32_t used_fids;
+  uint32_t total_fids;
   uint32_t msg_counts[128]; /** 128 must match Tmax in t9proto.h */
 } t9p_stats_t;
 

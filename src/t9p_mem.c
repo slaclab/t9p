@@ -20,6 +20,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __rtems__
+#include <rtems/score/protectedheap.h>
+#endif
+
+#if __RTEMS_MAJOR__ < 7
+extern Heap_Control* RTEMS_Malloc_Heap;
+
+static size_t
+t9p__malloc_usable_size(void* ptr)
+{
+  if (!ptr) return 0;
+
+  size_t sz = 0;
+  _Protected_heap_Get_block_size(RTEMS_Malloc_Heap, ptr, &sz);
+
+  return sz;
+}
+#define malloc_usable_size t9p__malloc_usable_size
+#endif
+
 void*
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((malloc, alloc_size(1)))

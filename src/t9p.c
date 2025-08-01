@@ -216,7 +216,6 @@ struct t9p_handle_node
 static int t9p__version_handshake(struct t9p_context* context);
 static int t9p__attach_root(struct t9p_context* c);
 static int t9p__send(struct t9p_context* c, const void* data, size_t sz, int flags);
-static void t9p__perror(struct t9p_context* c, const char* msg, struct TRcommon* err);
 static int t9p__iserror(struct TRcommon* err);
 static int t9p__clunk_sync(struct t9p_context* c, int fid);
 static int t9p__is_fid_rw(t9p_handle_t h, int write);
@@ -369,7 +368,7 @@ tr_pool_init(struct trans_pool* q, uint32_t num)
 {
   memset(q, 0, sizeof(*q));
 
-  q->queue = msg_queue_create("T9PQ", sizeof(struct trans_node*), MAX_TRANSACTIONS);
+  q->queue = msg_queue_create("T9PQ", sizeof(struct trans_node*), num);
   if (!q->queue)
     return -1;
 
@@ -677,20 +676,6 @@ t9p__recv_type(struct t9p_context* c, void* data, size_t sz, int flags, uint8_t 
   return -ETIMEDOUT;
 }
 
-static void
-t9p__perror(struct t9p_context* c, const char* msg, struct TRcommon* err)
-{
-  if (err->type == T9P_TYPE_Rlerror) {
-    ERROR(c, "%s: %s\n", msg, t9p__strerror(((struct Rlerror*)err)->ecode));
-  } else if (err->tag == T9P_TYPE_Rerror) {
-    struct Rerror* re = (struct Rerror*)err;
-    char buf[1024];
-    memcpy(buf, re->ename, MIN(re->ename_len, sizeof(buf) - 1));
-    buf[re->ename_len] = 0;
-    ERROR(c, "%s: %s\n", msg, buf);
-  }
-}
-
 static const char*
 t9p__strerror(int err)
 {
@@ -777,18 +762,20 @@ t9p__attach_root(struct t9p_context* c)
     goto error;
   }
 
-  if ((len = encode_Tattach(
-         packetBuf,
-         sizeof(packetBuf),
-         tag,
-         h->h.fid,
-         T9P_NOFID,
-         strlen(c->opts.user),
-         (const uint8_t*)c->opts.user,
-         strlen(c->apath),
-         (const uint8_t*)c->apath,
-         uid
-       )) < 0) {
+  len = encode_Tattach(
+    packetBuf,
+    sizeof(packetBuf),
+    tag,
+    h->h.fid,
+    T9P_NOFID,
+    strlen(c->opts.user),
+    (const uint8_t*)c->opts.user,
+    strlen(c->apath),
+    (const uint8_t*)c->apath,
+    uid
+  );
+
+  if (len < 0) {
     ERROR(c, "Tattach root failed: unable to encode packet\n");
     goto error;
   }
@@ -926,11 +913,7 @@ void
 t9p_opts_init(struct t9p_opts* opts)
 {
   memset(opts, 0, sizeof(*opts));
-#ifdef __mcoldfire__
-  opts->msize = 4096; /* Coldfire works better with smaller msize */
-#else
   opts->msize = 65536;
-#endif
   opts->queue_size = T9P_PACKET_QUEUE_SIZE;
   opts->max_fids = DEFAULT_MAX_FILES;
   opts->send_timeo = DEFAULT_SEND_TIMEO;
@@ -979,6 +962,7 @@ t9p_init(
 
   /** Init file handle list */
   c->fhl = t9p_calloc(sizeof(struct t9p_handle_node), opts->max_fids);
+  c->stats.total_fids = opts->max_fids;
   c->fhl_max = opts->max_fids;
   c->fhl_count = 0;
   c->fhl_free = NULL;
@@ -1009,7 +993,12 @@ t9p_init(
     goto error_post_fhl;
   }
 
-  if (tr_pool_init(&c->trans_pool, MAX_TRANSACTIONS) < 0) {
+  /* When running in single thread mode, we don't need that many transactions */
+  size_t max_trans = MAX_TRANSACTIONS;
+  if (opts->mode == T9P_THREAD_MODE_NONE)
+    max_trans = 16;
+
+  if (tr_pool_init(&c->trans_pool, max_trans) < 0) {
     ERRLOG("Unable to create transaction pool\n");
     goto error_post_fhl;
   }
@@ -1037,14 +1026,14 @@ t9p_init(
   mutex_unlock(c->socket_lock);
 
   /** Kick off thread. Either a fully-featured I/O thread, or recovery thread */
-  void*(*proc)(void*);
+  void*(*proc)(void*) = NULL;
   if (opts->max_fids == T9P_THREAD_MODE_NONE) 
     proc = t9p__recovery_thread_proc;
   else
     proc = t9p__thread_proc;
 
   c->thr_run = 1;
-  if (!(c->io_thread = thread_create(t9p__thread_proc, c, c->opts.prio))) {
+  if (!(c->io_thread = thread_create(proc, c, c->opts.prio))) {
     t9p_shutdown(c);
     return NULL;
   }
@@ -2701,6 +2690,7 @@ t9p__alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
   if (fname)
     n->h.str = t9p__string_new_path(is_parent_root ? "" : parent->str->string, fname);
 
+  atomic_add_u32(&c->stats.used_fids, 1);
   mutex_unlock(c->fhl_mutex);
   return n;
 }
@@ -2738,6 +2728,7 @@ t9p__release_handle(struct t9p_context* c, struct t9p_handle_node* h)
   h->next = c->fhl_free;
   c->fhl_free = h;
 
+  atomic_sub_u32(&c->stats.used_fids, 1);
   mutex_unlock(c->fhl_mutex);
 }
 

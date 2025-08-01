@@ -7,7 +7,7 @@ EXEEXT=$(OBJEXEEXT)
 bin_PROGRAMS                   =
 lib_LIBRARIES                  =
 
-libt9p_a_SOURCES               = t9p.c t9p_rtems.c t9proto.c t9p_posix.c
+libt9p_a_SOURCES               = t9p.c t9p_rtems.c t9proto.c t9p_posix.c t9p_mem.c
 EXTRA_libt9p_a_SOURCES         = t9p.modini.c
 
 lib_LIBRARIES                 += libt9p.a
