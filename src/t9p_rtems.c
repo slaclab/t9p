@@ -471,7 +471,7 @@ CEXP_HELP_TAB_BEGIN(p9Mount)
 " mntpt - Mount point locally. Will be created with 0777 perms\n"
 "         if it does not exist already\n"
 " otheropts - Options string to be concatenated to the internal options string\n"
-"             for example, passing 'trace' to other opts will enable tracing mode\n"
+"             for example, passing 'trace' to other opts will enable tracing mode\n",
 	int, p9Mount,  (const char* ip, const char* srvpath, const char* mntpt, const char* otheropts)
 	),
 CEXP_HELP_TAB_END
@@ -538,7 +538,7 @@ p9Stats()
 #ifdef HAVE_CEXP
 CEXP_HELP_TAB_BEGIN(p9Stats)
 	HELP(
-"Display stats about all 9P mounts\n"
+"Display stats about all 9P mounts\n",
 	int, p9Stats,  ()
 	),
 CEXP_HELP_TAB_END
@@ -554,7 +554,7 @@ p9SetTrace(int doTrace)
 #ifdef HAVE_CEXP
 CEXP_HELP_TAB_BEGIN(p9SetTrace)
 	HELP(
-"Enable or disable tracing\n"
+"Enable or disable tracing\n",
 	void, p9SetTrace,  ()
 	),
 CEXP_HELP_TAB_END
@@ -591,7 +591,7 @@ p9MemStatsGlobal()
 #ifdef HAVE_CEXP
 CEXP_HELP_TAB_BEGIN(p9MemStatsGlobal)
         HELP(
-"Display heap memory usage stats\n"
+"Display heap memory usage stats\n",
         int, p9MemStatsGlobal,  ()
         ),
 CEXP_HELP_TAB_END
