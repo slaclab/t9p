@@ -75,7 +75,7 @@
 
 #endif
 
-static int s_do_trace = 0;
+static int s_do_trace = 1;
 
 /**************************************************************************************
  * File System Operations
@@ -645,6 +645,12 @@ t9p_rtems_loc_get_root_node(const rtems_filesystem_location_info_t* loc)
 #endif
 }
 
+static bool
+t9p_rtems_loc_is_root(const rtems_filesystem_location_info_t* loc)
+{
+  return t9p_rtems_loc_get_root_node(loc) == t9p_rtems_loc_get_node(loc);
+}
+
 t9p_rtems_fs_info_t*
 t9p_rtems_loc_get_fsinfo(const rtems_filesystem_location_info_t* loc)
 {
@@ -674,6 +680,74 @@ copyNStr(char* dst, size_t dstSize, const char* src, size_t num) {
   strncpy(dst, src, tocopy);
   dst[tocopy] = 0;
 }
+
+/**
+ * \brief Collapse a directory string, eliminating . and ..
+ * \param in Input string, optionally NULL to just use out
+ * \param out Output string (or a string that can be modified)
+ * \param osz
+ * \param epr Error past root
+ */
+int
+collapse_dirs(const char* in, char* out, size_t osz, int epr)
+{
+  if (in) {
+    strncpy(out, in, osz);
+    out[osz-1] = 0;
+  }
+
+  char* p;
+  for (p = out; *p;) {
+    /* collapse simple '.' */
+    if (*p == '.' && (*(p+1) == '/' || !*(p+1))) {
+      int nc = *(p+1) ? 2 : 1;            /* copy 2 chars if p+1 is path sep */
+      char* pp = p, *const op = p;        /* store previous location */
+      p += nc;
+      while (*p)                          /* shift everything over */
+        *(pp++) = *(p++);
+      *pp = 0;                            /* ensure terminated */
+      p = op;                             /* process copied chunk again */
+    }
+    /* collapse '..' */
+    else if (*p == '.' && *(p+1) == '.' && (*(p+2) == '/' || !*(p+2))) {
+      if (p == out && epr)                /* if at start of string, we're done */
+        goto error;
+
+      int nc = *(p+2) == '/' ? 3 : 2;     /* store pointer to next component */
+      char *np = p + nc;
+
+      if (p > out) --p;                   /* skip to the / delim */
+      while (p >= out && *p == '/') --p;  /* skip past / */
+      if (p <= out) {
+        if (epr) goto error;
+        p = out;
+      }
+
+      while (p >= out && *p != '/') --p;  /* skip preceeding component */
+      if (p < out) p = out;
+
+      char* const op = p;                 /* store pointer to chunk to process again */
+
+      while (*np)                         /* shift everything over */
+        *(p++) = *(np++);
+      *p = 0;                             /* ensure terminated */
+      p = op;                             /* process again at start of copied component */
+    }
+    /* skip to next component */
+    else {
+      while (*p && *p != '/')
+        ++p;
+      if (*p)
+        ++p; /* point at next component */
+    }
+  }
+  return 0;
+error:
+  if (p < out)
+    p = out;
+  return -1;
+}
+
 
 /**************************************************************************************
  * FS ops implementation
@@ -1014,6 +1088,23 @@ t9p_rtems_fs_evalpath(
   t9p_rtems_node_t* realnode = t9p_rtems_loc_get_node(pathloc);
   ENSURE(realnode != NULL);
 
+  if (s_do_trace)
+    printf("evalpath: Collapse '%s' -> ", pathbuf);
+  if (collapse_dirs(NULL, pathbuf, sizeof(pathbuf), 1) < 0) {
+    if (s_do_trace) printf("'%s' (UP)\n", pathbuf);
+
+    /* we've been asked to cross mount point upwards */
+    *pathloc = pathloc->mt_entry->mt_point_node;
+    return (*pathloc->ops->evalpath_h)(pathbuf, strlen(pathbuf), flags, pathloc);
+  }
+  if (s_do_trace)
+    printf("'%s'\n", pathbuf);
+  
+  if (t9p_rtems_loc_is_root(pathloc)) {
+    if (!*pathname || !strcmp(pathname, "."))
+      return 0; /* nothing to do? */
+  }
+
   /** Walk downwards, starting with the parent node */
   t9p_handle_t nh = t9p_open_handle(realnode->c, realnode->h, pathname);
   if (nh == NULL) {
@@ -1058,6 +1149,17 @@ t9p_rtems_fs_eval_for_make(
 {
   TRACE("path=%s, pathloc=%p, name=%p", path, pathloc, name);
 
+  char pathbuf[PATH_MAX];
+  strncpy(pathbuf, path, sizeof(pathbuf)-1);
+  pathbuf[sizeof(pathbuf)-1] = 0;
+
+  /* colapse any .. and . in the path */
+  if (collapse_dirs(NULL, pathbuf, sizeof(pathbuf), 1) < 0) {
+    /* we've been asked to cross mount point upwards */
+    *pathloc = pathloc->mt_entry->mt_point_node;
+    return (*pathloc->ops->evalformake_h)(pathbuf, pathloc, name);
+  }
+
   /** Determine the name of the file */
   *name = strrchr(path, '/');
   if (!*name)
@@ -1068,13 +1170,13 @@ t9p_rtems_fs_eval_for_make(
   t9p_rtems_node_t* node = t9p_rtems_loc_get_node(pathloc);
   ENSURE(node != NULL);
 
-  /** Determine parent dir */
+  /* Determine parent dir */
   char parentPath[PATH_MAX];
-  t9p_get_parent_dir(path, parentPath, sizeof(parentPath));
+  t9p_get_parent_dir(pathbuf, parentPath, sizeof(parentPath));
 
   TRACE("parentPath=%s", parentPath);
 
-  /** Open handle to the parent dir */
+  /* Open handle to the parent dir */
   t9p_handle_t nh = t9p_open_handle(node->c, node->h, parentPath);
   if (nh == NULL) {
     return -1;
@@ -1292,10 +1394,11 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
   TRACE("loc=%p", loc);
   t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
 
-  if (t9p_rtems_loc_get_root_node(loc) == n) {
-    printf("%s: Tried to free root node??\n", __FUNCTION__);
+  /* if we're the root node, don't do anything.
+   * libcsupport will free the pathloc for us. */
+  if (t9p_rtems_loc_is_root(loc)) {
   #if __RTEMS_MAJOR__ <= 4
-    return -1;
+    return 0;
   #else
     return;
   #endif
