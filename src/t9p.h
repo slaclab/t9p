@@ -689,6 +689,13 @@ t9p_opts_t t9p_get_opts(t9p_context_t* c);
  */
 struct t9p_stats t9p_get_stats(t9p_context_t* c);
 
+/**
+ * Returns the path of the node relative to the root
+ * \param h Handle
+ * \returns A null terminated string representing the path
+ */
+const char* t9p_get_path(t9p_handle_t h);
+
 /** Returns TRUE if the handle is the root, FALSE otherwise */
 int t9p_is_root(t9p_context_t* c, t9p_handle_t h);
 

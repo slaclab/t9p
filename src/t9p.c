@@ -285,6 +285,38 @@ ip_in_dot_format(const char* ip)
   return dots == 3; /* needs exactly 3 dots */
 }
 
+/**
+ * \brief Normalize slashes in the path. Removes duplicate slashes, optionally trailing slashes
+ */
+static void
+t9p__path_normalize(char* path, int strip_trail)
+{
+  for (char* p = path; *p;) {
+    if (*p == '/') {
+      ++p;
+      if (!*p) {
+        if (strip_trail) {
+          --p;
+          *p = 0;
+        }
+        return;
+      }
+      char *op = p, *const oop = p;
+      /* find next component */
+      while (*p == '/' && *p)
+        *(p++) = 0;
+      /* copy in next component */
+      while (*p)
+        *(op++) = *(p++);
+      *op = 0;
+      if (*(p-1) == '/' && strip_trail)
+        *(op-1) = 0;
+      p = oop;
+    }
+    else p++;
+  }
+}
+
 /********************************************************************/
 /*                                                                  */
 /*            T R A N S A C T I O N        P O O L                  */
@@ -756,7 +788,7 @@ t9p__attach_root(struct t9p_context* c)
   uint16_t tag = 0;
   uint32_t uid = *c->opts.user ? T9P_NOUID : c->opts.uid;
 
-  struct t9p_handle_node* h = c->root ? c->root : t9p__alloc_handle(c, NULL, c->apath);
+  struct t9p_handle_node* h = c->root ? c->root : t9p__alloc_handle(c, NULL, "/");
   if (!h) {
     ERROR(c, "Rattach failed: unable to allocate handle\n");
     goto error;
@@ -890,6 +922,8 @@ t9p__string_new_path(const char* dname, const char* fname)
   strNcpy(s->string, dname, dl+1);
   s->string[dl] = '/';
   strNcpy(s->string + dl + 1, fname, fl+1);
+  /* fix up duplicate slashes, if any */
+  t9p__path_normalize(s->string, 1);
   return s;
 }
 
@@ -2144,6 +2178,7 @@ _t9p_parse_dir_callback_dirents(void* param, struct Rreaddir_dir dir, const char
 #endif
   memcpy(de->d_name, name, nl);
   de->d_name[nl] = 0;
+  de->d_ino = dir.qid.path;
 
   /** Record offset for subsequent calls */
   *dp->offset = dir.offset;
@@ -2569,6 +2604,17 @@ t9p_is_valid(t9p_handle_t h)
 {
   return !!(h->valid_mask & T9P_HANDLE_ACTIVE);
 }
+
+const char*
+t9p_get_path(t9p_handle_t h)
+{
+  if (!h)
+    return NULL;
+  if (!h->str)
+    return "";
+  return h->str->string;
+}
+
 
 qid_t
 t9p_get_qid(t9p_handle_t h)
