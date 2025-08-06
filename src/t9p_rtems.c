@@ -75,7 +75,7 @@
 
 #endif
 
-static int s_do_trace = 1;
+static int s_do_trace = 0;
 
 /**************************************************************************************
  * File System Operations
@@ -307,6 +307,7 @@ typedef struct t9p_rtems_fs_info
   t9p_rtems_mount_opts_t opts;
   pthread_mutex_t mutex;
   pthread_mutexattr_t mutattr;
+  dev_t dev;
   char mntpt[PATH_MAX];
   char apath[PATH_MAX];
 } t9p_rtems_fs_info_t;
@@ -710,8 +711,9 @@ collapse_dirs(const char* in, char* out, size_t osz, int epr)
     }
     /* collapse '..' */
     else if (*p == '.' && *(p+1) == '.' && (*(p+2) == '/' || !*(p+2))) {
-      if (p == out && epr)                /* if at start of string, we're done */
+      if (p == out && epr) {              /* if at start of string, we're done */
         goto error;
+      }
 
       int nc = *(p+2) == '/' ? 3 : 2;     /* store pointer to next component */
       char *np = p + nc;
@@ -876,6 +878,15 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     return -1;
 
   printf("Mounted 9P %s:%s at %s\n", ip, apath, mt_entry->target);
+
+  /* generate a weird little unique device number. The root qid may not be totally unique
+   * between mounts, so inject a tiny little bit of variance in there. This is used to fill
+   * the st_dev parameter in fstat.
+   * TODO: Do we need to cram the 64-bit 9P 'inode' in 32-bit st_ino too? */
+  static short devNum = 0;
+  fi->dev |= t9p_get_qid(t9p_get_root(fi->c)).path & ~0xF;
+  fi->dev |= devNum & 0xF;
+  devNum++;
 
   /** Setup root node info */
   t9p_rtems_node_t* root = t9p_calloc(sizeof(t9p_rtems_node_t), 1);
@@ -1072,12 +1083,6 @@ t9p_rtems_fs_evalpath(
   TRACE("pathname=%s,pathnamelen=%zu,flags=%d,pathloc=%p", inpathname, pathnamelen,
     flags, pathloc);
 
-  if (!rtems_libio_is_valid_perms(flags)) {
-    TRACE("E: EIO");
-    errno = EIO;
-    return -1;
-  }
-
   /** inpathname is actually a bounded string... Let's make a NULL terminated copy
     * of it to make things easier */
   char pathbuf[PATH_MAX];
@@ -1090,12 +1095,33 @@ t9p_rtems_fs_evalpath(
 
   if (s_do_trace)
     printf("evalpath: Collapse '%s' -> ", pathbuf);
+
+  /* collapse dirs, removing all '.' and '..' components */
   if (collapse_dirs(NULL, pathbuf, sizeof(pathbuf), 1) < 0) {
     if (s_do_trace) printf("'%s' (UP)\n", pathbuf);
 
     /* we've been asked to cross mount point upwards */
-    *pathloc = pathloc->mt_entry->mt_point_node;
-    return (*pathloc->ops->evalpath_h)(pathbuf, strlen(pathbuf), flags, pathloc);
+    if (t9p_rtems_loc_is_root(pathloc)) {
+      *pathloc = pathloc->mt_entry->mt_point_node;
+      return (pathloc->ops->evalpath_h)(pathbuf, strlen(pathbuf), flags, pathloc);
+    }
+
+    /* repeat the same process with the full handle path to see if we
+     * actually cross mount point */
+    char newbuf[PATH_MAX];
+    snprintf(
+      newbuf, sizeof(newbuf), "%s/%s",
+      t9p_get_path(realnode->h),
+      pathbuf
+    );
+
+    /* we really did cross a mount boundary, evalute it! */
+    if (collapse_dirs(NULL, newbuf, sizeof(newbuf), 1) < 0) {
+      *pathloc = pathloc->mt_entry->mt_point_node;
+      return (pathloc->ops->evalpath_h)(newbuf, strlen(newbuf), flags, pathloc);
+    }
+    /* restore previous path, as it can be consumed directly by Twalk */
+    copyNStr(pathbuf, sizeof(pathbuf), inpathname, pathnamelen);
   }
   if (s_do_trace)
     printf("'%s'\n", pathbuf);
@@ -1170,13 +1196,13 @@ t9p_rtems_fs_eval_for_make(
   t9p_rtems_node_t* node = t9p_rtems_loc_get_node(pathloc);
   ENSURE(node != NULL);
 
-  /* Determine parent dir */
+  /** Determine parent dir */
   char parentPath[PATH_MAX];
   t9p_get_parent_dir(pathbuf, parentPath, sizeof(parentPath));
 
   TRACE("parentPath=%s", parentPath);
 
-  /* Open handle to the parent dir */
+  /** Open handle to the parent dir */
   t9p_handle_t nh = t9p_open_handle(node->c, node->h, parentPath);
   if (nh == NULL) {
     return -1;
@@ -1699,7 +1725,7 @@ static int
 t9p_rtems_file_fstat(rtems_filesystem_location_info_t* loc, struct stat* buf)
 #endif
 {
-  TRACE("loc=%p, buf=%p", loc, buf);
+  TRACE("loc=%p, buf=%p (path=%s)", loc, buf, t9p_get_path(t9p_rtems_loc_get_node(loc)->h));
   t9p_rtems_node_t* n = t9p_rtems_loc_get_node(loc);
   ENSURE(n != NULL);
 
@@ -1708,8 +1734,11 @@ t9p_rtems_file_fstat(rtems_filesystem_location_info_t* loc, struct stat* buf)
   if ((r = t9p_getattr(n->c, n->h, &ta, T9P_GETATTR_ALL)) < 0)
     rtems_set_errno_and_return_minus_one(-r);
 
-  buf->st_dev = 0;
-  buf->st_ino = t9p_get_qid(n->h).path;
+  t9p_rtems_fs_info_t* fi = t9p_rtems_loc_get_fsinfo(loc);
+  qid_t q = t9p_get_qid(n->h);
+
+  buf->st_dev = fi->dev;
+  buf->st_ino = q.path;
   buf->st_mode = ta.mode;
   buf->st_nlink = ta.nlink;
   buf->st_uid = ta.uid;
