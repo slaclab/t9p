@@ -49,7 +49,7 @@ if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
     configure_file(tests/rtems_test_cfg.h.in ${CMAKE_CURRENT_BINARY_DIR}/rtems_test_cfg.h)
 
     # RTEMS test code
-    add_executable(
+    rtems_add_simple_executable(
         t9p_rtems_test
         "tests/t9p_rtems_test.c"
         "tests/t9p_cmd.c"
@@ -60,9 +60,10 @@ if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
     target_link_libraries(
         t9p_rtems_test PRIVATE
         t9p
+        m
+        c
         rtemsbsp
         rtemscpu
-        m
     )
 
     if ("${RTEMS_NETWORK_STACK}" STREQUAL "BSD")
@@ -72,6 +73,7 @@ if ("${CMAKE_SYSTEM_NAME}" STREQUAL "RTEMS")
             bsd
             debugger
             m
+            c
         )
     endif()
 
