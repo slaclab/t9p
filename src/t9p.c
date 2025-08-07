@@ -1184,17 +1184,6 @@ done:
   return num;
 }
 
-static void
-t9p__print_path(const char** comps, size_t* lengths, size_t l)
-{
-  printf("[");
-  for (size_t i = 0; i < l; ++i) {
-    if (!comps[i]) break;
-    printf("%*s ", (int)lengths[i], comps[i]);
-  }
-  printf("]\n");
-}
-
 /**
  * Walk to a file, evaluating symlinks along the way
  * \param n Transaction node
@@ -1306,10 +1295,9 @@ t9p__walk_to(
 
     /* erase the link from the path */
     t9p__path_erase(comps, lengths, start, start+1, MAX_PATH_COMPONENTS);
-    t9p__print_path(comps, lengths, MAX_PATH_COMPONENTS);
+
     /* insert the new link path */
     nwcomps = t9p__chunk_path(lnk, comps, lengths, start, MAX_PATH_COMPONENTS);
-    t9p__print_path(comps, lengths, MAX_PATH_COMPONENTS);
   } while (1);
   return -1;
 }
