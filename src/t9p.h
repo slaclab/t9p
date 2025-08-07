@@ -759,6 +759,12 @@ void t9p_get_parent_dir(const char* file_or_dir, char* outbuf, size_t outsize);
  */
 void t9p_get_basename(const char* file_or_dir, char* outbuf, size_t outsize);
 
+/**
+ * \brief Strips the filename/dirname component of the path. Everything after the last path separator
+ * Handles trailing slashes for you
+ */
+void t9p_strip_filename(char* file_or_dir);
+
 #ifdef __cplusplus
 }
 #endif
