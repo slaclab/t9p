@@ -317,13 +317,19 @@ decode_Rwalk(struct Rwalk* rw, const void* buf, size_t buflen, qid_t** outqids)
 
 int
 encode_Twalk(
-  void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint32_t newfid, uint16_t nwnamecount,
-  const char* const* names
+  void* buf,
+  size_t outsize,
+  uint16_t tag,
+  uint32_t fid,
+  uint32_t newfid,
+  uint16_t nwnamecount,
+  const char* const* names,
+  size_t* lengths
 )
 {
   size_t totalSize = sizeof(struct Twalk);
   for (int i = 0; i < nwnamecount; ++i) {
-    size_t l = strlen(names[i]);
+    size_t l = lengths[i];
     if (l > UINT16_MAX)
       return -1;
     totalSize += l + sizeof(uint16_t); /*uint16_t size; char[] data*/
@@ -346,7 +352,7 @@ encode_Twalk(
   pb += offsetof(struct Twalk, nwname) + sizeof(tw->nwname);
 
   for (int i = 0; i < nwnamecount; ++i) {
-    size_t l = strlen(names[i]);
+    size_t l = lengths[i];
     wr16(&pb, l);
     wrbuf(&pb, (uint8_t*)names[i], l);
   }

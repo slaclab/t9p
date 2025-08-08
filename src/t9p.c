@@ -616,17 +616,18 @@ tr_send_recv(struct t9p_context* c, struct trans_node* n, struct trans* tr, bool
   switch (c->opts.mode) {
   case T9P_THREAD_MODE_NONE:
     if ((r = tr_send_recv_now(c, n, send_ok)) < 0)
-      return r;
+      goto done;
     break;
   case T9P_THREAD_MODE_WORKER:
     if ((r = tr_send_recv_worker(c, n, send_ok)) < 0)
-      return r;
+      goto done;
     break;
   }
 
-  uint32_t status = n->tr.status;
+  r = n->tr.status;
+done:
   tr_release(&c->trans_pool, n); /** Release the transaction back into the pool */
-  return status;
+  return r;
 }
 
 /**
@@ -1113,8 +1114,202 @@ t9p_shutdown(t9p_context_t* c)
   t9p_free(c);
 }
 
+/* erase in range [start, end] */
+static void
+t9p__path_erase(const char** comps, size_t* lengths, int start, int end, size_t l)
+{
+  if (end > l)
+    end = l;
+
+  int off = end-start;
+  for (int i = start; i < l; ++i) {
+    if (i+off < l) {
+      comps[i] = comps[i+off];
+      lengths[i] = lengths[i+off];
+      if (!comps[i]) break;
+    }
+    else {
+      comps[i] = NULL;
+      lengths[i] = 0;
+    }
+  }
+}
+
+/**
+ * Shift over elements in comp array
+ */
 static int
-t9p__open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* path, t9p_handle_t myhandle, t9p_handle_t* outhandle)
+t9p__chunk_path_shift(const char** comps, size_t* lengths, int start, size_t l)
+{
+  if (comps[l-1] != NULL)
+    return 0; /* overflow */
+  size_t s;
+  for (s = 0; s < l; ++s)
+    if (!comps[s]) break;
+
+  for (size_t i = s; i > (size_t)start; --i) {
+    comps[i] = comps[i-1];
+    lengths[i] = lengths[i-1];
+  }
+  return 1;
+}
+
+/**
+ * Chop a path up into components, copy into array
+ * inserts the components at start_idx, preserving all
+ */
+static int
+t9p__chunk_path(const char* path, const char** comps, size_t* lengths, int start_idx, size_t l)
+{
+  int idx = start_idx, num = 0;
+  while (*path) {
+    if (idx >= l)
+      return -1;                  /* too many components! */
+    while (*path == '/') ++path;  /* skip preceeding path sep */
+    if (!*path) goto done;        /* this was a trailing slash */
+    if (idx < l-1 && comps[idx])  /* check if we need to shift over by one */
+      if (!t9p__chunk_path_shift(comps, lengths, idx, l))
+        return -1;                /* shift over by one */
+    comps[idx] = path;            /* store ptr to path component */
+    const char* p = path;
+    while (*p && *p != '/') ++p;  /* find end of the component */
+    lengths[idx] = p - path;      /* compute length */
+    idx++;
+    path = p;
+  }
+
+done:
+  for (; num < l; ++num)
+    if (!comps[num]) break;
+  return num;
+}
+
+/**
+ * Walk to a file, evaluating symlinks along the way
+ * \param n Transaction node
+ * \param comps List of path components (in a mutable array)
+ * \param num_comps Number of path components
+ * \param max_comps Max number of path components
+ */
+static int
+t9p__walk_to(
+  t9p_context_t* c,
+  t9p_handle_t parent,
+  t9p_handle_t newfid,
+  const char* path
+)
+{
+  const char* comps[MAX_PATH_COMPONENTS] = {0};
+  size_t lengths[MAX_PATH_COMPONENTS] = {0};
+  
+  int nwcomps = t9p__chunk_path(path, comps, lengths, 0, MAX_PATH_COMPONENTS);
+  
+  do {
+    if (nwcomps < 0)
+      return -EINVAL;
+
+    int l;
+
+    struct trans_node* n = tr_get_node(&c->trans_pool);
+    if (!n) {
+      ERROR(c, "%s: out of nodes\n", __FUNCTION__);
+      return -ENOMEM;
+    }
+
+    char packet[1024];
+    l = encode_Twalk(
+      packet,
+      sizeof(packet),
+      n->tag,
+      parent->fid,
+      newfid->fid,
+      nwcomps,
+      comps,
+      lengths
+    );
+
+    if (l < 0) {
+      ERROR(c, "%s: unable to encode Twalk\n", __FUNCTION__);
+      return -EPROTO;
+    }
+
+    struct trans tr = {
+      .ttype = T9P_TYPE_Twalk,
+      .data = packet,
+      .size = l,
+      .rtype = T9P_TYPE_Rwalk,
+      .rdata = packet,
+      .rsize = sizeof(packet)
+    };
+
+    if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
+      INFO(c, "%s: Twalk: %s\n", __FUNCTION__, t9p__strerror(l));
+      return -l;
+    }
+
+    struct Rwalk rw;
+    qid_t* qids;
+    if (decode_Rwalk(&rw, packet, l, &qids) < 0) {
+      ERROR(c, "%s: failed to decode Rwalk\n", __FUNCTION__);
+      return -EPROTO;
+    }
+
+    /* walked successfully */
+    if (nwcomps == rw.nwqid) {
+      /* we have cloned the fid */
+      if (rw.nwqid == 0)
+        newfid->qid = parent->qid;
+      else
+        newfid->qid = qids[rw.nwqid - 1];
+      newfid->valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
+      t9p_free(qids);
+      return 0;
+    }
+
+    /* check if the last qid represents a link */
+    uint8_t type = qids[rw.nwqid-1].type;
+    if ((rw.nwqid != nwcomps || !rw.nwqid) && type != T9P_QID_SYMLINK && type != T9P_QID_LINK) {
+      INFO(c, "%s: Twalk: walk failed\n", __FUNCTION__);
+      t9p__clunk_sync(c, newfid->fid);
+      return -ENOENT;
+    }
+
+    /* evaluate symlink */
+    char lnk[PATH_MAX];
+    if ((l = t9p_readlink(c, newfid, lnk, sizeof(lnk))) < 0) {
+      ERROR(c, "%s: failed to evaluate link: %s\n", __FUNCTION__, t9p__strerror(l));
+      t9p__clunk_sync(c, newfid->fid);
+      return -l;
+    }
+
+    /* destroy old fid, walk again */
+    t9p__clunk_sync(c, newfid->fid);
+
+    int start = rw.nwqid-1;
+
+    /* if absolute, we'll replace the start of the path */
+    if (*lnk == '/') {
+      t9p__path_erase(comps, lengths, 0, rw.nwqid, MAX_PATH_COMPONENTS);
+      start = 0;
+    }
+
+    /* erase the link from the path */
+    t9p__path_erase(comps, lengths, start, start+1, MAX_PATH_COMPONENTS);
+
+    /* insert the new link path */
+    nwcomps = t9p__chunk_path(lnk, comps, lengths, start, MAX_PATH_COMPONENTS);
+  } while (1);
+  return -1;
+}
+
+static int
+t9p__open_handle_internal(
+  t9p_context_t* c,
+  t9p_handle_t parent,
+  const char* path,
+  t9p_handle_t myhandle,
+  t9p_handle_t* outhandle
+)
 {
   TRACE(c, "t9p_open_handle(p=%p,path=%s)\n", parent, path);
   char p[T9P_PATH_MAX];
@@ -1138,12 +1333,6 @@ t9p__open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* pat
     comps[nwcount++] = s;
   }
 
-  struct trans_node* n = tr_get_node(&c->trans_pool);
-  if (!n) {
-    ERROR(c, "%s: out of nodes\n", __FUNCTION__);
-    return -ENOMEM;
-  }
-
   struct t9p_handle_node* fh = myhandle ? t9p__handle_by_fid(c, myhandle)
     : t9p__alloc_handle(c, parent, path);
   
@@ -1151,7 +1340,7 @@ t9p__open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* pat
     ERROR(c, "%s: out of handles\n", __FUNCTION__);
     return -ENOMEM;
   }
-
+#if 0
   char packet[1024];
   int l = 0;
   if ((l = encode_Twalk(
@@ -1191,21 +1380,17 @@ t9p__open_handle_internal(t9p_context_t* c, t9p_handle_t parent, const char* pat
     t9p_free(qids);
     goto error;
   }
-
-  /** We have cloned the fid */
-  if (rw.nwqid == 0)
-    fh->h.qid = parent->qid;
-  else
-    fh->h.qid = qids[rw.nwqid - 1];
-  fh->h.valid_mask |= T9P_HANDLE_FID_VALID | T9P_HANDLE_QID_VALID;
-  t9p_free(qids);
+#endif
+  int r = t9p__walk_to(c, parent, &fh->h, path);
+  if (r < 0)
+    goto error;
 
   *outhandle = &fh->h;
-  return 0;
+  return r;
 error:
   if (!myhandle) /* only release handles we create */
     t9p__release_handle(c, fh);
-  return -l;
+  return r;
 }
 
 t9p_handle_t
@@ -1690,8 +1875,8 @@ t9p_dup(t9p_context_t* c, t9p_handle_t todup, t9p_handle_t* outhandle)
   if (!n)
     return -ENOMEM;
 
-  int l;
-  if ((l = encode_Twalk(packet, sizeof(packet), n->tag, todup->fid, h->h.fid, 0, NULL)) < 0) {
+  int l = encode_Twalk(packet, sizeof(packet), n->tag, todup->fid, h->h.fid, 0, NULL, NULL);
+  if (l < 0) {
     ERROR(c, "%s: failed to encode Twalk\n", __FUNCTION__);
     t9p__release_handle(c, h);
     tr_release(&c->trans_pool, n);
@@ -2688,6 +2873,30 @@ t9p_get_basename(const char* file_or_dir, char* outbuf, size_t outsize)
   else
     strNcpy(outbuf, last + 1, outsize);
 }
+
+void
+t9p_strip_filename(char* file_or_dir)
+{
+  char* last = strrchr(file_or_dir, '/');
+  if (!last) {
+    *file_or_dir = 0;
+    return;
+  }
+
+  /* check for trailing, strip it off */
+  if (*(last+1) == 0) {
+    while (*last == '/' && last >= file_or_dir)
+      *last = 0, --last;
+    while (*last != '/' && last > file_or_dir)
+      --last;
+    *last = 0;
+    return;
+  }
+
+  *last = 0;
+  return;
+}
+
 
 void
 t9p_set_log_level(t9p_context_t* c, t9p_log_t level)

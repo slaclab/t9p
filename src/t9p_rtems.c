@@ -1088,7 +1088,7 @@ t9p_rtems_fs_evalpath(
   char pathbuf[PATH_MAX];
   pathbuf[0] = 0;
   copyNStr(pathbuf, sizeof(pathbuf), inpathname, pathnamelen);
-  const char* pathname = pathbuf;
+  char* pathname = pathbuf;
 
   t9p_rtems_node_t* realnode = t9p_rtems_loc_get_node(pathloc);
   ENSURE(realnode != NULL);
@@ -1135,8 +1135,29 @@ t9p_rtems_fs_evalpath(
   t9p_handle_t nh = t9p_open_handle(realnode->c, realnode->h, pathname);
   if (nh == NULL) {
     TRACE("E: ENOENT");
-    errno = ENOENT;
-    return -1;
+    rtems_set_errno_and_return_minus_one(ENOENT);
+  }
+
+  /* if we end up with a symlink, evaluate it to avoid strange behavior */
+  if (t9p_is_link(nh) || t9p_is_symlink(nh)) {
+    char lnk[PATH_MAX];
+    int r;
+
+    if ((r = t9p_readlink(realnode->c, nh, lnk, sizeof(lnk))) < 0) {
+      t9p_close_handle(realnode->c, nh);
+      rtems_set_errno_and_return_minus_one(r);
+    }
+
+    /* strip the link in question */
+    t9p_strip_filename(pathname);
+
+    /* add the evaluated link back */
+    strncat(pathname, "/", sizeof(pathbuf));
+    strncat(pathname, lnk, sizeof(pathbuf));
+
+    /* close handle and evaluate the path again */
+    t9p_close_handle(realnode->c, nh);
+    return t9p_rtems_fs_evalpath(pathname, strlen(pathname), flags, pathloc);
   }
 
   /** Make a new node for pathloc, to replace the parent's */

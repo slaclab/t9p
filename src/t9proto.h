@@ -346,9 +346,16 @@ struct T9P_PACKED Twalk
   /*nwname*(wname[s])*/
 };
 
+/* names and lengths may be NULL if nwnamecount == 0 */
 T9P_NODISCARD int encode_Twalk(
-  void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint32_t newfid, uint16_t nwnamecount,
-  const char* const* names
+  void* buf,
+  size_t outsize,
+  uint16_t tag,
+  uint32_t fid,
+  uint32_t newfid,
+  uint16_t nwnamecount,
+  const char* const* names,
+  size_t* lengths
 );
 
 struct T9P_PACKED Rwalk
