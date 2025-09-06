@@ -1320,18 +1320,9 @@ t9p__open_handle_internal(
   if (!parent)
     parent = t9p_get_root(c);
 
-  int nwcount = 0;
-  char* comps[MAX_PATH_COMPONENTS];
-
   /** If we start with a slash, strip it off. Files are assumed to be relative to root already */
   while (*path == '/')
     ++path;
-
-  /** Split path into components for walk */
-  char* sp = NULL;
-  for (char* s = strtok_r(p, "/", &sp); s && *s; s = strtok_r(NULL, "/", &sp)) {
-    comps[nwcount++] = s;
-  }
 
   struct t9p_handle_node* fh = myhandle ? t9p__handle_by_fid(c, myhandle)
     : t9p__alloc_handle(c, parent, path);
@@ -1340,47 +1331,7 @@ t9p__open_handle_internal(
     ERROR(c, "%s: out of handles\n", __FUNCTION__);
     return -ENOMEM;
   }
-#if 0
-  char packet[1024];
-  int l = 0;
-  if ((l = encode_Twalk(
-         packet, sizeof(packet), n->tag, parent->fid, fh->h.fid, nwcount, (const char* const*)comps
-       )) < 0) {
-    ERROR(c, "%s(%s): unable to encode Twalk\n", __FUNCTION__, path);
-    tr_release(&c->trans_pool, n);
-    goto error;
-  }
 
-  /** Build transaction to send */
-  struct trans tr = {
-    .ttype = T9P_TYPE_Twalk,
-    .data = packet,
-    .size = l,
-    .rtype = T9P_TYPE_Rwalk,
-    .rdata = packet,
-    .rsize = sizeof(packet),
-  };
-
-  if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
-    INFO(c, "%s(%s): Twalk: %s\n", __FUNCTION__, path, t9p__strerror(l));
-    goto error;
-  }
-
-  struct Rwalk rw;
-  qid_t* qids = NULL;
-  if ((l = decode_Rwalk(&rw, packet, l, &qids)) < 0) {
-    ERROR(c, "%s: Rwalk decode failed\n", __FUNCTION__);
-    goto error;
-  }
-
-  /** If the number of comps we requested earlier doesn't match the number of qids we have,
-    * we have failed to open the full path. Just clunk and return error */
-  if (nwcount != rw.nwqid) {
-    t9p__clunk_sync(c, fh->h.fid);
-    t9p_free(qids);
-    goto error;
-  }
-#endif
   int r = t9p__walk_to(c, parent, &fh->h, path);
   if (r < 0)
     goto error;
@@ -2633,7 +2584,7 @@ t9p_rename(t9p_context_t* c, t9p_handle_t dir, t9p_handle_t h, const char* newna
   }
 
   /* Update the file path for the node */
-  (void)t9p__string_release(h->str);
+  h->str = t9p__string_release(h->str);
   h->str = t9p__string_new_path(dir ? dir->str->string : "", newname);
 
   return 0;
@@ -3270,19 +3221,23 @@ t9p__thread_proc(void* param)
       if (c->opts.log_level <= T9P_LOG_TRACE) {
         if (node->tr.hdata) {
           struct TRcommon com;
-          (void)decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
-          fprintf(stderr,
-            "send: (header) type=%d(%s), len=%u, tag=%d\n",
-            com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
-          );
+          int r = decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
+          if (r > 0) {
+            fprintf(stderr,
+              "send: (header) type=%d(%s), len=%u, tag=%d\n",
+              com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
+            );
+          }
         }
         else if (node->tr.data) {
           struct TRcommon com;
-          (void)decode_TRcommon(&com, node->tr.data, node->tr.size);
-          fprintf(stderr,
-            "send: type=%d(%s), len=%u, tag=%d\n",
-            com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
-          );
+          int r = decode_TRcommon(&com, node->tr.data, node->tr.size);
+          if (r > 0) {
+            fprintf(stderr,
+              "send: type=%d(%s), len=%u, tag=%d\n",
+              com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
+            );
+          }
         }
       }
 
