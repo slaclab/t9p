@@ -859,9 +859,9 @@ main(int argc, char** argv)
         *c = 0;
         if (*c)
           c++;
-      } else if (!isspace(*c)) {
+      } else if (!isspace((int)*c)) {
         comps[n++] = c;
-        while (*c && !isspace(*c))
+        while (*c && !isspace((int)*c))
           c++;
         *c = 0;
       } else {
@@ -891,15 +891,15 @@ main(int argc, char** argv)
 #ifndef T9P_NO_MEMTRACK
   /* malloc and co. will reserve more space than necessary, don't rely on exact values */
   printf(
-    "Allocations: %d (%u bytes total, %u bytes requested)\n",
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_alloc_calls),
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes),
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes_requested)
+    "Allocations: %lu (%lu bytes total, %lu bytes requested)\n",
+    (unsigned long)atomic_load_u32(&g_t9p_memtrack_ctx.total_alloc_calls),
+    (unsigned long)atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes),
+    (unsigned long)atomic_load_u32(&g_t9p_memtrack_ctx.total_allocd_bytes_requested)
   );
   printf(
-    "Frees:       %d (%u bytes total)\n",
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_free_calls),
-    atomic_load_u32(&g_t9p_memtrack_ctx.total_freed_bytes)
+    "Frees:       %lu (%lu bytes total)\n",
+    (unsigned long)atomic_load_u32(&g_t9p_memtrack_ctx.total_free_calls),
+    (unsigned long)atomic_load_u32(&g_t9p_memtrack_ctx.total_freed_bytes)
   );
 #endif
 
