@@ -586,10 +586,11 @@ run_c_api_test(const char* path)
   return 0;
 }
 
+extern rtems_id RTEMS_Malloc_Heap;
+
 int
 run_auto_test(int iters)
 {
-  extern rtems_id RTEMS_Malloc_Heap;
   Heap_Information_block sib;
   rtems_region_get_information(RTEMS_Malloc_Heap, &sib);
 
