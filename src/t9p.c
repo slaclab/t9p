@@ -41,6 +41,7 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <netdb.h>
+#include <limits.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -1062,7 +1063,7 @@ t9p_init(
 
   /** Kick off thread. Either a fully-featured I/O thread, or recovery thread */
   void*(*proc)(void*) = NULL;
-  if (opts->max_fids == T9P_THREAD_MODE_NONE) 
+  if (opts->mode == T9P_THREAD_MODE_NONE) 
     proc = t9p__recovery_thread_proc;
   else
     proc = t9p__thread_proc;
