@@ -29,7 +29,7 @@ extern "C"
 /** Default packet queue size */
 #define T9P_PACKET_QUEUE_SIZE 1024
 
-#define T9P_DEFAULT_PORT 10002
+#define T9P_DEFAULT_PORT 564
 
 #define T9P_PATH_MAX PATH_MAX
 

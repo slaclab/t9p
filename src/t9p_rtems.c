@@ -778,8 +778,13 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
 
   /** Parse source (in format IP:[PORT:]/path/on/server) */
   char* sip = strtok(mt_entry->dev, ":");
-  if (sip)
+  if (sip) {
     strcpy(ip, sip);
+    /* Ip may also contain a port spec following a !, but it must be converted to : */
+    char* p = strchr(ip, '!');
+    if (p)
+      *p = ':';
+  }
 
   /** Next will be port or apath */
   char* sportOrPath = strtok(NULL, ":");
