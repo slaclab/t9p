@@ -27,10 +27,6 @@
 #include <sys/stat.h>
 
 #ifdef __linux__
-#include <md5.h>
-#endif
-
-#ifdef __linux__
 #include <linux/limits.h>
 #else
 #undef PATH_MAX
@@ -158,53 +154,6 @@ cat_cmd(int argc, const char* const* argv)
   }
 end:
   t9p_close_handle(ctx, h);
-}
-
-void
-md5_cmd(int argc, const char* const* argv)
-{
-#ifdef __linux__
-  if (!check_connection())
-    return;
-
-  if (argc < 2) {
-    printf("usage: md5 <path>\n");
-    return;
-  }
-
-  t9p_handle_t h = t9p_open_handle(ctx, NULL, argv[1]);
-  if (!h) {
-    printf("unable to open handle for %s\n", argv[1]);
-    return;
-  }
-
-  MD5_CTX mdc;
-  MD5Init(&mdc);
-
-  if (t9p_open(ctx, h, T9P_OREADONLY) < 0) {
-    printf("unable to open %s\n", argv[1]);
-  } else {
-    ssize_t sz = t9p_stat_size(ctx, h);
-    off_t off = 0;
-    while (sz > 0) {
-      char buf[128] = {0};
-      ssize_t l;
-      if ((l = t9p_read(ctx, h, off, sizeof(buf)-1, buf)) < 0) {
-        printf("unable to read %s\n", argv[1]);
-        goto end;
-      }
-      MD5Update(&mdc, (unsigned char*)buf, l);
-      buf[sizeof(buf)-1] = 0;
-      fputs(buf, stdout);
-      sz -= l, off += l;
-    }
-    unsigned char digest[16];
-    char hex[64];
-    printf("\nmd5: %s\n", MD5End(&mdc, hex));
-  }
-end:
-  t9p_close_handle(ctx, h);
-#endif
 }
 
 void
@@ -772,7 +721,6 @@ struct command COMMANDS[] = {
   {"link", link_cmd},
   {"rename", rename_cmd},
   {"stats", stats_cmd},
-  {"md5", md5_cmd},
   {"help", help_cmd},
   {0, 0}
 };
