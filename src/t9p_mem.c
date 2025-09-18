@@ -24,7 +24,7 @@
 #include <rtems/score/protectedheap.h>
 #endif
 
-#if __RTEMS_MAJOR__ < 7
+#if defined(__RTEMS_MAJOR__) && __RTEMS_MAJOR__ < 7
 extern Heap_Control* RTEMS_Malloc_Heap;
 
 static size_t
