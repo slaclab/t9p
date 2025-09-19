@@ -777,7 +777,7 @@ t9p__version_handshake(struct t9p_context* c)
 
   c->msize = rv->msize;
 
-  DEBUG(c, "Using %s with msize %lu\n", version, rv->msize);
+  DEBUG(c, "Using %s with msize %lu\n", version, (unsigned long)rv->msize);
   t9p_free(rv);
   return 0;
 }
