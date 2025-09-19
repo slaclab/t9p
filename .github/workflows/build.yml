@@ -1,0 +1,14 @@
+name: Build
+on: [push, pull_request]
+jobs:
+  build_linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Configure
+        run: |
+          cmake . -Bbuild
+      - name: Build
+        run: |
+          make -C build
+  
