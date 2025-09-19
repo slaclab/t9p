@@ -41,6 +41,7 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <netdb.h>
+#include <limits.h>
 
 #include <unistd.h>
 #ifdef __linux__
@@ -1062,7 +1063,7 @@ t9p_init(
 
   /** Kick off thread. Either a fully-featured I/O thread, or recovery thread */
   void*(*proc)(void*) = NULL;
-  if (opts->max_fids == T9P_THREAD_MODE_NONE) 
+  if (opts->mode == T9P_THREAD_MODE_NONE) 
     proc = t9p__recovery_thread_proc;
   else
     proc = t9p__thread_proc;
@@ -3627,7 +3628,7 @@ struct tcp_context
 };
 
 static int
-t9p__tcp_newsock()
+t9p__tcp_newsock(int need_nonblock)
 {
   int sock;
   sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -3647,14 +3648,16 @@ t9p__tcp_newsock()
 #endif
   
 #ifdef __linux__
-  /** On Linux, set recv timeout */
-  struct timeval to;
-  to.tv_usec = 1000;
-  to.tv_sec = 0;
-  if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
-    perror("setsockopt(SO_RECVTIMEO)");
-    close(sock);
-    return -1;
+  if (need_nonblock) {
+    /** On Linux, set recv timeout when running with a worker thread */
+    struct timeval to;
+    to.tv_usec = 1000;
+    to.tv_sec = 0;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
+      perror("setsockopt(SO_RECVTIMEO)");
+      close(sock);
+      return -1;
+    }
   }
 #endif
   return sock;
@@ -3667,7 +3670,7 @@ t9p_tcp_init(t9p_context_t* c)
 
   ctx->nonblock = c->opts.mode == T9P_THREAD_MODE_WORKER;
 
-  if ((ctx->sock = t9p__tcp_newsock()) < 0) {
+  if ((ctx->sock = t9p__tcp_newsock(ctx->nonblock)) < 0) {
     t9p_free(ctx);
     return NULL;
   }

@@ -120,6 +120,6 @@ else()
     endif()
 
     target_link_libraries(
-        t9p_cmd PRIVATE t9p md
+        t9p_cmd PRIVATE t9p
     )
 endif()
