@@ -3744,7 +3744,7 @@ t9p_tcp_reconnect(void* context, const char* addr_or_file)
   shutdown(ctx->sock, SHUT_RDWR);
   close(ctx->sock);
 
-  if ((ctx->sock = t9p__tcp_newsock()) < 0) {
+  if ((ctx->sock = t9p__tcp_newsock(ctx->nonblock)) < 0) {
     return -1;
   }
 
