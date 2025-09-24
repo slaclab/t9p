@@ -1,0 +1,18 @@
+name: Build
+on: [pull_request]
+jobs:
+  build_linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update 
+          sudo apt-get install -y libreadline-dev
+      - name: Configure
+        run: |
+          cmake . -Bbuild -DCMAKE_C_FLAGS=-Werror -DCMAKE_CXX_FLAGS=-Werror
+      - name: Build
+        run: |
+          make -C build
+  

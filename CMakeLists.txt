@@ -34,8 +34,8 @@ set(WARN_FLAGS
     "-Wreturn-type -Werror=return-type -Wno-strict-prototypes -Werror=implicit-function-declaration"
 )
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g2 ${WARN_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -g2")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g2 ${WARN_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g2")
 
 if(T9P_NO_MEMTRACK)
     target_compile_definitions(t9p PUBLIC T9P_NO_MEMTRACK)
