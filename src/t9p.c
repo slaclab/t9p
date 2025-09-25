@@ -1245,7 +1245,7 @@ t9p__walk_to(
 
     if ((l = tr_send_recv(c, n, &tr, NULL)) < 0) {
       INFO(c, "%s: Twalk: %s\n", __FUNCTION__, t9p__strerror(l));
-      return -l;
+      return l;
     }
 
     struct Rwalk rw;
@@ -1280,7 +1280,7 @@ t9p__walk_to(
     if ((l = t9p_readlink(c, newfid, lnk, sizeof(lnk))) < 0) {
       ERROR(c, "%s: failed to evaluate link: %s\n", __FUNCTION__, t9p__strerror(l));
       t9p__clunk_sync(c, newfid->fid);
-      return -l;
+      return l;
     }
 
     /* destroy old fid, walk again */
@@ -3729,7 +3729,7 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
     addr.sin_port = htons(T9P_DEFAULT_PORT);
 
   if (connect(ctx->sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-    fprintf(stderr, "Connect failed to %s: %s\n", addr_or_file, t9p__strerror(errno));
+    fprintf(stderr, "Connect failed to %s:%s: %s\n", addr_or_file, pport, t9p__strerror(errno));
     return -1;
   }
 
