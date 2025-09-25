@@ -402,10 +402,10 @@ POSIX_Init(void* arg)
     printf("Mounting 10.0.2.2:10002:%s at %s with opts '%s'\n", RTEMS_TEST_PATH "/tests/fs", "/test", opts);
 
     mount(
-      "10.0.2.2:10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
+      "10.0.2.2!10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
     mount(
-      "10.0.2.2:10002:" RTEMS_TEST_PATH "/tests/fs/other", "/test2", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
+      "10.0.2.2!10002:" RTEMS_TEST_PATH "/tests/fs/other", "/test2", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
 
     if (b == 'a') {
