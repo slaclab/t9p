@@ -49,15 +49,26 @@
 #define ANSI_GREEN "\033[32m"
 #define ANSI_RESET "\033[0m"
 
-static void
-result_banner(int f)
+struct test_thread_param
 {
-  printf("*********************************************\n");
+  int blockSize;
+  int thrNum;
+  int* err;
+};
+  
+static void
+test_end(int f)
+{
   if (f != 0)
-    printf(ANSI_RED " TEST FAILURE DETECTED!!!!" ANSI_RESET "\n");
+    printf(ANSI_RED "FAILED!\n" ANSI_RESET);
   else
-    printf(ANSI_GREEN " TESTS PASSED" ANSI_RESET "\n");
-  printf("*********************************************\n");
+    printf(ANSI_GREEN "OK" ANSI_RESET "\n");
+}
+
+static void
+test_begin(const char* name)
+{
+  printf("[" ANSI_GREEN "%s" ANSI_RESET "] ... ", name);
 }
 
 static int
@@ -121,21 +132,17 @@ run_hog(void* param)
 
   close(fd);
 
-  result_banner(fails);
+  test_end(fails);
 
   return 0;
 }
 
-int
+static int
 t9p_run_trunc_test(const char* path)
 {
   int r;
-  if (!path) {
-    printf("USAGE: t9p_run_trunc_test PATH\n");
-    return -1;
-  }
 
-  printf("===============> TRUNC TEST <===============\n");
+  test_begin("Truncate Test");
 
   int fails = 0;
 
@@ -180,125 +187,146 @@ t9p_run_trunc_test(const char* path)
 
   close(fd);
 
-  result_banner(fails);
+  test_end(fails);
   return fails;
 }
 
-#define BLOCK_SIZE 8192
+#define DATA_SIZE (1024 * 1024 * 10)
 
-int
-t9p_run_write_perf_test(const char* path)
+static int
+t9p_run_write_perf_test(const char* path, int blockSize, int thrNum)
 {
-  if (!path) {
-    printf("USAGE: t9p_run_write_perf_test PATH\n");
-    return -1;
-  }
-
-  printf("===============> WRITE PERF TEST <===============\n");
-
   int fails = 0;
   int fd = open(path, O_RDWR | O_CREAT, 0644);
   if (fd < 0) {
     perror("open failed");
-    result_banner(1);
+    test_end(1);
     return -1;
   }
 
-  char* buf = malloc(BLOCK_SIZE);
-  for (int i = 0; i < BLOCK_SIZE; ++i) {
+  ftruncate(fd, 0);
+
+  /* generate buffer of our block size with random garbage */
+  char* buf = malloc(blockSize);
+  for (int i = 0; i < blockSize; ++i) {
     buf[i] = "1234567890ABCDEF"[rand() & 0xF];
   }
 
   double cumWr = 0, cumRd = 0;
   double xferWr = 0, xferRd = 0;
+  
+  double start = time_now();
 
-  /** 1000 iterations of write */
-  for (int j = 0; j < 100; ++j) {
-    double start = time_now();
-
-    for (int i = 0; i < 10; ++i) {
-      lseek(fd, 0, SEEK_SET);
-      ssize_t l = write(fd, buf, BLOCK_SIZE);
-      if (l < 0) {
-        fails++;
-        perror("write failed");
-        continue;
-      }
-      xferWr += l;
+  /* write data */
+  ssize_t rem = DATA_SIZE;
+  while (rem > 0) {
+    ssize_t l = write(fd, buf, blockSize);
+    if (l < 0) {
+      fails++;
+      perror("write");
+      continue;
     }
-
-    cumWr += time_now() - start;
-    usleep(1000);
-
-    fsync(fd);
+    xferWr += l;
+    rem -= l;
   }
+  
+  cumWr += time_now() - start;
 
-  /** 1000 iterations of read */
-  for (int j = 0; j < 100; ++j) {
-    double start = time_now();
-
-    for (int i = 0; i < 10; ++i) {
-      lseek(fd, 0, SEEK_SET);
-      ssize_t l = read(fd, buf, BLOCK_SIZE);
-      if (l < 0) {
-        fails++;
-        perror("read failed");
-        continue;
-      }
-      xferRd += l;
+  usleep(1000);
+  fsync(fd);
+  lseek(fd, 0, SEEK_SET);
+  
+  /* read data */
+  start = time_now();
+  rem = DATA_SIZE;
+  while (rem > 0) {
+    ssize_t l = read(fd, buf, blockSize);
+    if (l < 0) {
+      fails++;
+      perror("read");
+      continue;
     }
-
-    cumRd += time_now() - start;
-    usleep(1000);
-
-    fsync(fd);
+    else if (l == 0)
+      break;
+    xferRd += l;
+    rem -= l;
   }
+  
+  cumRd += time_now() - start;
+  usleep(1000);
 
   xferRd /= 1000000.;
   xferWr /= 1000000.;
 
-  printf("Wrote %.2f MB (%.2f MB/s). Read %.2f MB (%.2f MB/s)\n", xferWr, xferWr / cumWr, xferRd, xferRd / cumRd);
+  printf(
+    "[T%d][BlockSize=%d] Wrote %.2f MB (%.2f MB/s). Read %.2f MB (%.2f MB/s)\n",
+    thrNum,
+    blockSize,
+    xferWr,
+    xferWr / cumWr,
+    xferRd,
+    xferRd / cumRd
+  );
 
   free(buf);
   close(fd);
-  result_banner(fails);
   return fails;
 }
 
 static void*
 t9p_threaded_write_perf_proc(void* p)
 {
-  printf("Starting hog...\n");
-  t9p_run_write_perf_test(p);
+  struct test_thread_param* param = p;
+
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "/test/threadfile%d.txt", param->thrNum);
+
+  printf("Starting thread %d\n", param->thrNum);
+  t9p_run_write_perf_test(path, param->blockSize, param->thrNum);
   return NULL;
 }
 
-int
+static int
 t9p_run_threaded_write_test()
 {
-  thread_t* threads[] = {
-    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile1.txt", T9P_THREAD_PRIO_LOW),
-    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile2.txt", T9P_THREAD_PRIO_MED),
-    thread_create(t9p_threaded_write_perf_proc, "/test/threadfile3.txt", T9P_THREAD_PRIO_HIGH),
-  };
+  test_begin("Threaded Read/Write Perf");
+  thread_t* threads[3] = {0};
+  
+  struct test_thread_param p0 = {.blockSize = 8192, .thrNum = 0};
+  threads[0] = thread_create(t9p_threaded_write_perf_proc, &p0, T9P_THREAD_PRIO_LOW);
+  struct test_thread_param p1 = {.blockSize = 8192, .thrNum = 1};
+  threads[0] = thread_create(t9p_threaded_write_perf_proc, &p1, T9P_THREAD_PRIO_LOW);
+  struct test_thread_param p2 = {.blockSize = 8192, .thrNum = 2};
+  threads[0] = thread_create(t9p_threaded_write_perf_proc, &p2, T9P_THREAD_PRIO_LOW);
 
   for (int i = 0; i < sizeof(threads)/sizeof(threads[0]); ++i) {
     thread_join(threads[i]);
   }
-
+  
+  test_end(0);
   return 0;
 }
 
-int
+static int
+t9p_run_variable_rw_tests(const char* file)
+{
+  int r = 0;
+  int blockSizes[] = {1024, 2048, 4096, 8192};
+  test_begin("Variable Block Size Perf");
+
+  for (int i = 0; i < sizeof(blockSizes)/sizeof(blockSizes[0]); ++i)
+    if (t9p_run_write_perf_test(file, blockSizes[i], 0) < 0)
+      ++r;
+
+  test_end(r);
+  return 0;
+}
+
+static int
 t9p_run_create_test(const char* path)
 {
   int r;
-  if (!path) {
-    printf("USAGE: %s PATH\n", __FUNCTION__);
-    return -1;
-  }
-
-  printf("===============> CREATE TEST <===============\n");
+  test_begin("Create Test");
 
   int fails = 0;
 
@@ -323,20 +351,15 @@ t9p_run_create_test(const char* path)
 
   CHECK(stat, path, &st);
 
-  result_banner(fails);
+  test_end(fails);
   return fails;
 }
 
-int
+static int
 t9p_run_rename_test(const char* path)
 {
   int r;
-  if (!path) {
-    printf("USAGE: %s PATH\n", __FUNCTION__);
-    return -1;
-  }
-  printf("===============> RENAME TEST <===============\n");
-  printf("path=%s\n", path);
+  test_begin("Rename Test");
 
   int fails = 0;
 
@@ -363,20 +386,16 @@ t9p_run_rename_test(const char* path)
   /** Remove it */
   CHECK(unlink, newname);
 
-  result_banner(fails);
+  test_end(fails);
   return fails;
 }
 
-int
+static int
 t9p_run_chmod_chown_test(const char* path)
 {
   int r, fails = 0;
-  if (!path) {
-    printf("USAGE: %s PATH\n", path);
-    return -1;
-  }
 
-  printf("===============> CHMOD/CHOWN TEST <===============\n");
+  test_begin("chmod/chown Test");
 
   /** Create file if it doesnt exist already */
   struct stat st;
@@ -425,21 +444,16 @@ t9p_run_chmod_chown_test(const char* path)
   }
 #endif
 
-  result_banner(fails);
+  test_end(fails);
   return fails;
 }
 
-int
+static int
 t9p_run_dir_test(const char* path)
 {
-  if (!path) {
-    printf("USAGE: %s PATH\n", __FUNCTION__);
-    return -1;
-  }
-
   int fails = 0, r;
 
-  printf("===============> DIR TEST <===============\n");
+  test_begin("Directory Test");
 
   char dirPath[PATH_MAX];
   snprintf(dirPath, sizeof(dirPath), "%s/mydir", path);
@@ -499,20 +513,15 @@ t9p_run_dir_test(const char* path)
   CHECK(unlink, filePath);
   CHECK(rmdir, dirPath);
 
-  result_banner(fails);
+  test_end(fails);
   return fails;
 }
 
-int
+static int
 t9p_run_chdir_test(const char* path)
 {
   int fails = 0, r;
-  if (!path) {
-    printf("USAGE: %s PATH\n", __FUNCTION__);
-    return -1;
-  }
-
-  printf("===============> CHDIR TEST <===============\n");
+  test_begin("Chdir Test");
   
   char dirPath[PATH_MAX];
   snprintf(dirPath, sizeof(dirPath), "%s/testdir", path);
@@ -539,18 +548,17 @@ t9p_run_chdir_test(const char* path)
   CHECK(chdir, path);
   CHECK(rmdir, dirPath);
 
-  result_banner(fails);
+  test_end(fails);
   return fails;
 }
 
 
-int
+static int
 run_c_api_test(const char* path)
 {
-  if (!path) {
-    printf("USAGE: run_c_api_test PATH\n");
-    return -1;
-  }
+  int fails = 0, r;
+
+  test_begin("C API Test");
 
   char srcF[256], dstF[256];
   snprintf(srcF, sizeof(srcF), "%s/myfile.1", path);
@@ -564,7 +572,7 @@ run_c_api_test(const char* path)
   for (int i = 0; i < 65536; ++i) {
     fputc("0123456789abcdef"[rand() & 0xF], fp);
   }
-  fclose(fp);
+  CHECK(fclose, fp);
   
   int fd = open(srcF, O_RDONLY);
   assert(fd >= 0);
@@ -572,7 +580,7 @@ run_c_api_test(const char* path)
   fp = fdopen(fd, "rb");
   assert(fp);
   
-  fclose(fp);
+  CHECK(fclose, fp);
   
   fd = open(dstF, O_TRUNC | O_RDWR | O_CREAT, 0644);
   assert(fd >= 0);
@@ -580,9 +588,11 @@ run_c_api_test(const char* path)
   fp = fdopen(fd, "wb");
   assert(fp);
   
-  fclose(fp);
+  CHECK(fclose, fp);
 
-  unlink(dstF);
+  CHECK(unlink, dstF);
+  
+  test_end(fails);
   return 0;
 }
 
@@ -602,7 +612,7 @@ run_auto_test(int iters)
   if (t9p_run_trunc_test("/test/myfile.txt") != 0)
     ok = 0;
 
-  if (t9p_run_write_perf_test("/test/myfile.txt") != 0)
+  if (t9p_run_variable_rw_tests("/test/myfile.txt") != 0)
     ok = 0;
 
   if (t9p_run_chmod_chown_test("/test/myfile.txt") != 0)
