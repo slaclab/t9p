@@ -2223,7 +2223,7 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
    */
   const uint32_t count = sizeof(packet) - sizeof(struct Rreaddir);
   uint64_t offset = 0;
-  for (int i = 0; i < 999; ++i) {
+  for (;;) {
 
     struct trans_node* n = tr_get_node(&c->trans_pool);
     if (!n) {
@@ -3696,8 +3696,10 @@ t9p_tcp_init(t9p_context_t* c)
       fprintf(stderr, " TCP_MAXSEG: %d\n", opt);
     if (getsockopt(ctx->sock, IPPROTO_TCP, TCP_NODELAY, &opt, &sl) >= 0)
       fprintf(stderr, " TCP_NODELAY: %d\n", opt);
+  #ifdef TCP_NOPUSH
     if (getsockopt(ctx->sock, IPPROTO_TCP, TCP_NOPUSH, &opt, &sl) >= 0)
       fprintf(stderr, " TCP_NODELAY: %d\n", opt);
+  #endif
   }
   return ctx;
 }
