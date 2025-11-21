@@ -72,6 +72,7 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <netinet/tcp.h>
 #endif
 
 #include "t9p.h"
@@ -2222,7 +2223,7 @@ t9p_readdir(t9p_context_t* c, t9p_handle_t dir, t9p_dir_info_t** outdirs)
    */
   const uint32_t count = sizeof(packet) - sizeof(struct Rreaddir);
   uint64_t offset = 0;
-  for (int i = 0; i < 999; ++i) {
+  for (;;) {
 
     struct trans_node* n = tr_get_node(&c->trans_pool);
     if (!n) {
@@ -3646,6 +3647,16 @@ t9p__tcp_newsock(int need_nonblock)
     perror("setsockopt");
   }
 #endif
+
+#ifdef __rtems__
+  /* With the 4.4BSD networking stack, packing data into the same TCP segment
+   * seems exceptionally slow (I'm seeing delays on the order of milliseconds
+   * in write perf tests). Need to compare behavior with Linux */
+  int opt = 1;
+  if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
+    perror("setsockopt");
+  }
+#endif
   
 #ifdef __linux__
   if (need_nonblock) {
@@ -3673,6 +3684,22 @@ t9p_tcp_init(t9p_context_t* c)
   if ((ctx->sock = t9p__tcp_newsock(ctx->nonblock)) < 0) {
     t9p_free(ctx);
     return NULL;
+  }
+
+  /* display tcp opts */
+  if (c->opts.log_level <= T9P_LOG_DEBUG) {
+    socklen_t sl = 4;
+    int opt;
+
+    fprintf(stderr, "Socket options:\n");
+    if (getsockopt(ctx->sock, IPPROTO_TCP, TCP_MAXSEG, &opt, &sl) >= 0)
+      fprintf(stderr, " TCP_MAXSEG: %d\n", opt);
+    if (getsockopt(ctx->sock, IPPROTO_TCP, TCP_NODELAY, &opt, &sl) >= 0)
+      fprintf(stderr, " TCP_NODELAY: %d\n", opt);
+  #ifdef TCP_NOPUSH
+    if (getsockopt(ctx->sock, IPPROTO_TCP, TCP_NOPUSH, &opt, &sl) >= 0)
+      fprintf(stderr, " TCP_NODELAY: %d\n", opt);
+  #endif
   }
   return ctx;
 }
