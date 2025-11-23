@@ -85,18 +85,16 @@ typedef enum t9p_qid_type
 /**
  * Transport methods.
  */
-typedef void* (*t9p_init_t)(t9p_context_t* /*t9p_context*/);
-typedef void (*t9p_shutdown_t)(void* /*context*/);
-typedef int (*t9p_connect_t)(void* /*context*/, const char* /*addr_or_file*/);
-/** Disconnect method, return 0 for success */
-typedef int (*t9p_disconnect_t)(void* /*context*/);
-typedef ssize_t (*t9p_send_t)(
-  void* /*context*/, const void* /*data*/, size_t /*len*/, int /*flags*/
-);
-typedef ssize_t (*t9p_recv_t)(void* /*context*/, void* /*data*/, size_t /*len*/, int /*flags*/);
-typedef int (*t9p_get_sock_t)(void* /*context*/);
-typedef int (*t9p_reconnect_t)(void* /*context*/, const char* /*addr_or_file*/);
-typedef int (*t9p_data_avail_t)(void* /*context*/);
+typedef void*   (*t9p_init_t)(t9p_context_t* ctx);
+typedef void    (*t9p_shutdown_t)(void* ctx);
+typedef int     (*t9p_connect_t)(void* ctx, const char* addr_or_file);
+typedef int     (*t9p_disconnect_t)(void* ctx);
+typedef ssize_t (*t9p_send_t)(void* ctx, const void* data, size_t len, int flags);
+typedef ssize_t (*t9p_recv_t)(void* ctx, void* data, size_t len, int flags);
+typedef int     (*t9p_get_sock_t)(void* ctx);
+typedef int     (*t9p_reconnect_t)(void* ctx, const char* addr_or_file);
+typedef int     (*t9p_data_avail_t)(void* ctx);
+typedef int     (*t9p_batch_t)(void* ctx, int enable);
 
 /**
  * Transport interface.
@@ -105,7 +103,8 @@ typedef int (*t9p_data_avail_t)(void* /*context*/);
  * @init:       Inits the transport backend. This usually involves creating a socket or something like that.
  * @shutdown:   Shuts down the transport backend
  * @connect:    Connects the transport backend, can do nothing if it's not connection oriented (i.e. UDP)
- * @disconnect: Disconnects the transport backend.
+ *              Return <0 to indicate failure
+ * @disconnect: Disconnects the transport backend. Return <0 to indicate failure.
  * @send:       Send some bytes
  * @recv:       Recv some bytes
  * @getsock:    Returns the socket fd, if supported by this transport. Otherwise returns -1
@@ -123,6 +122,7 @@ typedef struct t9p_transport
   t9p_get_sock_t getsock;
   t9p_reconnect_t reconnect;
   t9p_data_avail_t avail;
+  t9p_batch_t batch;
 } t9p_transport_t;
 
 /**

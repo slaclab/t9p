@@ -3458,6 +3458,7 @@ static int
 tr_send_now(struct t9p_context* c, struct trans_node* n)
 {
   ssize_t l;
+  int err = 0;
 
   /* Debugging */
   if (c->opts.log_level <= T9P_LOG_TRACE) {
@@ -3472,6 +3473,10 @@ tr_send_now(struct t9p_context* c, struct trans_node* n)
   }
 log_done:
 
+  /* Enables TCP_NODELAY for performance reasons (especially on RTEMS...) */
+  if (n->tr.hdata)
+    c->trans.batch(c->conn, 1);
+
   /* Send header data, if any */
   if (n->tr.hdata) {
     if ((l = c->trans.send(c->conn, n->tr.hdata, n->tr.hsize, 0)) < 0) {
@@ -3479,7 +3484,8 @@ log_done:
       ERROR(c, "send: %s\n", strerror(-l));
       if (l == -EPIPE)
         t9p__conn_broken(c);
-      return -1;
+      err = -1;
+      goto error;
     }
     atomic_add_u32(&c->stats.send_cnt, 1);
     atomic_add_u32(&c->stats.total_bytes_send, n->tr.hsize);
@@ -3492,12 +3498,17 @@ log_done:
       ERROR(c, "send: %s\n", strerror(-l));
       if (l == -EPIPE)
         t9p__conn_broken(c);
-      return -1;
+      err = -1;
+      goto error;
     }
     atomic_add_u32(&c->stats.send_cnt, 1);
     atomic_add_u32(&c->stats.total_bytes_send, n->tr.size);
   }
-  return 0;
+
+error:
+  if (n->tr.hdata)
+    c->trans.batch(c->conn, 0);
+  return err;
 }
 
 static int
@@ -3647,16 +3658,6 @@ t9p__tcp_newsock(int need_nonblock)
     perror("setsockopt");
   }
 #endif
-
-#ifdef __rtems__
-  /* With the 4.4BSD networking stack, packing data into the same TCP segment
-   * seems exceptionally slow (I'm seeing delays on the order of milliseconds
-   * in write perf tests). Need to compare behavior with Linux */
-  int opt = 1;
-  if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
-    perror("setsockopt");
-  }
-#endif
   
 #ifdef __linux__
   if (need_nonblock) {
@@ -3674,7 +3675,7 @@ t9p__tcp_newsock(int need_nonblock)
   return sock;
 }
 
-void*
+static void*
 t9p_tcp_init(t9p_context_t* c)
 {
   struct tcp_context* ctx = t9p_calloc(1, sizeof(struct tcp_context));
@@ -3704,7 +3705,7 @@ t9p_tcp_init(t9p_context_t* c)
   return ctx;
 }
 
-int
+static int
 t9p_tcp_disconnect(void* context)
 {
   struct tcp_context* ctx = context;
@@ -3763,7 +3764,7 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
   return 0;
 }
 
-int
+static int
 t9p_tcp_reconnect(void* context, const char* addr_or_file)
 {
   struct tcp_context* ctx = context;
@@ -3778,7 +3779,7 @@ t9p_tcp_reconnect(void* context, const char* addr_or_file)
   return t9p_tcp_connect(context, addr_or_file);
 }
 
-void
+static void
 t9p_tcp_shutdown(void* context)
 {
   struct tcp_context* ctx = context;
@@ -3786,14 +3787,14 @@ t9p_tcp_shutdown(void* context)
   t9p_free(context);
 }
 
-ssize_t
+static ssize_t
 t9p_tcp_send(void* context, const void* data, size_t len, int flags)
 {
   struct tcp_context* pc = context;
   return send(pc->sock, data, len, flags);
 }
 
-ssize_t
+static ssize_t
 t9p_tcp_recv(void* context, void* data, size_t len, int flags)
 {
   int rflags = 0;
@@ -3865,14 +3866,15 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
   return off;
 }
 
-int
+static int
 t9p_tcp_getsock(void* context)
 {
   struct tcp_context* c = context;
   return c->sock;
 }
 
-int t9p_tcp_data_avail(void* context)
+static int
+t9p_tcp_data_avail(void* context)
 {
   struct tcp_context* c = context;
   fd_set fs;
@@ -3882,6 +3884,23 @@ int t9p_tcp_data_avail(void* context)
   struct timeval to = {0};
   select(1, &fs, NULL, NULL, &to);
   return !!FD_ISSET(c->sock, &fs);
+}
+
+static int
+t9p_tcp_batch(void* context, int en)
+{
+  struct tcp_context* c = context;
+
+  /* Enable NODELAY when batching requests to reduce latency between
+   * subsequent segment sends. Without this, I'm seeing delays on the order
+   * of milliseconds with the 4.4BSD derived network stack for RTEMS */
+  int opt = en;
+  int ret;
+  if ((ret = setsockopt(c->sock, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt))) < 0) {
+    perror("setsockopt");
+    return ret;
+  }
+  return 0;
 }
 
 #endif
@@ -3899,6 +3918,7 @@ t9p_init_tcp_transport(t9p_transport_t* tp)
   tp->getsock = t9p_tcp_getsock;
   tp->reconnect = t9p_tcp_reconnect;
   tp->avail = t9p_tcp_data_avail;
+  tp->batch = t9p_tcp_batch;
   return 0;
 #else
   return -1;
