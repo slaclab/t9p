@@ -3,25 +3,35 @@
 t9p is a relatively small (originally tiny) 9p2000.L client supporting RTEMS and Linux.
 This client was designed with older RTEMS systems in mind (single core, <=512M memory, PowerPC or m68k).
 
+t9p has been tested on the following platforms:
+- Linux x86\_64
+- mvme6100 (PowerPC G4, 512MB memory) RTEMS 4.10.2
+- mvme3100 (PowerPC e500, 256MB memory) RTEMS 4.10.2
+- uC5282 (Coldfire [m68k] V2, 16MB memory) RTEMS 4.10.2
+- pc686 (i386 in Qemu) RTEMS 4.10.2
+
 ## Building
+
+A C99 compliant compiler and CMake are required.
 
 ### Integrating with Other Projects
 
-t9p's source files require no special defines or include dirs to build, so they can be trivially included in other projects in a variety of ways.
+t9p's source files require no special compiler flags to build, so they can be trivially included in other projects.
 
-Platform specific source files will need to be excluded manually (i.e. do not build t9p_rtems.c if you are targeting Linux).
+Platform specific source files will need to be excluded manually (i.e. do not build `t9p_rtems.c` if you are targeting Linux).
 
 ### Configuring
 
-A makefile is provided that can automatically configure for all targets.
+A makefile is provided that can automatically configure for all targets. This is particularly handy when cross compiling for
+multiple targets.
 ```sh
 make -f Makefile.conf configure
 ```
 
-If the RTEMS_TOP environment variable is set to the top of your RTEMS 6 install, Makefile.conf will automatically determine the available targets
+If the `RTEMS_TOP` environment variable is set to the top of your RTEMS 6+ install, Makefile.conf will automatically determine the available targets
 and configure for those.
 
-The build-cmake directory will contain all of the build subdirs. It is safe to delete.
+The build files will be generated into the `build-cmake` directory. This directory is safe to delete.
 
 ### Building All
 
