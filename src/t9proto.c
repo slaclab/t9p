@@ -55,13 +55,6 @@ swapqid(qid_t in)
 }
 
 static void
-wr64(uint8_t** pos, uint64_t val)
-{
-  *(uint64_t*)(*pos) = BSWAP64(val);
-  *pos += 8;
-}
-
-static void
 wr8(uint8_t** pos, uint8_t val)
 {
   **(pos) = val;
