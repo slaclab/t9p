@@ -89,55 +89,6 @@ time_now()
 }
 
 static int
-run_hog(void* param)
-{
-  int fails = 0;
-  ssize_t l;
-  const char* path = param;
-  int fd = open(path, O_RDWR | O_CREAT, 0644);
-
-  if (fd < 0) {
-    printf("ERROR: could not open %s: %s\n", path, strerror(errno));
-    return -1;
-  }
-  
-  int goofy[64];
-  int og[64];
-  for (int i = 0; i < sizeof(goofy) / 4; ++i) {
-    goofy[i] = i*i;
-  }
-  memcpy(og, goofy, sizeof(goofy));
-
-  for (int i = 0; i < 32; ++i) {
-    size_t l;
-    if ((l = write(fd, goofy, sizeof(goofy))) != sizeof(goofy))
-      printf("ERR: only wrote %ld out of %ld bytes\n", l, sizeof(goofy));
-    printf("Wrote %ld bytes\n", sizeof(goofy));
-  }
-
-  if ((l = lseek(fd, 0, SEEK_SET)) < 0) {
-    perror("lseek failed");
-  }
-
-  for (int i = 0; i < 32; ++i) {
-    if ((l = read(fd, goofy, sizeof(goofy))) != sizeof(goofy))
-      printf("ERR: only read %ld out of %ld bytes\n", l, sizeof(goofy));
-    for (int x = 0; x < sizeof(og)/4; ++x) {
-      if (goofy[x] != og[x]) {
-        printf("  mismatch!! got '0x%X' expect '0x%X'\n", goofy[x], og[x]);
-      }
-    }
-    printf("Read %ld bytes\n", sizeof(goofy));
-  }
-
-  close(fd);
-
-  test_end(fails);
-
-  return 0;
-}
-
-static int
 t9p_run_trunc_test(const char* path)
 {
   int r;
@@ -342,8 +293,11 @@ t9p_run_create_test(const char* path)
 
   /** Check mode */
   CHECK(stat, path, &st);
-  if (st.st_mode != 0644) {
-    printf("*** Mode mistmatch. Expected %o, got %o\n", 0644, (unsigned)st.st_mode);
+  if ((st.st_mode & 0777) != 0644) {
+    printf("*** Mode mistmatch. Expected %o, got %o\n",
+      0644,
+      (unsigned)(st.st_mode & 0777)
+    );
     ++fails;
   }
 
@@ -625,6 +579,9 @@ run_auto_test(int iters)
     ok = 0;
 
   if (t9p_run_chdir_test("/test") != 0)
+    ok = 0;
+
+  if (t9p_run_create_test("/test/test.txt") != 0)
     ok = 0;
 
   Heap_Information_block eib;
