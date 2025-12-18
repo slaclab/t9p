@@ -802,6 +802,8 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   }
 
   int loglevel = T9P_LOG_WARN;
+  int maxfids = 0, timeo = 0;
+  t9p_thread_prio_t prio = T9P_THREAD_PRIO_COUNT;
   t9p_thread_mode_t thr_mode = T9P_THREAD_MODE_NONE;
   for (char* r = strtok(buf, ","); r; r = strtok(NULL, ",")) {
     if (!strncmp(r, "ip", strlen("ip"))) {
@@ -828,6 +830,28 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
       loglevel = T9P_LOG_TRACE;
     } else if (!strcmp(r, "threaded")) {
       thr_mode = T9P_THREAD_MODE_WORKER;
+    } else if (!strncmp(r, "maxfids", strlen("maxfids"))) {
+      const char* p = strpbrk(r, "=");
+      if (p)
+        maxfids = atoi(p + 1);
+    } else if (!strncmp(r, "timeo", strlen("timeo"))) {
+      const char* p = strpbrk(r, "=");
+      if (p)
+        timeo = atoi(p + 1); /* in ms */
+    } else if (!strncmp(r, "prio", strlen("prio"))) {
+      const char* p = strpbrk(r, "=");
+      if (p) {
+        ++p;
+        if (!strcmp(p, "low"))
+          prio = T9P_THREAD_PRIO_LOW;
+        else if (!strcmp(p, "med"))
+          prio = T9P_THREAD_PRIO_MED;
+        else if (!strcmp(p, "high"))
+          prio = T9P_THREAD_PRIO_HIGH;
+        else {
+          fprintf(stderr, "Ignoring unknown t9p priority '%s'\n", p);
+        }
+      }
     }
   }
 
@@ -859,6 +883,14 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   fi->opts.opts.log_level = loglevel;
   fi->opts.opts.mode = thr_mode;
   fi->opts.opts.msize = msize;
+  if (maxfids)
+    fi->opts.opts.max_fids = maxfids;
+  if (timeo) {
+    fi->opts.opts.recv_timeo = timeo;
+    fi->opts.opts.send_timeo = timeo;
+  }
+  if (prio != T9P_THREAD_PRIO_COUNT)
+    fi->opts.opts.prio = prio;
   strcpy(fi->opts.ip, ip);
   strcpy(fi->opts.opts.user, user);
   strcpy(fi->apath, apath);
