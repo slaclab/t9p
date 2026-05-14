@@ -401,8 +401,8 @@ struct trans_node
 /**
  * Init the transaction queue
  */
-int
-tr_pool_init(struct trans_pool* q, uint32_t num)
+static int
+tr_pool_init(struct trans_pool* q, uint32_t num, bool threaded)
 {
   memset(q, 0, sizeof(*q));
 
@@ -410,9 +410,12 @@ tr_pool_init(struct trans_pool* q, uint32_t num)
   if (!q->queue)
     return -1;
 
-  if (!(q->recv_ev = event_create())) {
-    msg_queue_destroy(q->queue);
-    return -1;
+  /* if running in threaded mode, we need the per-transaction events */
+  if (threaded) {
+    if (!(q->recv_ev = event_create())) {
+      msg_queue_destroy(q->queue);
+      return -1;
+    }
   }
 
   if (!(q->guard = mutex_create())) {
@@ -1042,7 +1045,7 @@ t9p_init(
   if (opts->mode == T9P_THREAD_MODE_NONE)
     max_trans = 16;
 
-  if (tr_pool_init(&c->trans_pool, max_trans) < 0) {
+  if (tr_pool_init(&c->trans_pool, max_trans, opts->mode != T9P_THREAD_MODE_NONE) < 0) {
     ERRLOG("Unable to create transaction pool\n");
     goto error_post_fhl;
   }
