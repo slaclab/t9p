@@ -98,7 +98,11 @@
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
-#define ERRLOG(...) fprintf(stderr, __VA_ARGS__)
+#define ERRLOG(...) do { \
+  fprintf(stderr, "%s: ", __FUNCTION__); \
+  fprintf(stderr, __VA_ARGS__); \
+} while (0)
+
 #define LOG(_context, _level, ...)                                                                 \
   if (_context && _context->opts.log_level <= _level) {                                            \
     fprintf(stderr, __VA_ARGS__);                                                                  \
@@ -962,7 +966,10 @@ t9p_opts_init(struct t9p_opts* opts)
 
 t9p_context_t*
 t9p_init(
-  t9p_transport_t* transport, const t9p_opts_t* opts, const char* apath, const char* addr,
+  t9p_transport_t* transport,
+  const t9p_opts_t* opts,
+  const char* apath,
+  const char* addr,
   const char* mntpoint
 )
 {
@@ -1053,7 +1060,7 @@ t9p_init(
 
   /** Attach to the root fs */
   if (t9p__attach_root(c) < 0) {
-    ERRLOG("Connected to %s failed\n", addr);
+    ERRLOG("Connection to %s failed\n", addr);
     transport->disconnect(c->conn);
     transport->shutdown(c->conn);
     mutex_unlock(c->socket_lock);
@@ -1071,6 +1078,7 @@ t9p_init(
 
   c->thr_run = 1;
   if (!(c->io_thread = thread_create(proc, c, c->opts.prio))) {
+    ERRLOG("Failed to create I/O task\n");
     t9p_shutdown(c);
     return NULL;
   }
