@@ -163,7 +163,11 @@ t9p_type_string(int type)
 
 int
 encode_Tversion(
-  void* pout, size_t outsize, uint16_t tag, uint32_t msize, uint16_t version_len,
+  void* pout,
+  size_t outsize,
+  uint16_t tag,
+  uint32_t msize,
+  uint16_t version_len,
   const uint8_t* version
 )
 {
@@ -202,8 +206,16 @@ decode_Rversion(struct Rversion** out, const void* buf, size_t buflen)
 
 int
 encode_Tattach(
-  void* buf, size_t outsize, uint16_t tag, uint32_t fid, uint32_t afid, uint16_t uname_len,
-  const uint8_t* uname, uint16_t aname_len, const uint8_t* aname, uint32_t uid
+  void* buf,
+  size_t outsize,
+  uint16_t tag,
+  uint32_t fid,
+  uint32_t afid,
+  uint16_t uname_len,
+  const uint8_t* uname,
+  uint16_t aname_len,
+  const uint8_t* aname,
+  uint32_t uid
 )
 {
   const int totalsz = sizeof(struct Tattach) + uname_len + sizeof(uint16_t) /*aname_len*/ +
@@ -354,7 +366,14 @@ encode_Twalk(
 }
 
 int
-encode_Tread(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count)
+encode_Tread(
+  void* buf,
+  size_t bufsize,
+  uint16_t tag,
+  uint32_t fid,
+  uint64_t offset,
+  uint32_t count
+)
 {
   if (bufsize < sizeof(struct Tread))
     return -1;
@@ -385,7 +404,12 @@ decode_Rread(struct Rread* out, const void* buf, size_t buflen)
 
 int
 encode_Twrite(
-  void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count
+  void* buf,
+  size_t bufsize,
+  uint16_t tag,
+  uint32_t fid,
+  uint64_t offset,
+  uint32_t count
 )
 {
   if (bufsize < sizeof(struct Twrite)) {
@@ -468,7 +492,13 @@ encode_Tstat(void* buf, size_t bufsize, uint16_t tag, uint32_t fid)
 }
 
 int
-encode_Tgetattr(void* buf, size_t bufsize, uint16_t tag, uint32_t fid, uint64_t request_mask)
+encode_Tgetattr(
+  void* buf,
+  size_t bufsize,
+  uint16_t tag,
+  uint32_t fid,
+  uint64_t request_mask
+)
 {
   if (bufsize < sizeof(struct Tgetattr))
     return -1;
@@ -519,8 +549,14 @@ decode_Rgetattr(struct Rgetattr* attr, const void* buf, size_t bufsize)
 
 int
 encode_Tlcreate(
-  void* buf, size_t buflen, uint16_t tag, uint32_t fid, const char* name, uint32_t flags,
-  uint32_t mode, uint32_t gid
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t fid,
+  const char* name,
+  uint32_t flags,
+  uint32_t mode,
+  uint32_t gid
 )
 {
   const size_t nl = strlen(name);
@@ -605,7 +641,12 @@ decode_Rfsync(struct Rfsync* rf, const void* buf, size_t buflen)
 
 int
 encode_Tmkdir(
-  void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name, uint32_t mode,
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t dfid,
+  const char* name,
+  uint32_t mode,
   uint32_t gid
 )
 {
@@ -660,7 +701,11 @@ encode_Treadlink(void* buf, size_t buflen, uint16_t tag, uint32_t fid)
 
 int
 decode_Rreadlink(
-  struct Rreadlink* rl, char* linkPath, size_t linkPathSize, const void* buf, size_t buflen
+  struct Rreadlink* rl,
+  char* linkPath,
+  size_t linkPathSize,
+  const void* buf,
+  size_t buflen
 )
 {
   const size_t minSize = sizeof(struct Rreadlink);
@@ -681,7 +726,12 @@ decode_Rreadlink(
 
 int
 encode_Tsymlink(
-  void* buf, size_t buflen, uint16_t tag, uint32_t fid, const char* dst, const char* src,
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t fid,
+  const char* dst,
+  const char* src,
   uint32_t gid
 )
 {
@@ -745,7 +795,12 @@ decode_Rlerror(struct Rlerror* rl, const void* buf, size_t len)
 
 int
 encode_Treaddir(
-  void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint64_t offset, uint32_t count
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t fid,
+  uint64_t offset,
+  uint32_t count
 )
 {
   if (buflen < sizeof(struct Treaddir))
@@ -763,8 +818,11 @@ encode_Treaddir(
 
 int
 decode_Rreaddir(
-  struct Rreaddir* rd, const void* buf, size_t buflen,
-  void (*parse_dir_callback)(void*, struct Rreaddir_dir, const char*), void* param
+  struct Rreaddir* rd,
+  const void* buf,
+  size_t buflen,
+  void (*parse_dir_callback)(void*, struct Rreaddir_dir, const char*),
+  void* param
 )
 {
   const uint8_t* bp = buf;
@@ -806,7 +864,12 @@ decode_Rreaddir(
  */
 int
 encode_Tunlinkat(
-  void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name, uint32_t flags
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t dfid,
+  const char* name,
+  uint32_t flags
 )
 {
   const uint16_t nlen = strlen(name);
@@ -846,7 +909,12 @@ decode_Runlinkat(struct Runlinkat* ru, const void* buf, size_t buflen)
  */
 int
 encode_Trenameat(
-  void* buf, size_t buflen, uint16_t tag, uint32_t olddirfd, const char* oldname, uint32_t newdirfd,
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t olddirfd,
+  const char* oldname,
+  uint32_t newdirfd,
   const char* newname
 )
 {
@@ -888,7 +956,11 @@ decode_Rrenameat(struct Rrenameat* ra, const void* buf, size_t buflen)
 
 int
 encode_Tsetattr(
-  void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t valid,
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t fid,
+  uint32_t valid,
   const struct t9p_setattr* attr
 )
 {
@@ -926,7 +998,14 @@ decode_Rsetattr(struct Rsetattr* rs, const void* buf, size_t buflen)
 }
 
 int
-encode_Tlink(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, uint32_t fid, const char* name)
+encode_Tlink(
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t dfid,
+  uint32_t fid,
+  const char* name
+)
 {
   const size_t nl = strlen(name);
   const size_t totalSize = sizeof(struct Tlink) + nl;
@@ -960,8 +1039,14 @@ decode_Rlink(struct Rlink* rl, const void* buf, size_t buflen)
 }
 
 int
-encode_Trename(void* buf, size_t buflen, uint16_t tag, uint32_t fid, uint32_t dfid,
-  const char* name)
+encode_Trename(
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t fid,
+  uint32_t dfid,
+  const char* name
+)
 {
   const size_t nl = strlen(name);
   const size_t totalSize = sizeof(struct Trename) + nl;
@@ -994,12 +1079,23 @@ decode_Rrename(struct Rrename* rn, const void* buf, size_t buflen)
 }
 
 
-int encode_Tmknod(void* buf, size_t buflen, uint16_t tag, uint32_t dfid, const char* name,
-  uint32_t mode, uint32_t major, uint32_t minor, uint32_t gid)
+int encode_Tmknod(
+  void* buf,
+  size_t buflen,
+  uint16_t tag,
+  uint32_t dfid,
+  const char* name,
+  uint32_t mode,
+  uint32_t major,
+  uint32_t minor,
+  uint32_t gid
+)
 {
   const size_t nl = strlen(name);
   const size_t totalSize = sizeof(struct TRcommon) + sizeof(uint32_t) + sizeof(uint16_t)
-    + nl + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+                           + nl + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t)
+                           + sizeof(uint32_t);
+
   if (buflen < totalSize)
     return -1;
 
