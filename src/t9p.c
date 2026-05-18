@@ -835,7 +835,12 @@ t9p__attach_root(struct t9p_context* c)
   }
 
   if (t9p__iserror(&com)) {
-    ERROR(c, "Rattach failed");
+    struct Rlerror err;
+    if (decode_Rlerror(&err, packetBuf, read) < 0) {
+      ERROR(c, "Rattach failed: Invalid response\n");
+    } else {
+      ERROR(c, "Rattach failed: %s\n", t9p__strerror(err.ecode));
+    }
     goto error;
   }
 
