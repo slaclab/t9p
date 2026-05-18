@@ -419,18 +419,22 @@ p9Mount(const char* ip, const char* srvpath, const char* mntpt, const char* othe
   char opts[128];
   *opts = 0;
 
-  const char* p = strpbrk(ip, "@");
-  if (p) {
+  const char* apath = strpbrk(ip, "@");
+  if (apath) {
     char uid[32], gid[32];
     sscanf(ip, "%[^.].%[^@]%*s", uid, gid);
     snprintf(opts, sizeof(opts), "uid=%s,gid=%s", uid, gid);
+    apath++; /* skip the @ */
+  } else {
+    apath = ip; /* just use the ip directly */
   }
 
-  if (*opts && otheropts) {
-    strcat(opts, ",");
+  if (otheropts) {
+    if (*opts)
+      strcat(opts, ",");
     strcat(opts, otheropts);
   }
-  
+
   /* Check if they want to enable tracing */
   if (strstr(otheropts, "trace")) {
     s_do_trace = 1;
@@ -448,7 +452,7 @@ p9Mount(const char* ip, const char* srvpath, const char* mntpt, const char* othe
   printf("Mounting %s at %s with opts '%s'\n", srvpath, mntpt, opts);
 
   char mnt[512];
-  snprintf(mnt, sizeof(mnt), "%s:%s", p+1, srvpath);
+  snprintf(mnt, sizeof(mnt), "%s:%s", apath, srvpath);
   printf("mnt=%s, mtpt=%s\n", mnt, mntpt);
 
   int r = mount(mnt, mntpt, RTEMS_FILESYSTEM_TYPE_9P, 0, opts);
