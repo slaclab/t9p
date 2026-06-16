@@ -163,6 +163,10 @@ struct T9P_ALIGNED(4) t9p_context
   mutex_t* socket_lock;
   event_t* broken_event;
 
+  /* I/O thread request list + guard */
+  struct trans_node** requests;
+  mutex_t* request_lock;
+
   struct trans_pool trans_pool;
 
   struct t9p_handle_node* fhl;
@@ -187,7 +191,7 @@ struct t9p_string
 };
 
 /* 36 bytes; let's keep it close to that.
-  * DEFAULT_MAX_FILES = 256, so we allocate 9216 bytes on context create */
+ * DEFAULT_MAX_FILES = 256, so we allocate 9216 bytes on context create */
 struct t9p_handle
 {
   /* Path of the file. Set by Twalk */
@@ -226,7 +230,7 @@ static int t9p__iserror(struct TRcommon* err);
 static int t9p__clunk_sync(struct t9p_context* c, int fid);
 static int t9p__is_fid_rw(t9p_handle_t h, int write);
 static const char* t9p__strerror(int e);
-static void t9p__discard(struct t9p_context* c, struct TRcommon* com);
+static void t9p__discard(struct t9p_context* c, const struct TRcommon* com);
 
 /* String methods */
 T9P_NODISCARD static struct t9p_string* t9p__string_release(struct t9p_string* str);
@@ -246,7 +250,8 @@ static void t9p__release_handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 static int t9p__maybe_recover(struct t9p_context* c, t9p_handle_t h);
 static struct t9p_handle_node* t9p__handle_by_fid(struct t9p_context* c, t9p_handle_t h);
 
-static void* t9p__thread_proc(void* param);
+static void* t9p__recv_thread_proc(void* param);
+static void* t9p__send_thread_proc(void* param);
 static void* t9p__recovery_thread_proc(void* param);
 
 /* Safe strcpy that ensures dest is NULL terminated */
@@ -323,6 +328,17 @@ t9p__path_normalize(char* path, int strip_trail)
   }
 }
 
+/**
+ * @brief Performs rhs - lhs, ensuring lhs never underflows.
+ */
+static uint32_t
+sign_sub(uint32_t lhs, ssize_t rhs)
+{
+  if (rhs >= 0 && (uint64_t)rhs > lhs)
+    return 0;
+  return lhs - rhs;
+}
+
 /*******************************************************************/
 /*                                                                  */
 /*            T R A N S A C T I O N        P O O L                  */
@@ -342,6 +358,8 @@ static void tr_release(struct trans_pool* q, struct trans_node* tn);
 static void tr_signal(struct trans_node* n);
 static int tr_wait(struct trans_node* n, int timeo);
 static int tr_recv_now(struct t9p_context* c, struct trans_node* n);
+static int tr_recv_pending(struct t9p_context* c, struct trans_node* n,
+  const struct TRcommon* com);
 static int tr_send_now(struct t9p_context* c, struct trans_node* n);
 
 #define TR_FLAGS_NONE 0x0
@@ -543,6 +561,7 @@ tr_release(struct trans_pool* q, struct trans_node* tn)
 /*
  * Submits a new transaction to the worker thread.
  * Only call this if you're running in threaded mode!
+ * Blocks until the request is finished.
  * \returns < 0 on error
  */
 static int
@@ -1053,6 +1072,13 @@ t9p_init(
     goto error_post_fhl;
   }
 
+  if (!(c->request_lock = mutex_create())) {
+    ERRLOG("Unable to create request guard\n");
+    goto error_post_fhl;
+  }
+
+  c->requests = t9p_calloc(MAX_TAGS, sizeof(struct trans_node*));
+
   /* When running in single thread mode, we don't need that many transactions */
   size_t max_trans = MAX_TRANSACTIONS;
   if (opts->mode == T9P_THREAD_MODE_NONE)
@@ -1086,17 +1112,16 @@ t9p_init(
   mutex_unlock(c->socket_lock);
 
   /* Kick off thread. Either a fully-featured I/O thread, or recovery thread */
-  void*(*proc)(void*) = NULL;
-  if (opts->mode == T9P_THREAD_MODE_NONE) 
-    proc = t9p__recovery_thread_proc;
-  else
-    proc = t9p__thread_proc;
-
   c->thr_run = 1;
-  if (!(c->io_thread = thread_create(proc, c, c->opts.prio))) {
-    ERRLOG("Failed to create I/O task\n");
-    t9p_shutdown(c);
-    return NULL;
+  if (opts->mode == T9P_THREAD_MODE_WORKER) {
+    thread_create(t9p__recv_thread_proc, c, c->opts.prio);
+    thread_create(t9p__send_thread_proc, c, c->opts.prio);
+  } else if (opts->mode == T9P_THREAD_MODE_NONE) {
+    if (!(c->io_thread = thread_create(t9p__recovery_thread_proc, c, c->opts.prio))) {
+      ERRLOG("Failed to create I/O task\n");
+      t9p_shutdown(c);
+      return NULL;
+    }
   }
 
   return c;
@@ -1104,6 +1129,8 @@ t9p_init(
 error_post_pool:
   tr_pool_destroy(&c->trans_pool);
 error_post_fhl:
+  mutex_destroy(c->request_lock);
+  event_destroy(c->broken_event);
   mutex_destroy(c->socket_lock);
   mutex_destroy(c->fhl_mutex);
   event_destroy(c->recv_event);
@@ -3088,7 +3115,7 @@ t9p__is_fid_rw(t9p_handle_t h, int write)
 }
 
 static void
-t9p__discard(struct t9p_context* c, struct TRcommon* com)
+t9p__discard(struct t9p_context* c, const struct TRcommon* com)
 {
   ssize_t r;
 
@@ -3252,263 +3279,153 @@ t9p__timeout_all(struct trans_node** nodes, size_t num)
   }
 }
 
-/* Worker thread implementation. Handles sending of new packets, receiving
-  * and servicing requests. Also handles connection recovery
-  */
+/* Debug logging; dump header to stdout */
+static void
+t9p__send_dump_header(struct trans_node* node)
+{
+  const void* data = node->tr.hdata;
+  size_t size = node->tr.hsize;
+  if (!data) {
+    data = node->tr.data;
+    size = node->tr.size;
+  }
+
+  struct TRcommon com;
+  if (decode_TRcommon(&com, data, size) > 0) {
+    fprintf(stderr,
+      "send: (header) type=%d(%s), len=%u, tag=%d\n",
+      com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
+    );
+  }
+}
+
 static void*
-t9p__thread_proc(void* param)
+t9p__send_thread_proc(void* param)
 {
   t9p_context_t* c = param;
-
-  struct trans_node** requests = t9p_calloc(MAX_TAGS, sizeof(struct trans_node*));
-
-#ifdef __rtems__
-  c->rtems_thr_ident = rtems_task_self();
-
-  int leSock = c->trans.getsock(c->conn);
-  void* rarg = NULL;
-  if (leSock >= 0) {
-    rarg = t9p__config_rtems_socket(leSock);
-  }
-#endif
 
   while (c->thr_run) {
     struct trans_node* node = NULL;
     size_t size = sizeof(node);
-    ssize_t l, nread;
+    ssize_t r = 0;
 
-    /* Timeout all active nodes if we lost connection */
-    if (c->broken)
-      t9p__timeout_all(requests, MAX_TAGS);
-
-    /* Attempt a reconnect periodically; Blocks until done */
-    t9p__try_reconnect_periodic(c);
-
-    mutex_lock(c->socket_lock);
-
-    /* Send pending transactions */
-    while (msg_queue_recv(c->trans_pool.queue, &node, &size) == 0) {
-      assert(size == sizeof(node));
-      if (!node) {
-        ERROR(c, "Got NULL node\n");
-        continue;
-      }
-
-      assert(node->tag < MAX_TAGS);
-
-      /* Trace level logging for sent packets */
-      if (c->opts.log_level <= T9P_LOG_TRACE) {
-        if (node->tr.hdata) {
-          struct TRcommon com;
-          int r = decode_TRcommon(&com, node->tr.hdata, node->tr.hsize);
-          if (r > 0) {
-            fprintf(stderr,
-              "send: (header) type=%d(%s), len=%u, tag=%d\n",
-              com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
-            );
-          }
-        }
-        else if (node->tr.data) {
-          struct TRcommon com;
-          int r = decode_TRcommon(&com, node->tr.data, node->tr.size);
-          if (r > 0) {
-            fprintf(stderr,
-              "send: type=%d(%s), len=%u, tag=%d\n",
-              com.type, t9p_type_string(com.type), (unsigned)com.size, com.tag
-            );
-          }
-        }
-      }
-
-      atomic_add_u32(&c->stats.msg_counts[node->tr.ttype], 1);
-      atomic_add_u32(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
-      atomic_add_u32(&c->stats.send_cnt, 1);
-
-      /* Send any header data first */
-      if (node->tr.hdata && (l = c->trans.send(c->conn, node->tr.hdata, node->tr.hsize, 0)) < 0) {
-        atomic_add_u32(&c->stats.send_errs, 1);
-        if (l == -EAGAIN) {
-          continue; /* Just try again next iteration */
-        }
-        if (l == -EPIPE || l == -ECONNRESET)
-          t9p__conn_broken(c);
-        else
-          ERROR(c, "send: Failed to send header data: %s\n", t9p__strerror(l));
-        continue;
-      }
-
-      /* Send "body" data */
-      if ((l = c->trans.send(c->conn, node->tr.data, node->tr.size, 0)) < 0) {
-        atomic_add_u32(&c->stats.send_errs, 1);
-        ERROR(c, "send: Failed to send data: %s\n", t9p__strerror(l));
-        continue;
-      }
-
-      node->sent = 1;
-      assert(!requests[node->tag]);
-      requests[node->tag] = node;
-    }
-
-    char hdr[sizeof(struct TRcommon)] = {0};
-
-    /* Recv pending transactions */
-    while ((l = c->trans.recv(c->conn, hdr, sizeof(hdr), T9P_RECV_PEEK|T9P_RECV_DONTWAIT)) > 0) {
-      atomic_add_u32(&c->stats.recv_cnt, 1);
-
-      /* Decode common header to understand what we're working with */
-      struct TRcommon com = {0};
-      if (decode_TRcommon(&com, hdr, l) < 0) {
-        ERROR(c, "recv: Unable to decode common header; discarding!\n");
-        c->trans.recv(c->conn, hdr, l, 0); /* Discard */
-        atomic_add_u32(&c->stats.recv_errs, 1);
-        continue;
-      }
-
-      if (c->opts.log_level <= T9P_LOG_TRACE) {
-        fprintf(stderr, "recv: type=%d(%s), tag=%d, size=%u\n",
-          com.type, t9p_type_string(com.type), com.tag, (unsigned)com.size);
-      }
-
-      atomic_add_u32(&c->stats.total_bytes_recv, com.size);
-
-      /* Check if tag is out of range */
-      if (com.tag >= MAX_TAGS) {
-        ERROR(c, "recv: Unexpected tag '%d'; discarding!\n", com.tag);
-        t9p__discard(c, &com);
-        atomic_add_u32(&c->stats.recv_errs, 1);
-        continue;
-      }
-
-      /* Check if the type is invalid */
-      if (com.type >= T9P_TYPE_Tmax) {
-        ERROR(c, "recv: Out of range type (%d); discarding!\n", com.type);
-        t9p__discard(c, &com);
-        atomic_add_u32(&c->stats.recv_errs, 1);
-        continue;
-      }
-
-      /* Lookup the node in the request list */
-      struct trans_node* n = requests[com.tag];
-      if (!n) {
-        ERROR(c, "recv: Tag '%d' not found in request list; discarding!\n", com.tag);
-        t9p__discard(c, &com);
-        atomic_add_u32(&c->stats.recv_errs, 1);
-        continue;
-      }
-      
-      /* Track count of messages recv'ed */
-      atomic_add_u32(&c->stats.msg_counts[com.type], 1);
-
-      /* Handle error responses */
-      if (com.type == T9P_TYPE_Rlerror) {
-        char buf[sizeof(struct Rlerror)];
-        /* Read the whole Rlerror packet, no discard necessary after this */
-        l = c->trans.recv(c->conn, buf, MIN(sizeof(buf), com.size), 0);
-        if (l < sizeof(struct Rlerror)) {
-          ERROR(c, "recv: Short Rlerror\n");
-          atomic_add_u32(&c->stats.recv_errs, 1);
-          continue;
-        }
-
-        struct Rlerror err = {0};
-        if (decode_Rlerror(&err, buf, l) < 0)
-          err.ecode = -1;
-
-        atomic_add_u32(&c->stats.recv_errs, 1);
-        n->tr.status = err.ecode < 0 ? err.ecode : -err.ecode;
-
-        if (n->tr.rdata)
-          memcpy(n->tr.rdata, buf, MIN(sizeof(buf), n->tr.rsize));
-        requests[n->tag] = NULL;
-        tr_signal(n);
-        continue;
-      }
-
-      /* Check for type mismatch and discard if there is one */
-      if (n->tr.rtype != 0 && com.type != n->tr.rtype) {
-        ERROR(c, "recv: Expected msg type '%u' but got '%d'; discarding!\n", (unsigned)n->tr.rtype, com.type);
-        t9p__discard(c, &com);
-        n->tr.status = -1;
-        requests[n->tag] = NULL;
-        atomic_add_u32(&c->stats.recv_errs, 1);
-        tr_signal(n);
-        continue;
-      }
-
-      nread = 0;
-
-      /* Read into header space if there is any */
-      if (n->tr.rheader) {
-        l = c->trans.recv(c->conn, n->tr.rheader, MIN(n->tr.rheadersz, com.size), 0);
-        /* Check if any data was recieved, substract from the remaining packet size */
-        if (l > 0) {
-          if (l > com.size) com.size = 0;
-          else com.size -= l;
-          nread += l;
-        }
-        else {
-          ERROR(c, "recv: failed to read\n");
-          goto recv_done;
-        }
-      }
-
-      /* Check if the header data covers everything */
-      if (!com.size)
-        goto recv_done;
-
-      /* No result data space? well, discard... */
-      if (!n->tr.rdata || n->tr.rsize == 0)
-        t9p__discard(c, &com);
-      else {
-        l = c->trans.recv(c->conn, n->tr.rdata, MIN(n->tr.rsize, com.size), 0);
-        nread += l;
-      }
-
-    recv_done:
-      /* Set status accordingly */
-      n->tr.status = l < 0 ? -errno : nread;
-
-      requests[n->tag] = NULL;
-      tr_signal(n);
+    if (msg_queue_recv(c->trans_pool.queue, &node, &size) != 0) {
       continue;
     }
 
-    /* Check for broken pipe, dispatch handling code */
-    if (l == -EPIPE || l == -ECONNRESET) {
+    assert(node != NULL);
+
+    /* Trace level logging for sent packets */
+    if (c->opts.log_level <= T9P_LOG_TRACE) {
+      t9p__send_dump_header(node);
+    }
+
+    /* record the send in our stats */
+    atomic_add_u32(&c->stats.msg_counts[node->tr.ttype], 1);
+    atomic_add_u32(&c->stats.total_bytes_send, node->tr.hsize + node->tr.size);
+    atomic_add_u32(&c->stats.send_cnt, 1);
+
+    /* Insert into request list before sending. Inserting after send leads
+     * to a potential data race between sender and receiver. */
+    mutex_lock(c->request_lock);
+    c->requests[node->tag] = node;
+    mutex_unlock(c->request_lock);
+
+    /* send header data, if any */
+    if (node->tr.hdata) {
+      r = c->trans.send(c->conn, node->tr.hdata, node->tr.hsize, 0);
+
+      if (r < 0) {
+        goto send_error;
+      }
+    }
+
+    /* now send body data */
+    if (node->tr.data) {
+      r = c->trans.send(c->conn, node->tr.data, node->tr.size, 0);
+
+      if (r < 0) {
+        goto send_error;
+      }
+    }
+
+    node->sent = 1;
+    continue;
+
+send_error:
+    if (r == -EPIPE || r == -ECONNRESET)
       t9p__conn_broken(c);
-    }
+    ERROR(c, "send: failed to send body data: %s\n", t9p__strerror(r));
 
-    mutex_unlock(c->socket_lock);
+    /* indicate error and signal the waiter */
+    node->tr.status = r;
+    tr_signal(node);
 
-    /* Cleanup timed out nodes */
-    mutex_lock(c->trans_pool.guard);
-    for (struct trans_node* n = c->trans_pool.deadhead; n;) {
-      /* Purge from requests list */
-      if (requests[n->tag] == n)
-        requests[n->tag] = NULL;
-
-      struct trans_node* nn = n->next;
-      n->next = c->trans_pool.freehead;
-      c->trans_pool.freehead = n;
-      n = nn;
-    }
-    c->trans_pool.deadhead = NULL;
-    mutex_unlock(c->trans_pool.guard);
-
-  #ifdef __rtems__
-    rtems_event_set es;
-    rtems_event_receive(T9P_WAKE_EVENT, RTEMS_EVENT_ANY | RTEMS_WAIT, t9p__get_wait_duration(), &es);
-  #else
-    usleep(1000);
-  #endif
+    mutex_lock(c->request_lock);
+    c->requests[node->tag] = NULL;
+    mutex_unlock(c->request_lock);
   }
 
-#if __rtems__
-  if (rarg)
-    t9p_free(rarg);
-#endif
+  return NULL;
+}
 
-  t9p_free(requests);
+static void*
+t9p__recv_thread_proc(void* param)
+{
+  t9p_context_t* c = param;
+  
+  while (c->thr_run) {
+    uint8_t hdata[sizeof(struct TRcommon)];
+    
+    /* receive new data through peeking. We need to leave the message intact
+     * for tr_recv_pending */
+    ssize_t l = c->trans.recv(c->conn, &hdata, sizeof(hdata), T9P_RECV_PEEK);
+    if (l < 0) {
+      if (l == -EPIPE || l == -ECONNRESET)
+        t9p__conn_broken(c);
+      ERROR(c, "recv: %s\n", t9p__strerror(l));
+      continue;
+    }
+
+    /* discard messages too short to make sense */
+    if (l < sizeof(hdata)) {
+      ERROR(c, "recv: Discarding short message (%zu < %zu)\n", (size_t)l, sizeof(hdata));
+      continue;
+    }
+
+    /* basic header validation */
+    struct TRcommon com;
+    if (decode_TRcommon(&com, hdata, l) < 0) {
+      ERROR(c, "recv: Discarding bad header\n");
+      continue;
+    }
+
+    /* Tags outside of the range are probably jumbled messages */
+    if (com.tag >= MAX_TAGS) {
+      ERROR(c, "recv: Discarding invalid tag '%d'\n", com.tag);
+      continue;
+    }
+
+    mutex_lock(c->request_lock);
+    struct trans_node* node = c->requests[com.tag];
+    mutex_unlock(c->request_lock);
+
+    if (!node) {
+      ERROR(c, "recv: Discarding unexpected tag '%d'\n", com.tag);
+      continue;
+    }
+
+    tr_recv_pending(c, node, &com);
+
+    /* Signal that we're done with this event */
+    tr_signal(node);
+
+    /* remove from the request list */
+    mutex_lock(c->request_lock);
+    c->requests[node->tag] = NULL;
+    mutex_unlock(c->request_lock);
+  }
+
   return NULL;
 }
 
@@ -3588,6 +3505,122 @@ error:
   return err;
 }
 
+/**
+ * Receive a pending node. It is assumed that the data currently waiting
+ * in the socket's buffer is for this packet. Validation will occur based
+ * on this assumption.
+ * Upstream code should parse out the header using a 'peek'ed message.
+ * This function will also increment stats counters as needed.
+ * @param c Context
+ * @param n The transaction node to operate on
+ * @param hdr The common header data, after it has been decoded.
+ */
+static int
+tr_recv_pending(struct t9p_context* c, struct trans_node* n, const struct TRcommon* com)
+{
+  ssize_t nr = 0, l = 0;
+  ssize_t remaining = com->size;
+
+  atomic_add_u32(&c->stats.recv_cnt, 1);
+
+  /* Trace logging */
+  if (c->opts.log_level <= T9P_LOG_TRACE) {
+    fprintf(
+      stderr, "recv: type=%d(%s), tag=%d, size=%lu\n",
+      com->type, t9p_type_string(com->type),
+      com->tag, (unsigned long)com->size
+    );
+  }
+
+  /* Check for mismatched tag */
+  if (com->tag != n->tag) {
+    ERROR(c, "recv: mismatched tag. %d vs %d\n", com->tag, n->tag);
+    t9p__discard(c, com);
+    atomic_add_u32(&c->stats.recv_errs, 1);
+    return -1;
+  }
+
+  /* record the read bytes */
+  atomic_add_u32(&c->stats.total_bytes_recv, com->size);
+
+  /* Handle Rlerror specifically */
+  if (com->type == T9P_TYPE_Rlerror) {
+    atomic_add_u32(&c->stats.recv_errs, 1);
+
+    n->tr.status = -1;
+
+    /* Read entire Rlerror message */
+    char buf[sizeof(struct Rlerror)];
+    struct Rlerror err;
+    if ((l = c->trans.recv(c->conn, buf, com->size, 0)) < sizeof(struct Rlerror)) {
+      ERROR(c, "recv: error reading Rlerror\n");
+    }
+    else if (decode_Rlerror(&err, buf, l) < 0) {
+      ERROR(c, "recv: error decoding Rlerror. tag=%d, sz=%lu\n", com->tag,
+        (unsigned long)com->size);
+    }
+    else {
+      n->tr.status = -err.ecode;
+    }
+    return -1;
+  }
+
+  /* Check for mismatched type */
+  if (com->type != n->tr.rtype) {
+    ERROR(c, "recv: mismatched type. %d vs %d.\n", com->type, (int)n->tr.rtype);
+    t9p__discard(c, com);
+    atomic_add_u32(&c->stats.recv_errs, 1);
+    return -1;
+  }
+
+  /* Read into rheader, if any */
+  if (n->tr.rheader && n->tr.rheadersz) {
+    l = c->trans.recv(c->conn, n->tr.rheader, MIN(remaining, n->tr.rheadersz), 0);
+    if (l < 0) {
+      n->tr.status = l;
+      atomic_add_u32(&c->stats.recv_errs, 1);
+      if (l == -EPIPE)
+        t9p__conn_broken(c);
+      return -1;
+    }
+    remaining -= l;
+    nr += l;
+  }
+
+  /* Check if any remaining */
+  if (remaining <= 0)
+    goto recv_done;
+
+  /* Read remaining data into the result buffer */
+  if (n->tr.rdata) {
+    size_t off = 0;
+    while (remaining > 0) {
+      l = c->trans.recv(c->conn, (uint8_t*)n->tr.rdata + off, MIN(remaining, n->tr.rsize - off), 0);
+      if (l < 0) {
+        n->tr.status = l;
+        atomic_add_u32(&c->stats.recv_errs, 1);
+        if (l == -EPIPE)
+          t9p__conn_broken(c);
+        return -1;
+      }
+      nr += l, off += l; /* adjust num bytes read and offset */
+      remaining -= l;
+    }
+  }
+
+recv_done:
+  n->tr.status = nr;
+  return 0;
+  
+  if (l < 0)
+    n->tr.status = l;
+
+  if (l == -EPIPE)
+    t9p__conn_broken(c);
+
+  return 0;
+}
+
 static int
 tr_recv_now(struct t9p_context* c, struct trans_node* n)
 {
@@ -3595,19 +3628,12 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
   char hdr[sizeof(struct TRcommon)];
 
   while ((l = c->trans.recv(c->conn, hdr, sizeof(hdr), T9P_RECV_PEEK)) > 0) {
-    atomic_add_u32(&c->stats.recv_cnt, 1);
-
     /* Decode the header */
     struct TRcommon com;
     if (decode_TRcommon(&com, hdr, l) < 0) {
       ERROR(c, "recv: TRcommon decode failed\n");
       t9p__discard(c, NULL);
       return -1;
-    }
-
-    if (c->opts.log_level <= T9P_LOG_TRACE) {
-      fprintf(stderr, "recv: type=%d, tag=%d, size=%lu\n",
-        com.type, com.tag, (unsigned long)com.size);
     }
 
     /* Check for mismatched tag */
@@ -3618,83 +3644,9 @@ tr_recv_now(struct t9p_context* c, struct trans_node* n)
       return -1;
     }
 
-    atomic_add_u32(&c->stats.total_bytes_recv, com.size);
-
-    /* Handle Rlerror specifically */
-    if (com.type == T9P_TYPE_Rlerror) {
-      atomic_add_u32(&c->stats.recv_errs, 1);
-
-      n->tr.status = -1;
-
-      /* Read entire Rlerror message */
-      char buf[sizeof(struct Rlerror)];
-      struct Rlerror err;
-      if ((l = c->trans.recv(c->conn, buf, com.size, 0)) < sizeof(struct Rlerror)) {
-        ERROR(c, "recv: error reading Rlerror\n");
-      }
-      else if (decode_Rlerror(&err, buf, l) < 0) {
-        ERROR(c, "recv: error decoding Rlerror. tag=%d, sz=%lu\n", com.tag, 
-          (unsigned long)com.size);
-      }
-      else {
-        n->tr.status = -err.ecode;
-      }
-      return -1;
-    }
-
-    /* Check for mismatched type */
-    if (com.type != n->tr.rtype) {
-      ERROR(c, "recv: mismatched type. %d vs %d.\n", com.type, (int)n->tr.rtype);
-      t9p__discard(c, &com);
-      atomic_add_u32(&c->stats.recv_errs, 1);
-      return -1;
-    }
-
-    /* Read into rheader, if any */
-    if (n->tr.rheader && n->tr.rheadersz) {
-      l = c->trans.recv(c->conn, n->tr.rheader, MIN(com.size, n->tr.rheadersz), 0);
-      if (l < 0) {
-        n->tr.status = l;
-        atomic_add_u32(&c->stats.recv_errs, 1);
-        if (l == -EPIPE)
-          t9p__conn_broken(c);
-        return -1;
-      }
-      if (l > com.size) com.size = 0;
-      else com.size -= l;
-      nr += l;
-    }
-
-    /* Check if any remaining */
-    if (!com.size)
-      goto recv_done;
-
-    /* Read into resulting area, if any */
-    if (n->tr.rdata) {
-      size_t off = 0;
-      while (com.size != 0) {
-        l = c->trans.recv(c->conn, (uint8_t*)n->tr.rdata + off, MIN(com.size, n->tr.rsize), 0);
-        if (l < 0) {
-          n->tr.status = l;
-          atomic_add_u32(&c->stats.recv_errs, 1);
-          if (l == -EPIPE)
-            t9p__conn_broken(c);
-          return -1;
-        }
-        nr += l;
-        off += l;
-        if (l > com.size) com.size = 0;
-        else com.size -= l;
-      }
-    }
-
-  recv_done:
-    n->tr.status = nr;
-    return 0;
+    /* receive the rest of the data */
+    return tr_recv_pending(c, n, &com);
   }
-  
-  if (l < 0)
-    n->tr.status = l;
 
   if (l == -EPIPE)
     t9p__conn_broken(c);
@@ -3735,20 +3687,6 @@ t9p__tcp_newsock(int need_nonblock)
     perror("setsockopt");
   }
 #endif
-  
-#ifdef __linux__
-  if (need_nonblock) {
-    /* On Linux, set recv timeout when running with a worker thread */
-    struct timeval to;
-    to.tv_usec = 1000;
-    to.tv_sec = 0;
-    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to)) < 0) {
-      perror("setsockopt(SO_RECVTIMEO)");
-      close(sock);
-      return -1;
-    }
-  }
-#endif
   return sock;
 }
 
@@ -3756,8 +3694,7 @@ static void*
 t9p_tcp_init(t9p_context_t* c)
 {
   struct tcp_context* ctx = t9p_calloc(1, sizeof(struct tcp_context));
-
-  ctx->nonblock = c->opts.mode == T9P_THREAD_MODE_WORKER;
+  ctx->nonblock = 0;
 
   if ((ctx->sock = t9p__tcp_newsock(ctx->nonblock)) < 0) {
     t9p_free(ctx);
@@ -3776,7 +3713,7 @@ t9p_tcp_init(t9p_context_t* c)
       fprintf(stderr, " TCP_NODELAY: %d\n", opt);
   #ifdef TCP_NOPUSH
     if (getsockopt(ctx->sock, IPPROTO_TCP, TCP_NOPUSH, &opt, &sl) >= 0)
-      fprintf(stderr, " TCP_NODELAY: %d\n", opt);
+      fprintf(stderr, " TCP_NOPUSH: %d\n", opt);
   #endif
   }
   return ctx;
@@ -3884,64 +3821,10 @@ t9p_tcp_recv(void* context, void* data, size_t len, int flags)
   struct tcp_context* pc = context;
 
   /* Simple logic for blocking mode. Nonblock needs some funny business */
-  if (!pc->nonblock) {
-    ssize_t r = recv(pc->sock, data, len, rflags);
-    if (r < 0)
-      r = -errno;
-    return r;
-  }
-
-  ssize_t off = 0, rem = len, l = 0;
-
-  /* Read as much as we can at first */
-  l = recv(pc->sock, data, len, rflags);
-  if (l < 0 && errno != EAGAIN)
-    return -errno;
-  off += l;
-  rem -= l;
-
-  if (rem <= 0)
-    return off;
-
-  int tries = (flags & T9P_RECV_ALL) ? 50 : 3;
-
-  fd_set fds;
-
-  /* Nonblock recv is finnicky, especially on slow hardware lik the Coldfire MPUs.
-   * Often times responses are split between TCP segments that are received and
-   * processed at different times by the networking stack. Sometimes we'll
-   * receive a header, immediately followed by '0' until the networking stack
-   * actually manages to deliver data. We'll use select() to wait for data */
-  do {
-    /* 50ms timeout */
-    struct timeval timeout = {
-      .tv_sec = (flags & T9P_RECV_ALL) ? 5 : 0,
-      .tv_usec = 50000
-    };
-
-    FD_ZERO(&fds);
-    FD_SET(pc->sock, &fds);
-
-    int r;
-    if ((r = select(1, &fds, NULL, NULL, &timeout)) < 0) {
-      if (r < 0)
-        return -errno; /* Bail... */
-      break;
-    }
-
-    l = recv(pc->sock, (uint8_t*)data + off, rem, rflags);
-    if (l < 0) {
-      if (errno == EAGAIN)
-        continue; /* Really? */
-      return -errno;
-    }
-    if (!l)
-      break;
-    rem -= l;
-    off += l;
-  } while(rem > 0 && --tries > 0);
-
-  return off;
+  ssize_t r = recv(pc->sock, data, len, rflags);
+  if (r < 0)
+    r = -errno;
+  return r;
 }
 
 static int

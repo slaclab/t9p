@@ -49,7 +49,8 @@ main(int argc, char** argv)
   char ip[PATH_MAX] = {0};
   int uid = 0, thread_cnt = 1;
   float time = 10;
-  while ((opt = getopt(argc, argv, "hu:a:m:i:n:t:")) != -1) {
+  int worker = 0;
+  while ((opt = getopt(argc, argv, "hu:a:m:i:n:t:w")) != -1) {
     switch (opt) {
     case 'u':
       strcpy(user, optarg);
@@ -71,6 +72,9 @@ main(int argc, char** argv)
       break;
     case 't':
       time = atof(optarg);
+      break;
+    case 'w':
+      worker = 1;
       break;
     default:
       break;
@@ -94,8 +98,9 @@ main(int argc, char** argv)
 
   t9p_opts_t opts;
   t9p_opts_init(&opts);
-  opts.log_level = T9P_LOG_TRACE;
+  opts.log_level = T9P_LOG_INFO;
   opts.uid = uid;
+  opts.mode = worker ? T9P_THREAD_MODE_WORKER : T9P_THREAD_MODE_NONE;
   strcpy(opts.user, user);
 
   ctx = t9p_init(&trans, &opts, ap, ip, mntpoint);

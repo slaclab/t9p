@@ -161,6 +161,13 @@ typedef struct _msg_queue_s msg_queue_t;
 extern msg_queue_t* msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs);
 extern void msg_queue_destroy(msg_queue_t* q);
 extern int msg_queue_send(msg_queue_t* q, const void* data, size_t size);
+
+/**
+ * @brief Receive some data from the message queue, blocking until some is available.
+ * @param q The queue
+ * @param data Pointer to the buffer to receive the data
+ * @param size Pointer to a variable holding the size of `data` and the size of the resulting buffer.
+ */
 extern int msg_queue_recv(msg_queue_t* q, void* data, size_t* size);
 
 /** Dynamic memory helpers */

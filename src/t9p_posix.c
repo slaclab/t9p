@@ -140,6 +140,9 @@ mutex_unlock(mutex_t* mut)
 void
 mutex_destroy(mutex_t* mut)
 {
+  if (!mut)
+    return;
+
   pthread_mutexattr_destroy(&mut->attr);
   pthread_mutex_destroy(&mut->mutex);
   t9p_free(mut);
@@ -274,9 +277,16 @@ struct _msg_queue_s
 {
   int id;
 
-  mutex_t* mut;
+  pthread_mutex_t lock;
+  pthread_mutexattr_t lockattr;
 
-  struct msg* fh;
+  pthread_cond_t cond;
+  pthread_condattr_t condattr;
+
+  pthread_cond_t freecond;
+  pthread_condattr_t freecondattr;
+
+  struct msg* fh; /* free list */
   struct msg* q;
   size_t msize;
 };
@@ -284,10 +294,50 @@ struct _msg_queue_s
 msg_queue_t*
 msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
 {
-  msg_queue_t* q = t9p_malloc(sizeof(msg_queue_t));
+  msg_queue_t* q = t9p_calloc(1, sizeof(msg_queue_t));
 
   q->fh = q->q = 0;
 
+  if (pthread_mutexattr_init(&q->lockattr) != 0) {
+    goto error;
+  }
+
+  if (pthread_mutex_init(&q->lock, &q->lockattr) != 0) {
+    pthread_mutexattr_destroy(&q->lockattr);
+    goto error;
+  }
+
+  if (pthread_condattr_init(&q->condattr) != 0) {
+    pthread_mutexattr_destroy(&q->lockattr);
+    pthread_mutex_destroy(&q->lock);
+    goto error;
+  }
+
+  if (pthread_cond_init(&q->cond, &q->condattr) != 0) {
+    pthread_mutex_destroy(&q->lock);
+    pthread_mutexattr_destroy(&q->lockattr);
+    pthread_condattr_destroy(&q->condattr);
+    goto error;
+  }
+
+  if (pthread_condattr_init(&q->freecondattr) != 0) {
+    pthread_mutex_destroy(&q->lock);
+    pthread_mutexattr_destroy(&q->lockattr);
+    pthread_cond_destroy(&q->cond);
+    pthread_condattr_destroy(&q->condattr);
+    goto error;
+  }
+
+  if (pthread_cond_init(&q->freecond, &q->freecondattr) != 0) {
+    pthread_mutex_destroy(&q->lock);
+    pthread_mutexattr_destroy(&q->lockattr);
+    pthread_cond_destroy(&q->cond);
+    pthread_condattr_destroy(&q->condattr);
+    pthread_condattr_destroy(&q->freecondattr);
+    goto error;
+  }
+
+  /* allocate a bunch of nodes and link em in */
   for (int i = 0; i < maxMsgs; ++i) {
     struct msg* m = t9p_calloc(1, msgSize + sizeof(struct msg));
     m->next = q->fh;
@@ -295,8 +345,11 @@ msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
   }
 
   q->msize = msgSize;
-  q->mut = mutex_create();
   return q;
+
+error:
+  t9p_free(q);
+  return NULL;
 }
 
 void
@@ -304,6 +357,14 @@ msg_queue_destroy(msg_queue_t* q)
 {
   if (!q)
     return;
+
+  pthread_mutex_destroy(&q->lock);
+  pthread_mutexattr_destroy(&q->lockattr);
+  pthread_cond_destroy(&q->cond);
+  pthread_condattr_destroy(&q->condattr);
+  pthread_cond_destroy(&q->freecond);
+  pthread_condattr_destroy(&q->freecondattr);
+
   for (struct msg* m = q->q; m;) {
     struct msg* n = m->next;
     t9p_free(m);
@@ -322,29 +383,32 @@ int
 msg_queue_send(msg_queue_t* q, const void* data, size_t size)
 {
   assert(size <= q->msize);
-  mutex_lock(q->mut);
 
-  struct msg* p = q->fh;
-  if (!p) {
-    mutex_unlock(q->mut);
+  if (pthread_mutex_lock(&q->lock) != 0) {
     return -1;
   }
 
-  q->fh = p->next;
+  /* if no nodes available, we have to wait for one to become available */
+  if (!q->fh) {
+    pthread_cond_wait(&q->freecond, &q->lock);
+  }
 
-  struct msg* m;
-  for (m = q->q; m && m->next; m = m->next)
-    ;
-  p->next = NULL;
-  if (!m)
-    q->q = p;
-  else
-    m->next = p;
+  assert(q->fh);
 
-  p->sz = size;
-  memcpy(p->data, data, size);
+  /* unlink it */
+  struct msg* node = q->fh;
+  q->fh = node->next;
 
-  mutex_unlock(q->mut);
+  memcpy(node->data, data, size);
+  node->sz = size;
+
+  /* link it into the actual queue */
+  node->next = q->q;
+  q->q = node;
+
+  /* signal waiters */
+  pthread_cond_signal(&q->cond);
+  pthread_mutex_unlock(&q->lock);
 
   return 0;
 }
@@ -352,22 +416,41 @@ msg_queue_send(msg_queue_t* q, const void* data, size_t size)
 int
 msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 {
-  struct msg* p = NULL;
-  mutex_lock(q->mut);
+  assert(size != NULL);
+  assert(data != NULL);
 
-  p = q->q;
-
-  if (p) {
-    q->q = p->next;
-    p->next = q->fh;
-    q->fh = p;
-    memcpy(data, p->data, *size < p->sz ? *size : p->sz);
-    *size = p->sz;
-    mutex_unlock(q->mut);
-    return 0;
+  /* wait for new data */
+  if (pthread_mutex_lock(&q->lock) != 0) {
+    return -1;
   }
-  mutex_unlock(q->mut);
-  return -1;
+  pthread_cond_wait(&q->cond, &q->lock);
+  
+  assert(q->q != NULL); /* should never have an empty queue here. */
+
+  /* unlink from the queue */
+  struct msg* m = NULL, *pm = NULL;
+  for (m = q->q; m->next; pm = m, m = m->next)
+    ;
+
+  if (pm && pm != m) {
+    pm->next = NULL; /* pm is now at the end */
+    q->q = pm;
+  } else {
+    q->q = NULL;
+  }
+
+  /* copy into result buffers */
+  memcpy(data, m->data, *size < m->sz ? *size : m->sz);
+  *size = m->sz;
+
+  /* add back to the free list */
+  m->next = q->fh;
+  q->fh = m;
+
+  /* signal any threads waiting for new nodes */
+  pthread_cond_signal(&q->freecond);
+  pthread_mutex_unlock(&q->lock);
+  return 0;
 }
 
 #endif
