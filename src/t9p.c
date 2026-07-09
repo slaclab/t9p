@@ -3776,7 +3776,7 @@ t9p_tcp_init(t9p_context_t* c)
       fprintf(stderr, " TCP_NODELAY: %d\n", opt);
   #ifdef TCP_NOPUSH
     if (getsockopt(ctx->sock, IPPROTO_TCP, TCP_NOPUSH, &opt, &sl) >= 0)
-      fprintf(stderr, " TCP_NODELAY: %d\n", opt);
+      fprintf(stderr, " TCP_NOPUSH: %d\n", opt);
   #endif
   }
   return ctx;
