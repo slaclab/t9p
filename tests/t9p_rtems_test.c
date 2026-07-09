@@ -348,10 +348,10 @@ POSIX_Init(void* arg)
   rtems_shell_init_environment();
 #endif
 
-  /** Configure network */
+  /* Configure network */
   configure_network();
 
-  /** Generate files required by the shell */
+  /* Generate files required by the shell */
   setuid(0);
   mkdir("/etc", 0777);
   chmod("/etc", 0777);
@@ -401,12 +401,27 @@ POSIX_Init(void* arg)
     
     printf("Mounting 10.0.2.2:10002:%s at %s with opts '%s'\n", RTEMS_TEST_PATH "/tests/fs", "/test", opts);
 
-    mount(
+    int r = mount(
       "10.0.2.2!10002:" RTEMS_TEST_PATH "/tests/fs", "/test", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
-    mount(
+
+    if (r < 0) {
+      perror("mount");
+    }
+
+    r = mount(
       "10.0.2.2!10002:" RTEMS_TEST_PATH "/tests/fs/other", "/test2", RTEMS_FILESYSTEM_TYPE_9P, 0, opts
     );
+
+    if (r < 0) {
+      perror("mount");
+    }
+
+    /* Test root-level symlinks */
+    r = symlink("/test", "/link");
+    if (r < 0) {
+      perror("symlink");
+    }
 
     if (b == 'a') {
       if (run_auto_test(10) < 0) {
