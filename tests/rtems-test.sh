@@ -4,7 +4,7 @@ set -e
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-QEMU_ARGS=""
+QEMU_ARGS="-s"
 ARCH=i386
 TARGET=rtems6-pc686-qemu
 
