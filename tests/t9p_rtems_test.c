@@ -298,6 +298,45 @@ static int sh_rtems_udp_stats(int argc, char** argv)
 }
 #endif // __RTEMS_MAJOR__ < 5
 
+static int
+sh_rtems_stat(int argc, char** argv)
+{
+  if (argc < 2) {
+    printf("usage: stat PATH\n");
+    return -1;
+  }
+
+  struct stat st;
+  if (stat(argv[1], &st) < 0) {
+    perror("stat");
+    return -1;
+  }
+
+  char buf[512] = {0};
+  if (S_ISBLK(st.st_mode))  strcat(buf, "block ");
+  if (S_ISCHR(st.st_mode))  strcat(buf, "char ");
+  if (S_ISDIR(st.st_mode))  strcat(buf, "dir ");
+  if (S_ISFIFO(st.st_mode)) strcat(buf, "fifo ");
+  if (S_ISREG(st.st_mode))  strcat(buf, "reg ");
+  if (S_ISLNK(st.st_mode))  strcat(buf, "lnk ");
+  if (S_ISSOCK(st.st_mode)) strcat(buf, "sock ");
+
+  printf("st_mode:    %#o : %s\n", (int)st.st_mode, buf);
+  printf("st_dev:     %lld\n", st.st_dev);
+  printf("st_ino:     %ld\n", st.st_ino);
+  printf("st_nlink:   %d\n", st.st_nlink);
+  printf("st_uid:     %d\n", st.st_uid);
+  printf("st_gid:     %d\n", st.st_gid);
+  printf("st_rdev:    %lld\n", st.st_rdev);
+  printf("st_size:    %lld\n", st.st_size);
+  printf("st_atim:    %ld.%ld\n", st.st_atim.tv_sec, st.st_atim.tv_nsec);
+  printf("st_mtim:    %ld.%ld\n", st.st_mtim.tv_sec, st.st_mtim.tv_nsec);
+  printf("st_ctim:    %ld.%ld\n", st.st_ctim.tv_sec, st.st_ctim.tv_nsec);
+  printf("st_blksize: %ld\n", st.st_blksize);
+  printf("st_blocks:  %ld\n", st.st_blocks);
+  return 0;
+}
+
 static void
 register_shell_cmds()
 {
@@ -308,6 +347,7 @@ register_shell_cmds()
   rtems_shell_add_cmd("tcp_stats", "network", "", sh_rtems_tcp_stats);
   rtems_shell_add_cmd("udp_stats", "network", "", sh_rtems_udp_stats);
 #endif
+  rtems_shell_add_cmd("stat", "misc", "", sh_rtems_stat);
 }
 
 static void*
