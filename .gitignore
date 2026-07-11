@@ -20,3 +20,6 @@ compile_commands.json
 
 Makefile.in
 /tests/tcpsrv
+
+.waf*
+.lock*
