@@ -119,48 +119,6 @@ struct rtems_bsdnet_config rtems_bsdnet_config = {
 
 #endif
 
-uintptr_t dummy = 0;
-
-/* This task spams a tcpsrv instance with junk. The idea is to saturate the network
- * stack as much as possible to simulate bad behavior seen with the uC5282 */
-static void
-loading_thread(unsigned long arg)
-{
-  struct sockaddr_in dest = {0};
-  dest.sin_addr.s_addr = inet_addr("10.0.2.2");
-  dest.sin_family = AF_INET;
-  dest.sin_port = htons(4096);
-
-  int sock = socket(AF_INET, SOCK_STREAM, 0);
-  if (sock < 0) {
-    perror("tcpsrv socket");
-    abort();
-  }
-
-  if (connect(sock, (struct sockaddr*)&dest, sizeof(dest)) < 0) {
-    perror("tcpsrv connect");
-    abort();
-  }
-
-  while (1) {
-    char buf[4096];
-    for (int i = 0; i < sizeof(buf); ++i)
-      buf[i] = rand() & 0xFF;
-    
-    if (send(sock, buf, sizeof(buf), 0) < 0) {
-      perror("sendto");
-      usleep(1000); continue;
-    }
-
-    if (recv(sock, buf, sizeof(buf), 0) < 0) {
-      perror("recvfrom");
-      usleep(1000); continue;
-    }
-
-    usleep(1000);
-  }
-}
-
 #ifdef RTEMS_LEGACY_STACK
 static void
 ntpd_task(unsigned long p)
@@ -353,6 +311,7 @@ register_shell_cmds()
 static void*
 POSIX_Init(void* arg)
 {
+  int r;
   printf("** t9p RTEMS test application\n");
 
 #if __i386__
@@ -399,21 +358,6 @@ POSIX_Init(void* arg)
   chmod("/etc/passwd", 0644);
   rtems_shell_write_file("/etc/group", "rtems:x:1:rtems\n");
   chmod("/etc/group", 0644);
-
-  rtems_id id;
-  int r = rtems_task_create(
-    rtems_build_name('D','U','M','Y'),
-    200,
-    0,
-    RTEMS_PREEMPT,
-    0,
-    &id
-  );
-  r = rtems_task_start(id, loading_thread, 0);
-
-  if (r != RTEMS_SUCCESSFUL) {
-    printf("Failed to launch dummy thread\n");
-  }
 
   printf("Press s to open shell, a to run auto test, any other key to continue\n");
   char b;

@@ -4,15 +4,16 @@ jobs:
   build_linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          submodules: recursive
       - name: Install Dependencies
         run: |
           sudo apt-get update 
-          sudo apt-get install -y libreadline-dev
+          sudo apt-get install -y libreadline-dev python3
       - name: Configure
         run: |
-          cmake . -Bbuild -DCMAKE_C_FLAGS=-Werror -DCMAKE_CXX_FLAGS=-Werror
+          ./waf configure
       - name: Build
         run: |
-          make -C build
-  
+          ./waf build-linux  
