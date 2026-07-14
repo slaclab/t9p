@@ -982,7 +982,7 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     fi->opts.opts.prio = prio;
   strcpy(fi->opts.ip, ip);
   strcpy(fi->opts.opts.user, user);
-  strcpy(fi->apath, apath);
+  strcpy(fi->apath, apath ? apath : "");
 
   /* Init the 9p FS */
   t9p_transport_t t;
