@@ -49,14 +49,14 @@
 #include "rtems_test_cfg.h"
 #include "t9p_rtems.h"
 
-/** From t9p_cmd.c */
+/* From t9p_cmd.c */
 extern int main(int, char**);
 
-/** From t9p_automatest_test.c */
+/* From t9p_automatest_test.c */
 extern int run_auto_test(int);
 
 #if defined(RTEMS_LEGACY_STACK) && defined(__i386__)
-/** From EPICS base: */
+/* From EPICS base: */
 int
 rtems_ne2kpci_driver_attach (struct rtems_bsdnet_ifconfig *config, int attach)
 {
@@ -130,18 +130,18 @@ ntpd_task(unsigned long p)
 }
 #endif
 
-/** Configure network using libbsd */
+/* Configure network using libbsd */
 static void
 configure_network(void)
 {
-  /** Hack for stubbing out EEPROM verification in e1000 driver.
-    * Only needed on RTEMS 6+ w/e1000 support. Pulled in from EPICS base */
+  /* Hack for stubbing out EEPROM verification in e1000 driver.
+   * Only needed on RTEMS 6+ w/e1000 support. Pulled in from EPICS base */
 #if defined(__i386__) && __RTEMS_MAJOR__ > 5
   extern void _bsd_e1000_validate_nvm_checksum(void);
   *(char*)&_bsd_e1000_validate_nvm_checksum = 0xc3;
 #endif
 
-  /** BSD stack init */
+  /* BSD stack init */
 #ifdef RTEMS_BSD_STACK
   rtems_bsd_setlogpriority("debug");
   if (rtems_bsd_initialize() != RTEMS_SUCCESSFUL) {
@@ -149,7 +149,7 @@ configure_network(void)
     exit(EXIT_FAILURE);
   }
 
-  /** Setup loopback */
+  /* Setup loopback */
   rtems_bsd_ifconfig_lo0();
 
   char* ifcmd[] = {"ifconfig", "em0", "inet", "10.0.2.15", "netmask", "255.255.255.0", NULL};
@@ -157,12 +157,12 @@ configure_network(void)
     printf("rtems_bsd_command_ifconfig failed\n");
   }
 
-  /** Display current network configuration */
+  /* Display current network configuration */
   char* cmd[] = {"ifconfig", NULL};
   rtems_bsd_command_ifconfig(1, cmd);
 #endif
 
-  /** Configure remote debugger, if available */
+  /* Configure remote debugger, if available */
 #if __RTEMS_MAJOR__ >= 6 && __i386__
   rtems_debugger_register_tcp_remote();
   rtems_printer printer;
@@ -170,13 +170,13 @@ configure_network(void)
   rtems_debugger_start("tcp", "1234", RTEMS_DEBUGGER_TIMEOUT, 1, &printer);
 #endif
 
-  /** Legacy network stack init */
+  /* Legacy network stack init */
 #ifdef RTEMS_LEGACY_STACK
   rtems_bsdnet_initialize_network();
   rtems_bsdnet_show_if_stats();
 #endif
 
-  /** Register 9P fs backend */
+  /* Register 9P fs backend */
   t9p_rtems_register();
 
 #ifdef RTEMS_LEGACY_STACK
@@ -221,7 +221,7 @@ configure_network(void)
     fprintf(stderr, "task start failed\n");
     return;
   }
-#endif // RTEMS_LEGACY_STACK
+#endif /* RTEMS_LEGACY_STACK */
 }
 
 #if __RTEMS_MAJOR__ < 5
@@ -328,16 +328,14 @@ POSIX_Init(void* arg)
   }
 
   if (S_ISCHR(st.st_mode)) {
-    /** Configue settings for stdin */
+    /* Configue settings for stdin */
     struct termios t;
     if (tcgetattr(fileno(stdin), &t) < 0) {
       printf("tcgetattr failed: %s\n", strerror(errno));
-      // return NULL;
     }
     t.c_iflag &= ~(IXOFF | IXON | IXANY);
     if (tcsetattr(fileno(stdin), TCSANOW, &t) < 0) {
       printf("tcsetattr failed: %s\n", strerror(errno));
-      // return NULL;
     }
   } else {
     printf("stdin is not a chardev, you will not have any input!\n");
@@ -365,6 +363,7 @@ POSIX_Init(void* arg)
   if (b == 's' || b == 'a') {
     mkdir("/test", 0777);
     mkdir("/test2", 0777);
+    mkdir("/link", 0777);
     char opts[512], msize[32];
     *opts = 0;
 
@@ -400,11 +399,11 @@ POSIX_Init(void* arg)
     if (r < 0) {
       perror("mount");
     }
-
-    /* Test root-level symlinks */
-    r = symlink("/test", "/link");
+    
+    /* Alias mount test */
+    r = mount("", "/link", RTEMS_FILESYSTEM_TYPE_9P, 0, "alias=/test");
     if (r < 0) {
-      perror("symlink");
+      perror("mount");
     }
 
     if (b == 'a') {
@@ -431,7 +430,7 @@ POSIX_Init(void* arg)
   #define MAX_ARGS 32
   char* args[MAX_ARGS] = {};
 
-  /** Tokenize the BSP command line into something that can be consumed by t9p */
+  /* Tokenize the BSP command line into something that can be consumed by t9p */
   char buf[1024];
 #ifdef __i386__
   strcpy(buf, bsp_cmdline());
@@ -498,19 +497,18 @@ bsp_predriver_hook(void)
 #define CONFIGURE_EXTRA_TASK_STACKS (8000 * RTEMS_MINIMUM_STACK_SIZE)
 
 #define CONFIGURE_FILESYSTEM_DEVFS
-//#define CONFIGURE_FILESYSTEM_NFS
 #define CONFIGURE_FILESYSTEM_IMFS
 
 #define CONFIGURE_USE_IMFS_AS_BASE_FILESYSTEM
 
 #ifndef RTEMS_LEGACY_STACK
-/** libbsd config */
+/* libbsd config */
 #define RTEMS_BSD_CONFIG_BSP_CONFIG
 #define RTEMS_BSD_CONFIG_INIT
 #include <machine/rtems-bsd-config.h>
 #endif
 
-/** RTEMS config */
+/* RTEMS config */
 #define CONFIGURE_APPLICATION_NEEDS_CLOCK_DRIVER
 #define CONFIGURE_APPLICATION_NEEDS_CONSOLE_DRIVER
 #define CONFIGURE_APPLICATION_NEEDS_STUB_DRIVER
@@ -568,7 +566,7 @@ bsp_predriver_hook(void)
 #endif
 
 #ifndef RTEMS_LEGACY_STACK
-/** Add the BSD commands we want */
+/* Add the BSD commands we want */
 #define CONFIGURE_SHELL_USER_COMMANDS                                                              \
   &bsp_interrupt_shell_command, &rtems_shell_HOSTNAME_Command, &rtems_shell_PING_Command,          \
     &rtems_shell_ROUTE_Command, &rtems_shell_NETSTAT_Command, &rtems_shell_IFCONFIG_Command,       \

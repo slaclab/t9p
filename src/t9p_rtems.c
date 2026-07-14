@@ -299,14 +299,27 @@ typedef struct t9p_rtems_node
 } t9p_rtems_node_t;
 
 /**
+ * Wraps the t9p context, adding a ref count, so it can be shared between
+ * mounts. This allows for 9p mounts to be "aliased" and share the same
+ * context.
+ */
+typedef struct
+{
+  t9p_context_t* c;
+  uint32_t rc;
+} t9p_rtems_ctx_t;
+
+/**
  * Global structure defining fs info for the entire mount.
  */
 typedef struct t9p_rtems_fs_info
 {
-  t9p_context_t* c;
+  t9p_rtems_ctx_t* ctx;
   t9p_rtems_mount_opts_t opts;
+#if __RTEMS_MAJOR__ >= 6
   pthread_mutex_t mutex;
   pthread_mutexattr_t mutattr;
+#endif
   dev_t dev;
   char mntpt[PATH_MAX];
   char apath[PATH_MAX];
@@ -482,6 +495,37 @@ CEXP_HELP_TAB_BEGIN(p9Mount)
 CEXP_HELP_TAB_END
 #endif
 
+/**
+ * Another Cexpsh helper for alias mounts.
+ * @param mountpt The mount point where this mount will reside
+ * @param aliasedMount The mount we're aliasing
+ */
+int
+p9MountAlias(const char* mountpt, const char* aliasedMount)
+{
+  char opts[512];
+  snprintf(opts, sizeof(opts), "alias=%s", aliasedMount);
+
+  int r = mount("", mountpt, RTEMS_FILESYSTEM_TYPE_9P, 0, opts);
+  if (r < 0) {
+    perror("mount");
+  }
+  return r;
+}
+
+#ifdef HAVE_CEXP
+CEXP_HELP_TAB_BEGIN(p9MountAlias)
+	HELP(
+"Alias a 9P mountpoint. Useful for duplicate mounts, since you can avoid\n"
+"spinning up a new context.\n"
+"Paramters:\n"
+" mntpt - Location where this mount will reside\n"
+" aliasedMnt - Location of the mount we are aliasing\n",
+	int, p9MountAlias,  (const char* mountpt, const char* aliasedMount)
+	),
+CEXP_HELP_TAB_END
+#endif
+
 static bool
 t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void* p)
 {
@@ -491,8 +535,8 @@ t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void*
   int* n = p;
   struct t9p_rtems_fs_info* fsi = mt_entry->fs_info;
 
-  t9p_opts_t opts = t9p_get_opts(fsi->c);
-  t9p_stats_t stats = t9p_get_stats(fsi->c);
+  t9p_opts_t opts = t9p_get_opts(fsi->ctx->c);
+  t9p_stats_t stats = t9p_get_stats(fsi->ctx->c);
   printf("%s\n", fsi->opts.ip);
   printf(
     "  apath=%s,mntpt=%s,uid=%d,gid=%d\n",
@@ -503,7 +547,7 @@ t9p_iterate_fs_stats(const rtems_filesystem_mount_table_entry_t* mt_entry, void*
   );
   printf(
     "   msize=%u\n",
-    (unsigned)t9p_get_msize(fsi->c)
+    (unsigned)t9p_get_msize(fsi->ctx->c)
   );
   printf(
     "   bytesSent=%u (%.2fM) bytesRecv=%u (%.2fM)\n",
@@ -754,6 +798,41 @@ error:
   return -1;
 }
 
+struct t9p__lookup_result
+{
+  const char* name;
+  t9p_rtems_ctx_t* ctx;
+};
+
+static bool
+t9p__lookup_iter(
+  const rtems_filesystem_mount_table_entry_t *mt_entry,
+  void* arg
+)
+{
+  struct t9p__lookup_result* res = arg;
+  if (strcmp(mt_entry->type, RTEMS_FILESYSTEM_TYPE_9P))
+    return false; /* continue */
+  
+  if (strcmp(mt_entry->target, res->name) == 0 && mt_entry->fs_info) {
+    t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
+    res->ctx = fi->ctx;
+    return true; /* done! */
+  }
+  return false; /* continue */
+}
+
+/**
+ * Lookup the t9p context associated with a mount, identified by the
+ * mount point (e.g. /sdf/group/cds)
+ */
+static t9p_rtems_ctx_t*
+t9p_rtems_lookup_fs(const char* mnt)
+{
+  struct t9p__lookup_result r = {.name = mnt};
+  rtems_filesystem_mount_iterate(t9p__lookup_iter, &r);
+  return r.ctx;
+}
 
 /**************************************************************************************
  * FS ops implementation
@@ -780,6 +859,50 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   int uid = T9P_NOUID, gid = T9P_NOGID;
   int msize = 65536;
 
+  int loglevel = T9P_LOG_WARN;
+  int maxfids = 0, timeo = 0;
+  t9p_thread_prio_t prio = T9P_THREAD_PRIO_COUNT;
+  t9p_thread_mode_t thr_mode = T9P_THREAD_MODE_NONE;
+  const char* alias = NULL;
+
+  for (char* r = strtok(buf, ","); r; r = strtok(NULL, ",")) {
+    const char* val = strpbrk(r, "=");
+    if (val)
+      val++; /* Skip the = */
+
+    if (!strncmp(r, "ip", strlen("ip")) && val) {
+      strcpy(ip, val);
+    } else if (!strncmp(r, "uid", strlen("uid")) && val) {
+      uid = atoi(val);
+    } else if (!strncmp(r, "gid", strlen("gid")) && val) {
+      gid = atoi(val);
+    } else if (!strncmp(r, "msize", strlen("msize")) && val) {
+      msize = atoi(val);
+    } else if (!strncmp(r, "user", strlen("user")) && val) {
+      strcpy(user, val);
+    } else if (!strcmp(r, "trace")) {
+      loglevel = T9P_LOG_TRACE;
+    } else if (!strcmp(r, "threaded")) {
+      thr_mode = T9P_THREAD_MODE_WORKER;
+    } else if (!strncmp(r, "maxfids", strlen("maxfids")) && val) {
+      maxfids = atoi(val);
+    } else if (!strncmp(r, "timeo", strlen("timeo")) && val) {
+      timeo = atoi(val); /* in ms */
+    } else if (!strncmp(r, "prio", strlen("prio")) && val) {
+      if (!strcmp(val, "low"))
+        prio = T9P_THREAD_PRIO_LOW;
+      else if (!strcmp(val, "med"))
+        prio = T9P_THREAD_PRIO_MED;
+      else if (!strcmp(val, "high"))
+        prio = T9P_THREAD_PRIO_HIGH;
+      else {
+        fprintf(stderr, "Ignoring unknown t9p priority '%s'\n", val);
+      }
+    } else if (!strncmp(r, "alias", strlen("alias")) && val) {
+      alias = val;
+    }
+  }
+
   /* Parse source (in format IP:[PORT:]/path/on/server) */
   char* sip = strtok(mt_entry->dev, ":");
   if (sip) {
@@ -798,71 +921,31 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     apath = sportOrPath;
   }
 
-  /* No apath is invalid */
-  if (!apath) {
+  /* No apath is invalid (optional for alias mounts) */
+  if (!apath && !alias) {
     printf("No apath provided, mount must be in format IP:[PORT:]/path/on/server\n");
     errno = EINVAL;
     return -1;
   }
 
-  int loglevel = T9P_LOG_WARN;
-  int maxfids = 0, timeo = 0;
-  t9p_thread_prio_t prio = T9P_THREAD_PRIO_COUNT;
-  t9p_thread_mode_t thr_mode = T9P_THREAD_MODE_NONE;
-  for (char* r = strtok(buf, ","); r; r = strtok(NULL, ",")) {
-    if (!strncmp(r, "ip", strlen("ip"))) {
-      const char* p = strpbrk(r, "=");
-      if (p)
-        strcpy(ip, p + 1);
-    } else if (!strncmp(r, "uid", strlen("uid"))) {
-      const char* p = strpbrk(r, "=");
-      if (p)
-        uid = atoi(p + 1);
-    } else if (!strncmp(r, "gid", strlen("gid"))) {
-      const char* p = strpbrk(r, "=");
-      if (p)
-        gid = atoi(p + 1);
-    } else if (!strncmp(r, "msize", strlen("msize"))) {
-      const char* p = strpbrk(r, "=");
-      if (p)
-        msize = atoi(p + 1);
-    } else if (!strncmp(r, "user", strlen("user"))) {
-      const char* p = strpbrk(r, "=");
-      if (p)
-        strcpy(user, p + 1);
-    } else if (!strcmp(r, "trace")) {
-      loglevel = T9P_LOG_TRACE;
-    } else if (!strcmp(r, "threaded")) {
-      thr_mode = T9P_THREAD_MODE_WORKER;
-    } else if (!strncmp(r, "maxfids", strlen("maxfids"))) {
-      const char* p = strpbrk(r, "=");
-      if (p)
-        maxfids = atoi(p + 1);
-    } else if (!strncmp(r, "timeo", strlen("timeo"))) {
-      const char* p = strpbrk(r, "=");
-      if (p)
-        timeo = atoi(p + 1); /* in ms */
-    } else if (!strncmp(r, "prio", strlen("prio"))) {
-      const char* p = strpbrk(r, "=");
-      if (p) {
-        ++p;
-        if (!strcmp(p, "low"))
-          prio = T9P_THREAD_PRIO_LOW;
-        else if (!strcmp(p, "med"))
-          prio = T9P_THREAD_PRIO_MED;
-        else if (!strcmp(p, "high"))
-          prio = T9P_THREAD_PRIO_HIGH;
-        else {
-          fprintf(stderr, "Ignoring unknown t9p priority '%s'\n", p);
-        }
-      }
-    }
-  }
-
+  /* validate max message size */
   if (msize <= 0) {
     fprintf(stderr, "Invalid msize\n");
     errno = EINVAL;
     return -1;
+  }
+  
+  /* Alias mounts are special; they reference contexts used by other mounts.
+   * Ultimately these are a workaround for bugs with the RTEMS IMFS path
+   * eval code, since we cannot have symlinks to mountpoints */
+  t9p_rtems_ctx_t* ctx = NULL;
+  if (alias) {
+    if (!(ctx = t9p_rtems_lookup_fs(alias))) {
+      fprintf(stderr, "Unable to find aliased mount target '%s'\n", alias);
+      errno = EINVAL;
+      return -1;
+    }
+    atomic_add_u32(&ctx->rc, 1);
   }
 
 #if __RTEMS_MAJOR__ >= 6
@@ -872,13 +955,15 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
   mt_entry->mt_fs_root.ops = &t9p_fs_ops;
   mt_entry->pathconf_limits_and_options = t9p_fs_opts;
 #endif
-  /** Configure FS info and opts */
+  /* Configure FS info and opts */
   mt_entry->fs_info = t9p_calloc(sizeof(t9p_rtems_fs_info_t), 1);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
 
+#if __RTEMS_MAJOR__ >= 6
   pthread_mutexattr_init(&fi->mutattr);
   pthread_mutexattr_settype(&fi->mutattr, PTHREAD_MUTEX_RECURSIVE);
   pthread_mutex_init(&fi->mutex, &fi->mutattr);
+#endif
   
   t9p_opts_init(&fi->opts.opts);
   fi->opts.opts.gid = gid;
@@ -897,9 +982,9 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     fi->opts.opts.prio = prio;
   strcpy(fi->opts.ip, ip);
   strcpy(fi->opts.opts.user, user);
-  strcpy(fi->apath, apath);
+  strcpy(fi->apath, apath ? apath : "");
 
-  /** Init the 9p FS */
+  /* Init the 9p FS */
   t9p_transport_t t;
 
   switch (fi->opts.transport) {
@@ -914,25 +999,38 @@ t9p_rtems_fsmount_me(rtems_filesystem_mount_table_entry_t* mt_entry, const void*
     return -1;
   }
 
-  fi->c = t9p_init(&t, &fi->opts.opts, apath, ip, mt_entry->target);
-  if (fi->c == NULL)
-    return -1;
+  /* Create a new context if we're not an aliased mount */
+  if (!ctx) {
+    ctx = t9p_calloc(1, sizeof(t9p_rtems_ctx_t));
+    ctx->c = t9p_init(&t, &fi->opts.opts, apath, ip, mt_entry->target);
+    ctx->rc = 1;
+    
+    /* Check for error during init */
+    if (ctx->c == NULL) {
+      free(ctx);
+      return -1;
+    }
+  }
 
-  printf("Mounted 9P %s:%s at %s\n", ip, apath, mt_entry->target);
+  fi->ctx = ctx;
+
+  printf("Mounted 9P %s:%s at %s\n", ip, apath ? apath : "", mt_entry->target);
+  if (alias)
+    printf("  Aliasing the mount at '%s'\n", alias);
 
   /* generate a weird little unique device number. The root qid may not be totally unique
    * between mounts, so inject a tiny little bit of variance in there. This is used to fill
    * the st_dev parameter in fstat.
    * TODO: Do we need to cram the 64-bit 9P 'inode' in 32-bit st_ino too? */
   static short devNum = 0;
-  fi->dev |= t9p_get_qid(t9p_get_root(fi->c)).path & ~0xF;
+  fi->dev |= t9p_get_qid(t9p_get_root(fi->ctx->c)).path & ~0xF;
   fi->dev |= devNum & 0xF;
   devNum++;
 
   /* Setup root node info */
   t9p_rtems_node_t* root = t9p_calloc(sizeof(t9p_rtems_node_t), 1);
-  root->c = fi->c;
-  root->h = t9p_get_root(fi->c);
+  root->c = fi->ctx->c;
+  root->h = t9p_get_root(fi->ctx->c);
 #if __RTEMS_MAJOR__ >= 6
   mt_entry->mt_fs_root->location.node_access = root;
   mt_entry->mt_fs_root->location.handlers = &t9p_dir_ops;
@@ -957,9 +1055,16 @@ t9p_rtems_fs_unmountme(rtems_filesystem_mount_table_entry_t* mt_entry)
   TRACE("mt_entry=%p", mt_entry);
   t9p_rtems_fs_info_t* fi = mt_entry->fs_info;
 
+#if __RTEMS_MAJOR__ >= 6
   pthread_mutex_destroy(&fi->mutex);
   pthread_mutexattr_destroy(&fi->mutattr);
-  t9p_shutdown(fi->c);
+#endif
+
+  /* Destroy context if unreferenced */
+  if (atomic_sub_u32(&fi->ctx->rc, 1) == 0) {
+    t9p_shutdown(fi->ctx->c);
+    free(fi->ctx);
+  }
 
 #if __RTEMS_MAJOR__ <= 4
   return 0;
@@ -1411,7 +1516,7 @@ t9p_rtems_fs_symlink(
   ENSURE(fi != NULL);
 
   int r;
-  if ((r = t9p_symlink(fi->c, n->h, target, name, T9P_NOGID, NULL)) < 0)
+  if ((r = t9p_symlink(fi->ctx->c, n->h, target, name, T9P_NOGID, NULL)) < 0)
     rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
@@ -1456,7 +1561,7 @@ static int t9p_rtems_fs_mknod(
   int r;
   if (S_ISREG(mode)) {
     /* This operation will immediately clunk the new fid */
-    if ((r = t9p_create(fi->c, NULL, n->h, name, mode, T9P_NOGID, 0)) < 0)
+    if ((r = t9p_create(fi->ctx->c, NULL, n->h, name, mode, T9P_NOGID, 0)) < 0)
       rtems_set_errno_and_return_minus_one(-r);
   }
   /* Use mkdir for dirs. No fid is allocated for mkdir */
@@ -1560,7 +1665,7 @@ t9p_rtems_fs_readlink(
   ENSURE(fi != NULL);
 
   int r;
-  if ((r = t9p_readlink(fi->c, n->h, buf, bufsize)) < 0)
+  if ((r = t9p_readlink(fi->ctx->c, n->h, buf, bufsize)) < 0)
     rtems_set_errno_and_return_minus_one(-r);
   return 0;
 }
