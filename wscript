@@ -23,7 +23,7 @@ CONFIGURE = f"""
 
 #define RTEMS_TEST_UID "{os.getuid()}"
 #define RTEMS_TEST_GID "{os.getgid()}"
-#define RTEMS_TEST_PATH "{os.path.abspath(os.path.dirname(os.getcwd()))}"
+#define RTEMS_TEST_PATH "{os.path.abspath(os.getcwd())}"
 """
 
 def init(ctx):
