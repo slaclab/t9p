@@ -1128,6 +1128,10 @@ t9p_shutdown(t9p_context_t* c)
     event_signal(c->broken_event);
     thread_join(c->io_thread);
   }
+  
+  /* grab the socket lock to avoid any synchronous IO calls
+   * reaching into the trans_pool while we free it. */
+  mutex_lock(c->socket_lock);
 
   /* Disconnect and shutdown the transport layer */
   c->trans.disconnect(c->conn);
@@ -1135,8 +1139,13 @@ t9p_shutdown(t9p_context_t* c)
 
   t9p_free(c->fhl);
 
+  tr_pool_destroy(&c->trans_pool);
   mutex_destroy(c->fhl_mutex);
+  mutex_unlock(c->socket_lock);
+  mutex_destroy(c->socket_lock);
   event_destroy(c->recv_event);
+  /* Hopefully catch any use-after-frees with this */
+  memset(c, 0xBA, sizeof(*c));
   t9p_free(c);
 }
 
