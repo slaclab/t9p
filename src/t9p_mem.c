@@ -32,7 +32,11 @@ t9p__malloc_usable_size(void* ptr)
 {
   if (!ptr) return 0;
 
+#if __RTEMS_MAJOR__ < 5
+  uintptr_t sz = 0;
+#else
   size_t sz = 0;
+#endif
   _Protected_heap_Get_block_size(RTEMS_Malloc_Heap, ptr, &sz);
 
   return sz;
