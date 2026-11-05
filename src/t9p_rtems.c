@@ -27,6 +27,7 @@
 #include <rtems/seterr.h>
 #include <rtems/error.h>
 #include <rtems/malloc.h>
+#include <rtems/score/cpuopts.h>
 #include <stdlib.h>
 #include <inttypes.h>
 #include <fcntl.h>
@@ -42,8 +43,9 @@
 #include <rtems/thread.h>
 #endif
 
-#ifdef HAVE_CEXPSH
-#include <cexpsh.h>
+#ifdef HAVE_CEXP
+#include "cexp.h"
+#include "cexpHelp.h"
 #endif
 
 #define TESTING
@@ -483,9 +485,9 @@ CEXP_HELP_TAB_BEGIN(p9Mount)
 "Paramters:\n"
 " ip - String in the format [UID.GID@]IP[:PORT], where\n"
 "      UID is the user ID number, GID is the GID number.\n"
-"      Port is optional and defaults to 10002\n",
+"      Port is optional and defaults to 10002\n"
 " srvpath - Path to the export on the server.\n"
-"           Sometimes called 'apath' in 9P-speak\n",
+"           Sometimes called 'apath' in 9P-speak\n"
 " mntpt - Mount point locally. Will be created with 0777 perms\n"
 "         if it does not exist already\n"
 " otheropts - Options string to be concatenated to the internal options string\n"
