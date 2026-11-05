@@ -77,6 +77,9 @@
 
 #endif
 
+#undef MIN
+#define MIN(x,y) ((x) < (y) ? (x) : (y))
+
 static int s_do_trace = 0;
 
 /**************************************************************************************
@@ -243,10 +246,18 @@ static int t9p_rtems_fs_statvfs(
 
 #endif // RTEMS_MAJOR >= 6
 
+#if __RTEMS_MAJOR__ >= 7
+static int t9p_rtems_fs_mount(
+  rtems_filesystem_mount_table_entry_t* mt_entry,
+  const void* data
+);
+#else
 static int t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry);
+#endif
+
 static int t9p_rtems_fs_unmount(rtems_filesystem_mount_table_entry_t* mt_entry);
 
-static const struct _rtems_filesystem_operations_table t9p_fs_ops = {
+static const rtems_filesystem_operations_table t9p_fs_ops = {
   .link_h = t9p_rtems_fs_link,
   .mknod_h = t9p_rtems_fs_mknod,
   .chown_h = t9p_rtems_fs_chown,
@@ -666,12 +677,9 @@ rtems_oflag_to_t9p(uint32_t oflag)
   return T9P_OREADONLY;
 }
 
-static int
-min(int x, int y)
-{
-  return x < y ? x : y;
-}
-
+/**
+ * \brief Returns the underlying t9p_rtems_node for a fs location.
+ */
 static t9p_rtems_node_t*
 t9p_rtems_loc_get_node(const rtems_filesystem_location_info_t* loc)
 {
@@ -679,11 +687,19 @@ t9p_rtems_loc_get_node(const rtems_filesystem_location_info_t* loc)
   return loc->node_access;
 }
 
+/**
+ * \brief Returns the underlying t9p_rtems_node for the
+ * iop. This is filled out by RTEMS when it creates the IOP.
+ */
 static t9p_rtems_node_t*
 t9p_rtems_iop_get_node(const rtems_libio_t* iop)
 {
   if (!iop) return NULL;
+#if __RTEMS_MAJOR__ <= 4 && __RTEMS_MINOR__ < 11
   return iop->file_info;
+#else
+  return iop->pathinfo.node_access;
+#endif
 }
 
 t9p_rtems_node_t*
@@ -727,7 +743,7 @@ t9p_rtems_clone_node(const t9p_rtems_node_t* old, int dupFid)
 
 static void
 copyNStr(char* dst, size_t dstSize, const char* src, size_t num) {
-  size_t tocopy = min(dstSize-1, num);
+  size_t tocopy = MIN(dstSize-1, num);
   strncpy(dst, src, tocopy);
   dst[tocopy] = 0;
 }
@@ -1478,8 +1494,18 @@ t9p_rtems_fs_unlink(
 
 #endif // __RTEMS_MAJOR__ < 6
 
+#if __RTEMS_MAJOR__ >= 7
 static int
-t9p_rtems_fs_mount(rtems_filesystem_mount_table_entry_t* mt_entry)
+t9p_rtems_fs_mount(
+  rtems_filesystem_mount_table_entry_t* mt_entry,
+  const void* data
+)
+#else
+static int
+t9p_rtems_fs_mount(
+  rtems_filesystem_mount_table_entry_t* mt_entry
+)
+#endif
 {
   TRACE("mt_entry=%p", mt_entry);
   errno = ENOTSUP;
