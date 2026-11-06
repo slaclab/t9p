@@ -104,7 +104,7 @@ static int t9p_rtems_fs_symlink(
   const char* target
 );
 
-static long t9p_rtems_fs_readlink(
+static ssize_t t9p_rtems_fs_readlink(
   const rtems_filesystem_location_info_t* loc,
   char* buf,
   size_t bufsize
@@ -1631,7 +1631,9 @@ t9p_rtems_fs_freenode(rtems_filesystem_location_info_t* loc)
 
   n->h = NULL;
   n->c = NULL;
+  /* commented out for now...
   loc->node_access = NULL;
+  */
   t9p_free(n);
   
 #if __RTEMS_MAJOR__ <= 4
@@ -1670,7 +1672,7 @@ static int t9p_rtems_fs_link(
 }
 
 #if __RTEMS_MAJOR__ >= 6
-static long
+static ssize_t
 t9p_rtems_fs_readlink(
   const rtems_filesystem_location_info_t* loc,
   char* buf,
