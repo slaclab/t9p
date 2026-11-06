@@ -12,7 +12,7 @@ t9p has been tested on the following platforms:
 
 ## Building
 
-A C99 compliant compiler and CMake are required.
+A C99 compliant compiler and a Python interpreter are required.
 
 ### Integrating with Other Projects
 
@@ -20,76 +20,60 @@ t9p's source files require no special compiler flags to build, so they can be tr
 
 Platform specific source files will need to be excluded manually (i.e. do not build `t9p_rtems.c` if you are targeting Linux).
 
-### Configuring
+### Building for RTEMS
 
-A makefile is provided that can automatically configure for all targets. This is particularly handy when cross compiling for
-multiple targets.
+`waf` is the preferred method for configuring and building t9p.
+
+For RTEMS 7:
 ```sh
-make -f Makefile.conf configure
+./waf configure --rtems="$HOME/dev/rtems/7.0/target/rtems" --rtems-tools="$HOME/dev/rtems/7.0/host/linux-x86_64" --rtems-version=7
 ```
 
-If the `RTEMS_TOP` environment variable is set to the top of your RTEMS 6+ install, Makefile.conf will automatically determine the available targets
-and configure for those.
-
-The build files will be generated into the `build-cmake` directory. This directory is safe to delete.
-
-### Building All
-
-
-The makefile can also build all targets:
+For RTEMS 4:
 ```sh
-make -f Makefile.conf build
+./waf configure --rtems="$HOME/dev/rtems/4.10.2/target/rtems_p5" --rtems-tools="$HOME/dev/rtems/4.10.2/host/amd64_linux26" --rtems-version=4
 ```
 
-### Configuring Manually
+**NOTE: You must create an empty directory `share/rtems` in your RTEMS prefix for waf to work with RTEMS 4.**
 
-
-#### Linux
-
+To compile, simply run:
 ```sh
-cmake . -Bbuild
-make -C build -j$(nproc)
+./waf
 ```
 
-Alternatively, you can use Makefile.conf (this will configure for all available targets):
+And to install:
 ```sh
-make -f Makefile.conf configure
+./waf install
 ```
 
-Makefile.conf will generate `build-cmake/build-linux-x86_64` for Linux.
+### Building for Linux
 
-#### RTEMS 6
-
-Example shown is RTEMS6-pc686-qemu target.
+When configuring for RTEMS, there will be a `build-linux` target available that will build the binaries for Linux:
 ```sh
-cmake . -Bbuild-cmake/build-rtems6-pc686-qemu -DCMAKE_TOOLCHAIN_FILE=rtems-tools/toolchains/rtems6-pc686-qemu.cmake -DRTEMS_TOP=$HOME/dev/rtems/6.0
-make -C build-cmake/build-rtems6-pc686-qemu -j$(nproc)
+./waf build-linux
 ```
 
-Running in QEMU is done with this script:
+If you're only interested in building for Linux, all arguments can be omitted from configure:
 ```sh
-./tests/rtems-test.sh -t rtems6-pc686-qemu
+./waf configure
+./waf build-linux
 ```
 
-NOTE: you will need qemu-system-i386 to be installed and available in your PATH.
+### Running the RTEMS Tests
 
+Tests can be run under QEMU using the rtems-test.sh script.
 
-#### RTEMS 4
-
-
-Configuring for RTEMS 4.X is similar:
+For RTEMS 7:
 ```sh
-cmake . -Bbuild-cmake/build-rtems4-pc586 -DCMAKE_TOOLCHAIN_FILE=rtems-tools/toolchains/rtems4-pc586.cmake -DRTEMS_TOP=path/to/your/rtems/4.10.2
-make -C build-cmake/build-rtems4-pc586
+./tests/rtems-test.sh -t i386-rtems7-pc686
 ```
 
-Running in QEMU can be done by the following script:
-
+and RTEMS 4 (which has no version suffix):
 ```sh
-./tests/rtems-test.sh -t rtems4-pc586
+./tests/rtems-test.sh -t i386-rtems-pc686
 ```
 
-NOTE: you will need qemu-system-i386 to be installed and available in your PATH.
+**NOTE: you will need qemu-system-i386 to be installed and available in your PATH.**
 
 ## Target Environment
 
