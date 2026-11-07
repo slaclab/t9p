@@ -60,7 +60,7 @@ static const int prio_to_posix[T9P_THREAD_PRIO_COUNT] =
 #endif
 
 thread_t*
-thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio)
+t9p_thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio)
 {
   thread_t* p = t9p_malloc(sizeof(struct _thread_s));
   if (!p)
