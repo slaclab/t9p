@@ -295,7 +295,7 @@ t9p_msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
   }
 
   q->msize = msgSize;
-  q->mut = mutex_create();
+  q->mut = t9p_mutex_create();
   return q;
 }
 
@@ -322,11 +322,11 @@ int
 t9p_msg_queue_send(msg_queue_t* q, const void* data, size_t size)
 {
   assert(size <= q->msize);
-  mutex_lock(q->mut);
+  t9p_mutex_lock(q->mut);
 
   struct msg* p = q->fh;
   if (!p) {
-    mutex_unlock(q->mut);
+    t9p_mutex_unlock(q->mut);
     return -1;
   }
 
@@ -344,7 +344,7 @@ t9p_msg_queue_send(msg_queue_t* q, const void* data, size_t size)
   p->sz = size;
   memcpy(p->data, data, size);
 
-  mutex_unlock(q->mut);
+  t9p_mutex_unlock(q->mut);
 
   return 0;
 }
@@ -353,7 +353,7 @@ int
 t9p_msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 {
   struct msg* p = NULL;
-  mutex_lock(q->mut);
+  t9p_mutex_lock(q->mut);
 
   p = q->q;
 
@@ -363,10 +363,10 @@ t9p_msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
     q->fh = p;
     memcpy(data, p->data, *size < p->sz ? *size : p->sz);
     *size = p->sz;
-    mutex_unlock(q->mut);
+    t9p_mutex_unlock(q->mut);
     return 0;
   }
-  mutex_unlock(q->mut);
+  t9p_mutex_unlock(q->mut);
   return -1;
 }
 

@@ -433,7 +433,7 @@ tr_pool_init(struct trans_pool* q, uint32_t num, bool threaded)
     struct trans_node* on = q->freehead;
     q->freehead = t9p_calloc(1, sizeof(*on));
   #ifdef USE_POSIX_EVENTS
-    q->freehead->event = event_create();
+    q->freehead->event = t9p_event_create();
   #endif
     q->freehead->next = on;
     q->freehead->tag = tag++;
@@ -456,7 +456,7 @@ tr_pool_destroy(struct trans_pool* q)
   for (struct trans_node* n = q->freehead; n;) {
     struct trans_node* b = n->next;
   #ifdef USE_POSIX_EVENTS
-    event_destroy(n->event);
+    t9p_event_destroy(n->event);
   #endif
     t9p_free(n);
     n = b;
@@ -520,7 +520,7 @@ tr_enqueue(struct t9p_context* c, struct trans_pool* q, struct trans_node* us)
   rtems_event_send(c->rtems_thr_ident, T9P_WAKE_EVENT);
 #else
   /* Wake worker thread */
-  event_signal(q->recv_ev);
+  t9p_event_signal(q->recv_ev);
 #endif
   return us;
 }
@@ -646,7 +646,7 @@ static void
 tr_signal(struct trans_node* n)
 {
 #ifdef USE_POSIX_EVENTS
-  event_signal(n->event);
+  t9p_event_signal(n->event);
 #else
   int r = rtems_event_send(n->task, T9P_NODE_EVENT);
   if (r != RTEMS_SUCCESSFUL)
@@ -662,7 +662,7 @@ static int
 tr_wait(struct trans_node* n, int timeout)
 {
 #ifdef USE_POSIX_EVENTS
-  return event_wait(n->event, timeout);
+  return t9p_event_wait(n->event, timeout);
 #else
   rtems_event_set es;
   rtems_status_code r = rtems_event_receive(T9P_NODE_EVENT, RTEMS_EVENT_ALL | RTEMS_WAIT,

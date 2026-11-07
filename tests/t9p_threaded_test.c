@@ -133,7 +133,7 @@ main(int argc, char** argv)
 
   thread_t** threads = calloc(thread_cnt, sizeof(thread_t*));
   for (int i = 0; i < thread_cnt; ++i) {
-    threads[i] = thread_create(thread_proc, ctx, 50+i);
+    threads[i] = t9p_thread_create(thread_proc, ctx, 50+i);
   }
 
   usleep(time * 1e6);
@@ -142,7 +142,7 @@ main(int argc, char** argv)
   __atomic_store(&thr_run, &v, __ATOMIC_RELEASE);
 
   for (int i = 0; i < thread_cnt; ++i)
-    thread_join(threads[i]);
+    t9p_thread_join(threads[i]);
 
   t9p_shutdown(ctx);
 }
