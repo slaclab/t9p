@@ -135,33 +135,33 @@ enum t9p_thread_prio;
 typedef void* (*thread_proc_t)(void*);
 typedef struct _thread_s thread_t;
 
-extern thread_t* thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio);
-extern void thread_join(thread_t* thr);
-extern void thread_destroy(thread_t* thread);
+extern thread_t* t9p_thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio);
+extern void t9p_thread_join(thread_t* thr);
+extern void t9p_thread_destroy(thread_t* thread);
 
 /** Generic mutex API */
 
 typedef struct _mutex_s mutex_t;
-extern mutex_t* mutex_create();
-extern void mutex_lock(mutex_t* mut);
-extern void mutex_unlock(mutex_t* mut);
-extern void mutex_destroy(mutex_t* mut);
+extern mutex_t* t9p_mutex_create();
+extern void t9p_mutex_lock(mutex_t* mut);
+extern void t9p_mutex_unlock(mutex_t* mut);
+extern void t9p_mutex_destroy(mutex_t* mut);
 
 /** Generic event API */
 
 typedef struct _event_s event_t;
-extern event_t* event_create();
-extern int event_wait(event_t* ev, uint32_t timeout_ms);
-extern void event_signal(event_t* ev);
-extern void event_destroy(event_t* ev);
+extern event_t* t9p_event_create();
+extern int t9p_event_wait(event_t* ev, uint32_t timeout_ms);
+extern void t9p_event_signal(event_t* ev);
+extern void t9p_event_destroy(event_t* ev);
 
 /** Generic message queue API */
 
 typedef struct _msg_queue_s msg_queue_t;
-extern msg_queue_t* msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs);
-extern void msg_queue_destroy(msg_queue_t* q);
-extern int msg_queue_send(msg_queue_t* q, const void* data, size_t size);
-extern int msg_queue_recv(msg_queue_t* q, void* data, size_t* size);
+extern msg_queue_t* t9p_msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs);
+extern void t9p_msg_queue_destroy(msg_queue_t* q);
+extern int t9p_msg_queue_send(msg_queue_t* q, const void* data, size_t size);
+extern int t9p_msg_queue_recv(msg_queue_t* q, void* data, size_t* size);
 
 /** Dynamic memory helpers */
 extern void* t9p_malloc(size_t size);
@@ -196,4 +196,4 @@ extern void t9p_free_ctx(void* ptr, t9p_memtrack_ctx_t* ctx);
 #endif
 
 /** Safe wrapper around gethostbyname/getaddrinfo */
-extern int gethostbyname_inet(const char* name, in_addr_t* outaddr);
+extern int t9p_gethostbyname_inet(const char* name, in_addr_t* outaddr);

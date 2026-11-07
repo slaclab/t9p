@@ -60,7 +60,7 @@ static const int prio_to_posix[T9P_THREAD_PRIO_COUNT] =
 #endif
 
 thread_t*
-thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio)
+t9p_thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio)
 {
   thread_t* p = t9p_malloc(sizeof(struct _thread_s));
   if (!p)
@@ -91,14 +91,14 @@ thread_create(thread_proc_t proc, void* param, enum t9p_thread_prio prio)
 }
 
 void
-thread_join(thread_t* thr)
+t9p_thread_join(thread_t* thr)
 {
   pthread_join(thr->thread, NULL);
   thr->thread = 0;
 }
 
 void
-thread_destroy(thread_t* thread)
+t9p_thread_destroy(thread_t* thread)
 {
   if (thread->thread)
     pthread_join(thread->thread, NULL);
@@ -107,7 +107,7 @@ thread_destroy(thread_t* thread)
 }
 
 mutex_t*
-mutex_create(void)
+t9p_mutex_create(void)
 {
   mutex_t* m = t9p_malloc(sizeof(mutex_t));
 
@@ -126,19 +126,19 @@ mutex_create(void)
 }
 
 void
-mutex_lock(mutex_t* mut)
+t9p_mutex_lock(mutex_t* mut)
 {
   pthread_mutex_lock(&mut->mutex);
 }
 
 void
-mutex_unlock(mutex_t* mut)
+t9p_mutex_unlock(mutex_t* mut)
 {
   pthread_mutex_unlock(&mut->mutex);
 }
 
 void
-mutex_destroy(mutex_t* mut)
+t9p_mutex_destroy(mutex_t* mut)
 {
   pthread_mutexattr_destroy(&mut->attr);
   pthread_mutex_destroy(&mut->mutex);
@@ -154,7 +154,7 @@ struct _event_s
 };
 
 event_t*
-event_create(void)
+t9p_event_create(void)
 {
   event_t* ev = t9p_malloc(sizeof(event_t));
   memset(ev, 0, sizeof *ev);
@@ -166,7 +166,7 @@ event_create(void)
 }
 
 int
-event_wait(event_t* ev, uint32_t timeout_ms)
+t9p_event_wait(event_t* ev, uint32_t timeout_ms)
 {
   struct timespec tv = {};
   if (timeout_ms != UINT32_MAX) {
@@ -191,7 +191,7 @@ event_wait(event_t* ev, uint32_t timeout_ms)
 }
 
 void
-event_signal(event_t* ev)
+t9p_event_signal(event_t* ev)
 {
   pthread_mutex_lock(&ev->mutex);
   pthread_cond_broadcast(&ev->cond);
@@ -199,7 +199,7 @@ event_signal(event_t* ev)
 }
 
 void
-event_destroy(event_t* ev)
+t9p_event_destroy(event_t* ev)
 {
   if (!ev)
     return;
@@ -222,7 +222,7 @@ struct _msg_queue_s
 };
 
 msg_queue_t*
-msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
+t9p_msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
 {
   msg_queue_t* q = t9p_calloc(1, sizeof(msg_queue_t));
   q->name = rtems_build_name(id[0], id[1], id[2], id[3]);
@@ -238,21 +238,21 @@ msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
 }
 
 void
-msg_queue_destroy(msg_queue_t* q)
+t9p_msg_queue_destroy(msg_queue_t* q)
 {
   rtems_message_queue_delete(q->queue);
   t9p_free(q);
 }
 
 int
-msg_queue_send(msg_queue_t* q, const void* data, size_t size)
+t9p_msg_queue_send(msg_queue_t* q, const void* data, size_t size)
 {
   assert(size == q->msgSize);
   return rtems_message_queue_send(q->queue, data, size) == RTEMS_SUCCESSFUL ? 0 : -1;
 }
 
 int
-msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
+t9p_msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 {
   assert(*size == q->msgSize);
   return 
@@ -282,7 +282,7 @@ struct _msg_queue_s
 };
 
 msg_queue_t*
-msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
+t9p_msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
 {
   msg_queue_t* q = t9p_malloc(sizeof(msg_queue_t));
 
@@ -300,7 +300,7 @@ msg_queue_create(const char* id, size_t msgSize, size_t maxMsgs)
 }
 
 void
-msg_queue_destroy(msg_queue_t* q)
+t9p_msg_queue_destroy(msg_queue_t* q)
 {
   if (!q)
     return;
@@ -319,7 +319,7 @@ msg_queue_destroy(msg_queue_t* q)
 }
 
 int
-msg_queue_send(msg_queue_t* q, const void* data, size_t size)
+t9p_msg_queue_send(msg_queue_t* q, const void* data, size_t size)
 {
   assert(size <= q->msize);
   mutex_lock(q->mut);
@@ -350,7 +350,7 @@ msg_queue_send(msg_queue_t* q, const void* data, size_t size)
 }
 
 int
-msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
+t9p_msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 {
   struct msg* p = NULL;
   mutex_lock(q->mut);
@@ -373,16 +373,16 @@ msg_queue_recv(msg_queue_t* q, void* data, size_t* size)
 #endif
 
 int
-gethostbyname_inet(const char* name, in_addr_t* outaddr)
+t9p_gethostbyname_inet(const char* name, in_addr_t* outaddr)
 {
   static mutex_t* mutex;
   if (!mutex) {
-    mutex = mutex_create(); /* needed to guard unsafe gethostbyname calls... */
+    mutex = t9p_mutex_create(); /* needed to guard unsafe gethostbyname calls... */
   }
 
   int ret = 0;
 
-  mutex_lock(mutex);
+  t9p_mutex_lock(mutex);
 
   struct hostent* ent = gethostbyname(name);  
   if (ent && ent->h_addr_list && *ent->h_addr_list) {
@@ -398,6 +398,6 @@ gethostbyname_inet(const char* name, in_addr_t* outaddr)
   else
     ret = -1;
 
-  mutex_unlock(mutex);
+  t9p_mutex_unlock(mutex);
   return ret;
 }
