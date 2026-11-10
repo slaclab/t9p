@@ -49,7 +49,8 @@
 #elif defined(__rtems__)
 #include <rtems/score/cpuopts.h>
 #if __RTEMS_MAJOR__ >= 6
-#include <sys/limits.h>
+//#include <sys/limits.h>
+#include <limits.h>
 #include <rtems/rtems/types.h>
 #include <rtems/rtems/tasks.h>
 #include <rtems/rtems/event.h>
@@ -59,6 +60,10 @@
 #endif
 #else
 #define PATH_MAX 256
+#endif
+
+#ifdef RTEMS_LEGACY_STACK
+#include <rtems/rtems_bsdnet.h>
 #endif
 
 #if HAVE_TCP
