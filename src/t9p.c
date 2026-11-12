@@ -49,7 +49,8 @@
 #elif defined(__rtems__)
 #include <rtems/score/cpuopts.h>
 #if __RTEMS_MAJOR__ >= 6
-#include <sys/limits.h>
+//#include <sys/limits.h>
+#include <limits.h>
 #include <rtems/rtems/types.h>
 #include <rtems/rtems/tasks.h>
 #include <rtems/rtems/event.h>
@@ -59,6 +60,10 @@
 #endif
 #else
 #define PATH_MAX 256
+#endif
+
+#ifdef RTEMS_LEGACY_STACK
+#include <rtems/rtems_bsdnet.h>
 #endif
 
 #if HAVE_TCP
@@ -406,25 +411,25 @@ tr_pool_init(struct trans_pool* q, uint32_t num, bool threaded)
 {
   memset(q, 0, sizeof(*q));
 
-  q->queue = msg_queue_create("T9PQ", sizeof(struct trans_node*), num);
+  q->queue = t9p_msg_queue_create("T9PQ", sizeof(struct trans_node*), num);
   if (!q->queue)
     return -1;
 
   /* if running in threaded mode, we need the per-transaction events */
   if (threaded) {
-    if (!(q->recv_ev = event_create())) {
-      msg_queue_destroy(q->queue);
+    if (!(q->recv_ev = t9p_event_create())) {
+      t9p_msg_queue_destroy(q->queue);
       return -1;
     }
   }
 
-  if (!(q->guard = mutex_create())) {
-    msg_queue_destroy(q->queue);
-    event_destroy(q->recv_ev);
+  if (!(q->guard = t9p_mutex_create())) {
+    t9p_msg_queue_destroy(q->queue);
+    t9p_event_destroy(q->recv_ev);
     return -1;
   }
 
-  mutex_lock(q->guard);
+  t9p_mutex_lock(q->guard);
 
   int tag = 0;
 
@@ -433,14 +438,14 @@ tr_pool_init(struct trans_pool* q, uint32_t num, bool threaded)
     struct trans_node* on = q->freehead;
     q->freehead = t9p_calloc(1, sizeof(*on));
   #ifdef USE_POSIX_EVENTS
-    q->freehead->event = event_create();
+    q->freehead->event = t9p_event_create();
   #endif
     q->freehead->next = on;
     q->freehead->tag = tag++;
   }
   q->total = num;
 
-  mutex_unlock(q->guard);
+  t9p_mutex_unlock(q->guard);
   return 0;
 }
 
@@ -450,23 +455,23 @@ tr_pool_init(struct trans_pool* q, uint32_t num, bool threaded)
 void
 tr_pool_destroy(struct trans_pool* q)
 {
-  mutex_lock(q->guard);
+  t9p_mutex_lock(q->guard);
 
   /* Free the nodes */
   for (struct trans_node* n = q->freehead; n;) {
     struct trans_node* b = n->next;
   #ifdef USE_POSIX_EVENTS
-    event_destroy(n->event);
+    t9p_event_destroy(n->event);
   #endif
     t9p_free(n);
     n = b;
   }
 
-  msg_queue_destroy(q->queue);
+  t9p_msg_queue_destroy(q->queue);
 
-  mutex_unlock(q->guard);
-  mutex_destroy(q->guard);
-  event_destroy(q->recv_ev);
+  t9p_mutex_unlock(q->guard);
+  t9p_mutex_destroy(q->guard);
+  t9p_event_destroy(q->recv_ev);
 }
 
 /*
@@ -475,11 +480,11 @@ tr_pool_destroy(struct trans_pool* q)
 struct trans_node*
 tr_get_node(struct trans_pool* q)
 {
-  mutex_lock(q->guard);
+  t9p_mutex_lock(q->guard);
 
   if (!q->freehead) {
     /* Out of space in the trans queue */
-    mutex_unlock(q->guard);
+    t9p_mutex_unlock(q->guard);
     return NULL;
   }
 
@@ -491,7 +496,7 @@ tr_get_node(struct trans_pool* q)
   us->next = NULL;
   memset(&us->tr, 0, sizeof(us->tr));
 
-  mutex_unlock(q->guard);
+  t9p_mutex_unlock(q->guard);
 
   return us;
 }
@@ -510,7 +515,7 @@ tr_enqueue(struct t9p_context* c, struct trans_pool* q, struct trans_node* us)
 #endif
 
   /* Send it to the I/O thread */
-  if (msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
+  if (t9p_msg_queue_send(q->queue, &us, sizeof(us)) < 0) {
     printf("Error while sending to message queue\n");
     tr_release(q, us);
     return NULL;
@@ -520,7 +525,7 @@ tr_enqueue(struct t9p_context* c, struct trans_pool* q, struct trans_node* us)
   rtems_event_send(c->rtems_thr_ident, T9P_WAKE_EVENT);
 #else
   /* Wake worker thread */
-  event_signal(q->recv_ev);
+  t9p_event_signal(q->recv_ev);
 #endif
   return us;
 }
@@ -531,13 +536,13 @@ tr_enqueue(struct t9p_context* c, struct trans_pool* q, struct trans_node* us)
 void
 tr_release(struct trans_pool* q, struct trans_node* tn)
 {
-  mutex_lock(q->guard);
+  t9p_mutex_lock(q->guard);
 
   tn->next = q->freehead;
   q->freehead = tn;
   memset(&tn->tr, 0, sizeof(tn->tr));
 
-  mutex_unlock(q->guard);
+  t9p_mutex_unlock(q->guard);
 }
 
 /*
@@ -557,10 +562,10 @@ tr_send_recv_worker(struct t9p_context* c, struct trans_node* n, bool* send_ok)
   if ((r = tr_wait(n, c->opts.recv_timeo)) != 0) {
     /* Add the timed out node to the dead list. It is now the I/O thread's responsibility to
       * release the node and discard its data. */
-    mutex_lock(c->trans_pool.guard);
+    t9p_mutex_lock(c->trans_pool.guard);
     n->next = c->trans_pool.deadhead;
     c->trans_pool.deadhead = n;
-    mutex_unlock(c->trans_pool.guard);
+    t9p_mutex_unlock(c->trans_pool.guard);
 
     *send_ok = n->sent;
 
@@ -587,11 +592,11 @@ tr_send_recv_now(struct t9p_context* c, struct trans_node* n, bool* send_ok)
   if (c->broken)
     return -1;
 
-  mutex_lock(c->socket_lock);
+  t9p_mutex_lock(c->socket_lock);
 
   /* Attempt to send packet data */
   if ((r = tr_send_now(c, n)) < 0) {
-    mutex_unlock(c->socket_lock);
+    t9p_mutex_unlock(c->socket_lock);
     return r;
   }
 
@@ -600,7 +605,7 @@ tr_send_recv_now(struct t9p_context* c, struct trans_node* n, bool* send_ok)
   /* Attempt to read the result */
   r = tr_recv_now(c, n);
 
-  mutex_unlock(c->socket_lock);
+  t9p_mutex_unlock(c->socket_lock);
   return r;
 }
 
@@ -646,7 +651,7 @@ static void
 tr_signal(struct trans_node* n)
 {
 #ifdef USE_POSIX_EVENTS
-  event_signal(n->event);
+  t9p_event_signal(n->event);
 #else
   int r = rtems_event_send(n->task, T9P_NODE_EVENT);
   if (r != RTEMS_SUCCESSFUL)
@@ -662,7 +667,7 @@ static int
 tr_wait(struct trans_node* n, int timeout)
 {
 #ifdef USE_POSIX_EVENTS
-  return event_wait(n->event, timeout);
+  return t9p_event_wait(n->event, timeout);
 #else
   rtems_event_set es;
   rtems_status_code r = rtems_event_receive(T9P_NODE_EVENT, RTEMS_EVENT_ALL | RTEMS_WAIT,
@@ -1033,22 +1038,22 @@ t9p_init(
     c->fhl_free = n;
   }
 
-  if (!(c->fhl_mutex = mutex_create())) {
+  if (!(c->fhl_mutex = t9p_mutex_create())) {
     ERRLOG("Unable to create fhl_mutex\n");
     goto error_pre_fhl;
   }
 
-  if (!(c->socket_lock = mutex_create())) {
+  if (!(c->socket_lock = t9p_mutex_create())) {
     ERRLOG("Unable to create socket_lock\n");
     goto error_pre_fhl;
   }
 
-  if (!(c->recv_event = event_create())) {
+  if (!(c->recv_event = t9p_event_create())) {
     ERRLOG("Unable to create event\n");
     goto error_post_fhl;
   }
   
-  if (!(c->broken_event = event_create())) {
+  if (!(c->broken_event = t9p_event_create())) {
     ERRLOG("Unable to create event\n");
     goto error_post_fhl;
   }
@@ -1063,14 +1068,14 @@ t9p_init(
     goto error_post_fhl;
   }
 
-  mutex_lock(c->socket_lock);
+  t9p_mutex_lock(c->socket_lock);
 
   /* Perform the version handshake */
   if (t9p__version_handshake(c) < 0) {
     ERRLOG("Connection to %s failed\n", addr);
     transport->disconnect(c->conn);
     transport->shutdown(c->conn);
-    mutex_unlock(c->socket_lock);
+    t9p_mutex_unlock(c->socket_lock);
     goto error_post_pool;
   }
 
@@ -1079,11 +1084,11 @@ t9p_init(
     ERRLOG("Connection to %s failed\n", addr);
     transport->disconnect(c->conn);
     transport->shutdown(c->conn);
-    mutex_unlock(c->socket_lock);
+    t9p_mutex_unlock(c->socket_lock);
     goto error_post_pool;
   }
 
-  mutex_unlock(c->socket_lock);
+  t9p_mutex_unlock(c->socket_lock);
 
   /* Kick off thread. Either a fully-featured I/O thread, or recovery thread */
   void*(*proc)(void*) = NULL;
@@ -1093,7 +1098,7 @@ t9p_init(
     proc = t9p__thread_proc;
 
   c->thr_run = 1;
-  if (!(c->io_thread = thread_create(proc, c, c->opts.prio))) {
+  if (!(c->io_thread = t9p_thread_create(proc, c, c->opts.prio))) {
     ERRLOG("Failed to create I/O task\n");
     t9p_shutdown(c);
     return NULL;
@@ -1104,9 +1109,9 @@ t9p_init(
 error_post_pool:
   tr_pool_destroy(&c->trans_pool);
 error_post_fhl:
-  mutex_destroy(c->socket_lock);
-  mutex_destroy(c->fhl_mutex);
-  event_destroy(c->recv_event);
+  t9p_mutex_destroy(c->socket_lock);
+  t9p_mutex_destroy(c->fhl_mutex);
+  t9p_event_destroy(c->recv_event);
 error_pre_fhl:
   t9p_free(c);
   return NULL;
@@ -1116,22 +1121,22 @@ void
 t9p_shutdown(t9p_context_t* c)
 {
   /* Clunk all active file handles */
-  mutex_lock(c->fhl_mutex);
+  t9p_mutex_lock(c->fhl_mutex);
   for (int i = 0; i < c->fhl_max; ++i)
     if (c->fhl[i].h.valid_mask & T9P_HANDLE_FID_VALID)
       t9p__clunk_sync(c, c->fhl[i].h.fid);
-  mutex_unlock(c->fhl_mutex);
+  t9p_mutex_unlock(c->fhl_mutex);
 
   if (c->io_thread) {
     /* Kill off the thread */
     c->thr_run = 0;
-    event_signal(c->broken_event);
-    thread_join(c->io_thread);
+    t9p_event_signal(c->broken_event);
+    t9p_thread_join(c->io_thread);
   }
   
   /* grab the socket lock to avoid any synchronous IO calls
    * reaching into the trans_pool while we free it. */
-  mutex_lock(c->socket_lock);
+  t9p_mutex_lock(c->socket_lock);
 
   /* Disconnect and shutdown the transport layer */
   c->trans.disconnect(c->conn);
@@ -1140,10 +1145,10 @@ t9p_shutdown(t9p_context_t* c)
   t9p_free(c->fhl);
 
   tr_pool_destroy(&c->trans_pool);
-  mutex_destroy(c->fhl_mutex);
-  mutex_unlock(c->socket_lock);
-  mutex_destroy(c->socket_lock);
-  event_destroy(c->recv_event);
+  t9p_mutex_destroy(c->fhl_mutex);
+  t9p_mutex_unlock(c->socket_lock);
+  t9p_mutex_destroy(c->socket_lock);
+  t9p_event_destroy(c->recv_event);
   /* Hopefully catch any use-after-frees with this */
   memset(c, 0xBA, sizeof(*c));
   t9p_free(c);
@@ -2965,10 +2970,10 @@ t9p_get_opts(t9p_context_t* c)
 static struct t9p_handle_node*
 t9p__alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
 {
-  mutex_lock(c->fhl_mutex);
+  t9p_mutex_lock(c->fhl_mutex);
   struct t9p_handle_node* n = c->fhl_free;
   if (!n) {
-    mutex_unlock(c->fhl_mutex);
+    t9p_mutex_unlock(c->fhl_mutex);
     return NULL;
   }
   /* Unlink from free list */
@@ -2985,7 +2990,7 @@ t9p__alloc_handle(struct t9p_context* c, t9p_handle_t parent, const char* fname)
     n->h.str = t9p__string_new_path(is_parent_root ? "" : parent->str->string, fname);
 
   atomic_add_u32(&c->stats.used_fids, 1);
-  mutex_unlock(c->fhl_mutex);
+  t9p_mutex_unlock(c->fhl_mutex);
   return n;
 }
 
@@ -3007,7 +3012,7 @@ t9p__copy_handle(struct t9p_context* c, t9p_handle_t h)
 static void
 t9p__release_handle(struct t9p_context* c, struct t9p_handle_node* h)
 {
-  mutex_lock(c->fhl_mutex);
+  t9p_mutex_lock(c->fhl_mutex);
 
   /* Release the string */
   h->h.str = t9p__string_release(h->h.str);
@@ -3023,7 +3028,7 @@ t9p__release_handle(struct t9p_context* c, struct t9p_handle_node* h)
   c->fhl_free = h;
 
   atomic_sub_u32(&c->stats.used_fids, 1);
-  mutex_unlock(c->fhl_mutex);
+  t9p_mutex_unlock(c->fhl_mutex);
 }
 
 static void
@@ -3200,7 +3205,7 @@ t9p__conn_broken(t9p_context_t* c)
   ERROR(c, "t9p: Connection to %s broken, attempting to recover...\n", c->addr);
   
   /* Signal the recovery task */
-  event_signal(c->broken_event);
+  t9p_event_signal(c->broken_event);
 }
 
 /*
@@ -3234,12 +3239,12 @@ t9p__try_reconnect_periodic(t9p_context_t* c)
   /* Attempt a reconnect periodically */
   int do_sleep = 1;
   while (c->broken) {
-    mutex_lock(c->socket_lock);
+    t9p_mutex_lock(c->socket_lock);
     if (t9p__try_reconnect(c) == 0) {
-      mutex_unlock(c->socket_lock);
+      t9p_mutex_unlock(c->socket_lock);
       break;
     }
-    mutex_unlock(c->socket_lock);
+    t9p_mutex_unlock(c->socket_lock);
     WARN(c, "Reconnect failed; trying again in %d seconds\n", do_sleep);
     sleep(do_sleep);
     do_sleep = MIN(64, do_sleep << 1); /* back off a bit, but limit to 64 */
@@ -3293,10 +3298,10 @@ t9p__thread_proc(void* param)
     /* Attempt a reconnect periodically; Blocks until done */
     t9p__try_reconnect_periodic(c);
 
-    mutex_lock(c->socket_lock);
+    t9p_mutex_lock(c->socket_lock);
 
     /* Send pending transactions */
-    while (msg_queue_recv(c->trans_pool.queue, &node, &size) == 0) {
+    while (t9p_msg_queue_recv(c->trans_pool.queue, &node, &size) == 0) {
       assert(size == sizeof(node));
       if (!node) {
         ERROR(c, "Got NULL node\n");
@@ -3487,10 +3492,10 @@ t9p__thread_proc(void* param)
       t9p__conn_broken(c);
     }
 
-    mutex_unlock(c->socket_lock);
+    t9p_mutex_unlock(c->socket_lock);
 
     /* Cleanup timed out nodes */
-    mutex_lock(c->trans_pool.guard);
+    t9p_mutex_lock(c->trans_pool.guard);
     for (struct trans_node* n = c->trans_pool.deadhead; n;) {
       /* Purge from requests list */
       if (requests[n->tag] == n)
@@ -3502,7 +3507,7 @@ t9p__thread_proc(void* param)
       n = nn;
     }
     c->trans_pool.deadhead = NULL;
-    mutex_unlock(c->trans_pool.guard);
+    t9p_mutex_unlock(c->trans_pool.guard);
 
   #ifdef __rtems__
     rtems_event_set es;
@@ -3530,7 +3535,7 @@ t9p__recovery_thread_proc(void* param)
 {
   t9p_context_t* c = param;
   while (c->thr_run) {
-    event_wait(c->broken_event, UINT32_MAX);
+    t9p_event_wait(c->broken_event, UINT32_MAX);
     if (!c->thr_run) /* Kludge; if we're being asked to exit, don't try to recover.. */
       return NULL;
 
@@ -3825,7 +3830,7 @@ t9p_tcp_connect(void* context, const char* addr_or_file)
 
   /* needs resolve first */
   if (!ip_in_dot_format(paddr)) {
-    if (gethostbyname_inet(paddr, &addr.sin_addr.s_addr) < 0) {
+    if (t9p_gethostbyname_inet(paddr, &addr.sin_addr.s_addr) < 0) {
       fprintf(stderr, "Cannot resolve addr '%s'\n", paddr);
       return -1;
     }
